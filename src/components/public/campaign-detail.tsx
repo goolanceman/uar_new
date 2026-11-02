@@ -600,7 +600,8 @@ function MedicineAdoptionEmbed() {
 
    
   useEffect(() => {
-    load();
+    const t = setTimeout(load, 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   return (
@@ -818,7 +819,8 @@ function AnimalWelfareEmbed() {
 
    
   useEffect(() => {
-    load();
+    const t = setTimeout(load, 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   const ageLabel = (m: number) => {
