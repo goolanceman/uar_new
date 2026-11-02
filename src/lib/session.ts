@@ -12,7 +12,7 @@ export interface Session {
   email: string;
 }
 
-// ─── Passwords (scrypt with salt) ────────────────────────────────────────────
+// ─── Passwords (scrypt with salt; legacy plain-text supported) ───────────────
 
 export function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -22,9 +22,17 @@ export function hashPassword(pw: string): string {
 
 export function verifyPassword(pw: string, stored: string): boolean {
   try {
-    const [salt, hash] = stored.split(":");
-    const test = crypto.scryptSync(pw, salt, 32).toString("hex");
-    return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(test, "hex"));
+    if (stored.includes(":")) {
+      // new scrypt format
+      const [salt, hash] = stored.split(":");
+      const test = crypto.scryptSync(pw, salt, 32).toString("hex");
+      return crypto.timingSafeEqual(
+        Buffer.from(hash, "hex"),
+        Buffer.from(test, "hex")
+      );
+    }
+    // legacy plain-text (seeded accounts) — auto-upgraded on next profile save
+    return stored === pw;
   } catch {
     return false;
   }
@@ -33,7 +41,11 @@ export function verifyPassword(pw: string, stored: string): boolean {
 // ─── Cookie session (HMAC-signed) ────────────────────────────────────────────
 
 function sign(payload: string): string {
-  return crypto.createHmac("sha256", SECRET).update(payload).digest("hex").slice(0, 32);
+  return crypto
+    .createHmac("sha256", SECRET)
+    .update(payload)
+    .digest("hex")
+    .slice(0, 32);
 }
 
 export async function setSession(s: Session): Promise<void> {
@@ -81,7 +93,8 @@ export function json(data: unknown, status = 200): Response {
 }
 
 export function handleError(e: unknown): Response {
-  if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
+  if (e instanceof ApiError)
+    return Response.json({ error: e.message }, { status: e.status });
   console.error("[api]", e);
   const msg = e instanceof Error ? e.message : "Internal server error";
   return Response.json({ error: msg }, { status: 500 });
@@ -95,7 +108,8 @@ export async function requireAuth(): Promise<Session> {
 
 export async function requireRole(...roles: string[]): Promise<Session> {
   const s = await requireAuth();
-  if (!roles.includes(s.role)) throw new ApiError("You do not have permission for this action", 403);
+  if (!roles.includes(s.role))
+    throw new ApiError("You do not have permission for this action", 403);
   return s;
 }
 
@@ -103,12 +117,20 @@ export async function logActivity(
   actorName: string | null,
   action: string,
   entity?: string,
-  detail?: string
+  detail?: string,
+  userId?: string
 ): Promise<void> {
   try {
     const { db } = await import("@/lib/db");
     await db.activityLog.create({
-      data: { actorName, action, entity, detail },
+      data: {
+        userId: userId ?? null,
+        actorName: actorName ?? "System",
+        action,
+        entityType: entity ?? "SYSTEM",
+        entityId: null,
+        details: detail ?? null,
+      },
     });
   } catch {
     // logging must never break the API
