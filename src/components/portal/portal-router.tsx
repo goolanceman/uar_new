@@ -131,11 +131,14 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
     };
   }, [user.status]);
 
+  // Only genuine volunteers go through the approval gate; donors/beneficiaries
+  // visiting /volunteer simply see the application form.
   const gated =
-    user.status === "PENDING" ||
-    !loaded ||
-    !volunteer ||
-    volunteer.status !== "ACTIVE";
+    user.role === "VOLUNTEER" &&
+    (user.status === "PENDING" ||
+      !loaded ||
+      !volunteer ||
+      volunteer.status !== "ACTIVE");
 
   const nav = gated ? VOLUNTEER_GATED_NAV : VOLUNTEER_ACTIVE_NAV;
   const requested = segments[1] ?? "";
