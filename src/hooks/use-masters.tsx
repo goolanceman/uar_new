@@ -107,10 +107,17 @@ const FALLBACKS: Record<string, MasterOption[]> = {
 export function useMasters(category: string) {
   const [options, setOptions] = useState<MasterOption[]>(FALLBACKS[category] ?? []);
   const [loading, setLoading] = useState(true);
+  const [appliedCategory, setAppliedCategory] = useState(category);
+
+  // Adjust state during render when the requested category changes (React-endorsed pattern).
+  if (appliedCategory !== category) {
+    setAppliedCategory(category);
+    setOptions(FALLBACKS[category] ?? []);
+    setLoading(true);
+  }
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     get<MasterOption[]>(`/api/masters?category=${encodeURIComponent(category)}`)
       .then((data) => {
         if (!alive) return;

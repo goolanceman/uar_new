@@ -105,11 +105,16 @@ export async function POST(req: Request) {
       n += 1;
     }
 
-    // simulated green-corridor route: 4 segments, weighted congestion
+    // simulated green-corridor route: 4 segments with a guaranteed congestion mix
+    // (1 GRIDLOCK + 1 HEAVY + 1 MODERATE + 1 LOW in random order) so every
+    // mission demonstrates the alert mesh fallback ladder.
     const shuffled = [...SEGMENT_POOL].sort(() => Math.random() - 0.5);
-    const segments = shuffled.slice(0, 4).map((name) => ({
+    const mix = ["GRIDLOCK", "HEAVY", "MODERATE", "LOW"].sort(
+      () => Math.random() - 0.5
+    );
+    const segments = shuffled.slice(0, 4).map((name, i) => ({
       name,
-      congestion: pickCongestion(),
+      congestion: mix[i],
       lengthKm: Math.round((0.8 + Math.random() * 2.4) * 10) / 10,
     }));
     const totalKm = segments.reduce((s, seg) => s + seg.lengthKm, 0);

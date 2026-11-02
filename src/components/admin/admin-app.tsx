@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Activity, Ambulance, BadgeCheck, Boxes, ChevronDown, ClipboardList,
   FileBarChart, HeartHandshake, LayoutDashboard,
@@ -79,23 +79,18 @@ const NAV = [
   },
 ];
 
-export default function AdminApp() {
-  const { user, logout, loading } = useAuth();
-  const route = useRoute();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+type NavItem = { key: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
-  const view = useMemo(() => {
-    const seg = route.segments[1] ?? "dashboard";
-    return seg;
-  }, [route.segments]);
-
-  useEffect(() => setSidebarOpen(false), [view]);
-
-  const current = NAV.flatMap((g) => g.items).find((i) => i.key === view);
-
-  const NavList = ({ onNavigate }: { onNavigate?: () => void }) => (
+function AdminNav({
+  view,
+  onNavigate,
+}: {
+  view: string;
+  onNavigate?: () => void;
+}) {
+  return (
     <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="Admin sections">
-      {NAV.map((group) => (
+      {NAV.map((group: { group: string; items: NavItem[] }) => (
         <div key={group.group}>
           <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             {group.group}
@@ -128,6 +123,16 @@ export default function AdminApp() {
       ))}
     </nav>
   );
+}
+
+export default function AdminApp() {
+  const { user, logout, loading } = useAuth();
+  const route = useRoute();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const view = route.segments[1] ?? "dashboard";
+
+  const current = NAV.flatMap((g) => g.items).find((i) => i.key === view);
 
   if (loading) {
     return (
@@ -153,7 +158,7 @@ export default function AdminApp() {
             <span className="block text-[11px] text-muted-foreground">Admin Console · Bengaluru</span>
           </span>
         </button>
-        <NavList />
+        <AdminNav view={view} />
         <div className="border-t p-3">
           <Button variant="outline" className="w-full justify-start" onClick={() => navigate("/")}>
             <ChevronDown className="size-4 rotate-90" /> View public site
@@ -172,7 +177,7 @@ export default function AdminApp() {
                 <X className="size-5" />
               </Button>
             </div>
-            <NavList onNavigate={() => setSidebarOpen(false)} />
+            <AdminNav view={view} onNavigate={() => setSidebarOpen(false)} />
           </aside>
         </div>
       )}

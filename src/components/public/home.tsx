@@ -235,7 +235,7 @@ export function HomePage() {
                         )}
                       </div>
                       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                        {c.tagline ?? content?.short ?? c.description}
+                        {c.tagline ?? content?.heroTag ?? c.description}
                       </p>
                     </div>
                   </div>

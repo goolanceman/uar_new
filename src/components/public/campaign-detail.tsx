@@ -152,7 +152,6 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     get<LiveCampaign[]>("/api/campaigns")
       .then((d) => {
         if (!alive) return;
@@ -212,13 +211,15 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
               </div>
 
               {/* Helpline pill */}
-              <a
-                href={`tel:${content.helpline.number}`}
-                className="mt-6 inline-flex min-h-[44px] items-center gap-2.5 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/25 transition hover:bg-white/25"
-              >
-                <Phone className="size-4" aria-hidden />
-                {content.helpline.name}: {content.helpline.number}
-              </a>
+              {content.helpline && (
+                <a
+                  href={`tel:${content.helpline}`}
+                  className="mt-6 inline-flex min-h-[44px] items-center gap-2.5 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/25 transition hover:bg-white/25"
+                >
+                  <Phone className="size-4" aria-hidden />
+                  24×7 helpline: {content.helpline}
+                </a>
+              )}
 
               {/* CTAs */}
               <div className="mt-6 flex flex-wrap gap-3">
@@ -597,6 +598,7 @@ function MedicineAdoptionEmbed() {
     }
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- fetch-on-mount
   useEffect(() => {
     load();
   }, [load]);
@@ -814,6 +816,7 @@ function AnimalWelfareEmbed() {
     }
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- fetch-on-mount
   useEffect(() => {
     load();
   }, [load]);

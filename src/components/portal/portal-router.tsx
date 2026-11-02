@@ -107,11 +107,13 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
     get<unknown>("/api/volunteers/me")
       .then((data) => {
         if (!alive) return;
-        // Accept raw volunteer, null, or a {success,data} envelope.
+        // Accept {volunteer}, raw volunteer, null, or a {success,data} envelope.
+        const rec = (data ?? {}) as Record<string, unknown>;
         const inner =
-          data && typeof data === "object" && "data" in (data as Record<string, unknown>)
-            ? (data as { data: unknown }).data
-            : data;
+          rec.volunteer ??
+          (rec.data && typeof rec.data === "object"
+            ? (rec.data as Record<string, unknown>).volunteer ?? rec.data
+            : rec);
         setVolunteer(
           inner && typeof inner === "object" && "id" in (inner as Record<string, unknown>)
             ? (inner as VolunteerProfile)

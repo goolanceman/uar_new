@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
- * Tiny hash-based router.
+ * Tiny hash-based router (React 19 external-store style).
  * The sandbox exposes a single Next.js route (/), so all app navigation
  * happens via location.hash, e.g. #/campaigns/anti-drug.
  */
@@ -13,6 +13,19 @@ function currentPath(): string {
   return h === "" || h === "/" ? "/" : h.replace(/\/+$/, "") || "/";
 }
 
+function subscribe(onChange: () => void) {
+  window.addEventListener("hashchange", onChange);
+  return () => window.removeEventListener("hashchange", onChange);
+}
+
+function getSnapshot(): string {
+  return currentPath();
+}
+
+function getServerSnapshot(): string {
+  return "/";
+}
+
 export function navigate(to: string) {
   if (to.startsWith("#")) to = to.slice(1);
   window.location.hash = to.startsWith("/") ? to : `/${to}`;
@@ -20,18 +33,7 @@ export function navigate(to: string) {
 }
 
 export function useRoute() {
-  const [path, setPath] = useState<string>("/");
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const onChange = () => {
-      setPath(currentPath());
-      setTick((t) => t + 1);
-    };
-    window.addEventListener("hashchange", onChange);
-    setPath(currentPath());
-    return () => window.removeEventListener("hashchange", onChange);
-  }, []);
+  const path = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const segments = path.split("/").filter(Boolean);
   const query = new URLSearchParams(
@@ -42,7 +44,7 @@ export function useRoute() {
     path,
     segments,
     query,
-    key: `${path}-${tick}`,
+    key: path,
   };
 }
 

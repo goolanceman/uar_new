@@ -119,6 +119,7 @@ export function publicUser(u: {
   email: string;
   role: string;
   status: string;
+  isActive: boolean;
   phone?: string | null;
   city?: string | null;
   avatar?: string | null;

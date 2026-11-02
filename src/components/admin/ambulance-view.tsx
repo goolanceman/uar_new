@@ -225,13 +225,14 @@ function CorridorMap({ mission, events }: { mission: Mission; events: CorridorEv
   const totalLen = segments.reduce((s, seg) => s + Math.max(seg.lengthKm, 0.4), 0);
 
   const boxes = useMemo(() => {
-    let x = START_X;
-    return segments.map((seg) => {
+    const out: { seg: (typeof segments)[number]; x: number; w: number }[] = [];
+    let cursor = START_X;
+    for (const seg of segments) {
       const w = (Math.max(seg.lengthKm, 0.4) / totalLen) * usable;
-      const box = { seg, x, w };
-      x += w + GAP;
-      return box;
-    });
+      out.push({ seg, x: cursor, w });
+      cursor += w + GAP;
+    }
+    return out;
   }, [segments, totalLen, usable]);
 
   const progress = Math.min(100, Math.max(0, mission.progress || 0));

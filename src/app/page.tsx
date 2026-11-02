@@ -1,42 +1,106 @@
 "use client";
 
-import { useAuth } from "@/hooks/use-auth";
-import { useRoute } from "@/lib/router";
-import { ShieldCheck, RefreshCw } from "lucide-react";
-import PublicSite from "@/components/public/public-site";
+import { AuthProvider, useAuth } from "@/hooks/use-auth";
+import { useRoute, navigate } from "@/lib/router";
+import { PublicSite } from "@/components/public/public-site";
 import AdminApp from "@/components/admin/admin-app";
 import PortalRouter from "@/components/portal/portal-router";
+import { Button } from "@/components/ui/button";
+import { ShieldCheck, LogIn } from "lucide-react";
 
 /**
- * Root shell — single Next.js route with hash-based role routing:
- *   #/…            → public multi-page site
- *   #/admin/…      → admin console (ADMIN)
- *   #/donor/…      → donor portal (DONOR)
- *   #/volunteer/…  → volunteer portal (VOLUNTEER; PENDING sees application status)
- *   #/beneficiary/…→ beneficiary hub
+ * United Angel Reach — single-route app shell.
+ * Hash routing decides the experience:
+ *   #/admin/*      → Admin console (ADMIN only)
+ *   #/donor/*      → Donor portal
+ *   #/volunteer/*  → Volunteer portal (PENDING volunteers see application tracking)
+ *   #/beneficiary  → Beneficiary help hub
+ *   everything else → Public multi-page website
  */
-export default function Home() {
+
+function Splash() {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background">
+      <span className="flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+        <ShieldCheck className="size-6" />
+      </span>
+      <p className="text-sm font-medium text-muted-foreground">United Angel Reach…</p>
+      <span className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  );
+}
+
+function AuthGate({
+  title,
+  message,
+}: {
+  title: string;
+  message: string;
+}) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-muted/40 p-6 text-center">
+      <span className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <LogIn className="size-6" />
+      </span>
+      <div>
+        <h1 className="text-lg font-semibold">{title}</h1>
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">{message}</p>
+      </div>
+      <div className="flex gap-2">
+        <Button onClick={() => navigate("/login")}>Sign in</Button>
+        <Button variant="outline" onClick={() => navigate("/")}>
+          Back to site
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function AppShell() {
   const { user, loading } = useAuth();
   const route = useRoute();
+  const top = route.segments[0] ?? "";
 
-  if (loading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
-        <div className="flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg">
-          <ShieldCheck className="size-7" />
-        </div>
-        <p className="text-sm font-semibold">United Angel Reach</p>
-        <RefreshCw className="size-4 animate-spin text-muted-foreground" />
-      </div>
-    );
+  if (loading) return <Splash />;
+
+  if (top === "admin") {
+    if (!user)
+      return (
+        <AuthGate
+          title="Admin sign-in required"
+          message="Sign in with an administrator account to open the operations console."
+        />
+      );
+    if (user.role !== "ADMIN")
+      return (
+        <AuthGate
+          title="Admins only"
+          message={`You are signed in as ${user.role.toLowerCase()}. This console is restricted to administrators.`}
+        />
+      );
+    return <AdminApp />;
   }
 
-  const seg0 = route.segments[0] ?? "";
-
-  if (user && (seg0 === "admin" || seg0 === "donor" || seg0 === "volunteer" || seg0 === "beneficiary")) {
-    if (seg0 === "admin" && user.role === "ADMIN") return <AdminApp />;
-    return <PortalRouter />;
+  const isPortalArea =
+    top === "donor" || top === "volunteer" || top === "beneficiary";
+  if (isPortalArea) {
+    if (!user)
+      return (
+        <AuthGate
+          title="Sign in to continue"
+          message="Your personalised portal lives behind a sign-in. Donor, volunteer and beneficiary accounts all work here."
+        />
+      );
+    return <PortalRouter user={user} />;
   }
 
   return <PublicSite />;
+}
+
+export default function Page() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
 }

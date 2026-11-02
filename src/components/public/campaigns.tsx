@@ -189,7 +189,7 @@ export function CampaignsPage() {
                   </div>
 
                   <p className="line-clamp-3 text-sm text-muted-foreground">
-                    {c.tagline ?? content?.short ?? c.description}
+                    {c.tagline ?? content?.heroTag ?? c.description}
                   </p>
 
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

@@ -57,21 +57,27 @@ interface StatsResponse extends Rec {
   recentDonations?: Rec[];
 }
 
-function pickNum(o: Rec | undefined, keys: string[], fb = 0): number {
+function pickNum(o: Rec | null | undefined, keys: string[], fb = 0): number {
   if (!o) return fb;
-  for (const k of keys) {
-    const v = o[k];
-    if (typeof v === "number" && Number.isFinite(v)) return v;
-    if (typeof v === "string" && v !== "" && Number.isFinite(Number(v))) return Number(v);
+  const sources: Rec[] = [o, (o.totals ?? {}) as Rec];
+  for (const src of sources) {
+    for (const k of keys) {
+      const v = src[k];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string" && v !== "" && Number.isFinite(Number(v))) return Number(v);
+    }
   }
   return fb;
 }
 
-function pickStr(o: Rec | undefined, keys: string[], fb = ""): string {
+function pickStr(o: Rec | null | undefined, keys: string[], fb = ""): string {
   if (!o) return fb;
-  for (const k of keys) {
-    const v = o[k];
-    if (typeof v === "string" && v) return v;
+  const sources: Rec[] = [o, (o.totals ?? {}) as Rec];
+  for (const src of sources) {
+    for (const k of keys) {
+      const v = src[k];
+      if (typeof v === "string" && v) return v;
+    }
   }
   return fb;
 }
@@ -170,11 +176,12 @@ export default function DashboardView() {
   const beneficiaries = pickNum(rec, ["beneficiaries", "beneficiariesCount"]);
   const volunteers = pickNum(rec, ["volunteers", "volunteersCount"]);
   const kitsScanned = pickNum(rec, ["kitsScanned", "scannedUnits"]);
-  const kitsTotal = pickNum(rec, ["kitsTotal", "totalUnits"]);
+  const kitsTotal = pickNum(rec, ["kitsTotal", "kitsUnits", "totalUnits"]);
+  const corridorMinDirect = pickNum(rec, ["corridorTimeSavedMin", "timeSavedMin"]);
   const corridorSec = pickNum(rec, ["corridorTimeSavedSec", "timeSavedSec", "corridorTimeSaved"]);
-  const corridorMin = Math.round(corridorSec / 60);
+  const corridorMin = corridorMinDirect || Math.round(corridorSec / 60);
 
-  const monthly = asArray(stats?.monthlyDonations).map((m) => ({
+  const monthly = asArray(stats?.monthly ?? stats?.monthlyDonations).map((m) => ({
     month: pickStr(m, ["month", "label", "name"], "—"),
     amount: pickNum(m, ["amount", "value", "donations", "total"]),
   }));

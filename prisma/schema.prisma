@@ -279,6 +279,8 @@ model Animal {
   location     String
   status       String   @default("AVAILABLE") // AVAILABLE | FOSTERED | ADOPTED | CRITICAL
   monthlyFood  Float    @default(0)
+  adoptedById  String?
+  adoptedByName String?
   createdAt    DateTime @default(now())
 
   pledges AnimalPledge[]

@@ -617,10 +617,10 @@ export function pickStats(raw: unknown): PublicStats {
   const s = (Array.isArray(raw) ? raw[0] : raw) as
     | Record<string, unknown>
     | undefined;
-  const num = (...keys: string[]): number => {
-    if (!s) return 0;
+  const totals = (s?.totals ?? s ?? {}) as Record<string, unknown>;
+  const num = (src: Record<string, unknown>, ...keys: string[]): number => {
     for (const k of keys) {
-      const v = s[k];
+      const v = src[k];
       if (typeof v === "number" && Number.isFinite(v)) return v;
       if (typeof v === "string" && v !== "" && Number.isFinite(Number(v)))
         return Number(v);
@@ -628,11 +628,11 @@ export function pickStats(raw: unknown): PublicStats {
     return 0;
   };
   return {
-    raised: num("totalRaised", "raisedAmount", "raised", "totalDonationAmount"),
-    donations: num("totalDonations", "donationCount", "donations"),
-    beneficiaries: num("totalBeneficiaries", "beneficiaries"),
-    volunteers: num("totalVolunteers", "activeVolunteers", "volunteers"),
-    campaigns: num("totalCampaigns", "activeCampaigns", "campaigns"),
+    raised: num(s as Record<string, unknown>, "totalRaised", "raisedAmount", "raised", "totalDonationAmount") || num(totals, "raised", "totalRaised", "totalDonationAmount"),
+    donations: num(s as Record<string, unknown>, "totalDonations", "donationCount", "donations") || num(totals, "donations", "totalDonations"),
+    beneficiaries: num(s as Record<string, unknown>, "totalBeneficiaries", "beneficiaries") || num(totals, "beneficiaries", "totalBeneficiaries"),
+    volunteers: num(s as Record<string, unknown>, "totalVolunteers", "activeVolunteers", "volunteers") || num(totals, "volunteers", "activeVolunteers"),
+    campaigns: num(s as Record<string, unknown>, "totalCampaigns", "activeCampaigns", "campaigns") || num(totals, "campaigns", "activeCampaigns"),
   };
 }
 

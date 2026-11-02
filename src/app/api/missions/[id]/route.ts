@@ -46,6 +46,23 @@ export async function PATCH(req: Request, { params }: Ctx) {
       } catch {
         route = [];
       }
+      // Legacy/seeded missions may lack a route — synthesise one so the corridor still arms.
+      if (!Array.isArray(route) || route.length === 0) {
+        const pool = [
+          "Hebbal Flyover", "Outer Ring Road", "Silk Board Junction",
+          "KR Puram Junction", "Tin Factory", "Marathahalli Bridge",
+          "NICE Road", "Majestic Interchange",
+        ];
+        const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, 4);
+        const mix = ["GRIDLOCK", "HEAVY", "MODERATE", "LOW"].sort(
+          () => Math.random() - 0.5
+        );
+        route = picked.map((name, i) => ({
+          name,
+          congestion: mix[i],
+          lengthKm: Math.round((0.8 + Math.random() * 2.4) * 10) / 10,
+        }));
+      }
       const eventsData: {
         missionId: string;
         segment: string;
@@ -114,6 +131,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
           vehiclesAlerted,
           timeSavedSec,
           etaMin,
+          route: JSON.stringify(route),
         },
       });
       const events = await db.corridorEvent.findMany({

@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
       data: {
         title,
         slug: await uniqueSlug(title),
-        tagline: body?.tagline ? String(body.tagline).trim() : null,
+        tagline: body?.tagline ? String(body.tagline).trim() : "",
         description,
         category,
         targetAmount,
