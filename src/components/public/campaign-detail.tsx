@@ -598,7 +598,7 @@ function MedicineAdoptionEmbed() {
     }
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- fetch-on-mount
+   
   useEffect(() => {
     load();
   }, [load]);
@@ -816,7 +816,7 @@ function AnimalWelfareEmbed() {
     }
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- fetch-on-mount
+   
   useEffect(() => {
     load();
   }, [load]);
