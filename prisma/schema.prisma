@@ -1,7 +1,6 @@
-// United Angel Reach - Charitable Trust Management System
-// Merged canonical schema: v1 models (git-recovered) + v2 extensions
-// (MDM masters, volunteer applications, adopt-a-medicine, animal welfare,
-//  ambulance green corridor, QR-coded ration kits, testimonials)
+// United Angel Reach — Charitable Trust Management System
+// Merged canonical schema: v1 modules preserved + v2 programmes (MDM, Kits,
+// Adopt-a-Medicine, Animal Welfare, Green Corridor, volunteer approvals).
 
 generator client {
   provider = "prisma-client-js"
@@ -19,11 +18,11 @@ model User {
   email     String   @unique
   phone     String?
   name      String
-  password  String
+  password  String // scrypt "salt:hash" (legacy plain values still verify)
   role      String   @default("DONOR") // ADMIN | VOLUNTEER | DONOR | BENEFICIARY
+  status    String   @default("ACTIVE") // ACTIVE | PENDING | SUSPENDED (PENDING = volunteer awaiting approval)
   avatar    String?
   isActive  Boolean  @default(true)
-  status    String   @default("ACTIVE") // ACTIVE | PENDING | SUSPENDED (volunteer approval flow)
   city      String?
   pan       String?
   about     String?
@@ -42,22 +41,23 @@ model User {
 // ==================== DONATION MODULE ====================
 
 model Donation {
-  id            String   @id @default(cuid())
+  id            String  @id @default(cuid())
   donorId       String?
   donorName     String
   donorEmail    String
   donorPhone    String?
   amount        Float
-  currency      String   @default("INR")
-  type          String   @default("ONE_TIME") // ONE_TIME | RECURRING
-  category      String   @default("GENERAL")
-  paymentMethod String   @default("UPI") // UPI | RAZORPAY | STRIPE | CASH | BANK_TRANSFER
-  paymentStatus String   @default("PENDING") // PENDING | COMPLETED | FAILED | REFUNDED
+  currency      String  @default("INR")
+  type          String  @default("ONE_TIME") // ONE_TIME | RECURRING
+  category      String  @default("GENERAL") // GENERAL | MEDICAL | FOOD_DISTRIBUTION | SANITARY_PADS | EDUCATION_SUPPORT | EMERGENCY | ANIMAL_WELFARE | MOBILITY | AWARENESS
+  paymentMethod String  @default("UPI") // UPI | RAZORPAY | CARD | CASH | BANK_TRANSFER
+  paymentStatus String  @default("COMPLETED") // PENDING | COMPLETED | FAILED | REFUNDED
   transactionId String?
-  receiptNumber String   @unique
+  receiptNumber String  @unique
   campaignId    String?
   message       String?
-  isAnonymous   Boolean  @default(false)
+  isAnonymous   Boolean @default(false)
+  pan           String? // for 80G receipt
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -70,29 +70,29 @@ model Donation {
 // ==================== CAMPAIGN MANAGEMENT ====================
 
 model Campaign {
-  id            String   @id @default(cuid())
-  title         String
-  slug          String?  @unique
-  tagline       String?
-  description   String
-  category      String   @default("GENERAL")
-  targetAmount  Float
-  raisedAmount  Float    @default(0)
-  currency      String   @default("INR")
-  startDate     DateTime @default(now())
-  endDate       DateTime?
-  location      String?
-  images        String?
-  status        String   @default("ACTIVE") // DRAFT | ACTIVE | PAUSED | COMPLETED | CANCELLED
-  icon          String   @default("heart")
-  accent        String   @default("emerald")
-  helpline      String?
-  featured      Boolean  @default(false)
-  beneficiaries Int      @default(0)
-  volunteersEngaged Int @default(0)
-  createdBy     String   @default("system")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                String   @id @default(cuid())
+  title             String
+  slug              String   @unique
+  tagline           String   @default("")
+  description       String
+  category          String   @default("GENERAL") // see Donation.category
+  targetAmount      Float
+  raisedAmount      Float    @default(0)
+  currency          String   @default("INR")
+  startDate         DateTime @default(now())
+  endDate           DateTime?
+  location          String?
+  images            String?
+  status            String   @default("ACTIVE") // DRAFT | ACTIVE | PAUSED | COMPLETED | CANCELLED
+  createdBy         String   @default("system")
+  icon              String   @default("heart") // lucide icon name
+  accent            String   @default("emerald") // orange|cyan|fuchsia|amber|teal|lime|red|emerald|pink
+  helpline          String?
+  featured          Boolean  @default(false)
+  beneficiaries     Int      @default(0)
+  volunteersEngaged Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   donations Donation[]
 
@@ -102,8 +102,8 @@ model Campaign {
 // ==================== BENEFICIARY MANAGEMENT ====================
 
 model Beneficiary {
-  id            String   @id @default(cuid())
-  userId        String?  @unique
+  id            String  @id @default(cuid())
+  userId        String? @unique
   name          String
   phone         String?
   email         String?
@@ -111,20 +111,21 @@ model Beneficiary {
   city          String?
   state         String?
   pincode       String?
-  category      String   @default("OTHER") // WIDOW | ORPHAN | STUDENT | ELDERLY | DISABLED | SINGLE_MOTHER | POOR_FAMILY | PATIENT | DAILY_WAGE | OTHER
-  urgencyLevel  String   @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
-  familyMembers Int      @default(1)
+  category      String  @default("OTHER") // WIDOW | ORPHAN | STUDENT | ELDERLY | DISABLED | SINGLE_MOTHER | POOR_FAMILY | PATIENT | DAILY_WAGE | OTHER
+  urgencyLevel  String  @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  familyMembers Int     @default(1)
   monthlyIncome Float?
+  monthlyNeed   Float?
   needs         String?
   documents     String?
   notes         String?
+  isActive      Boolean @default(true)
   onboardedByName String?
-  isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user            User?             @relation(fields: [userId], references: [id])
-  distributions   Distribution[]
+  user             User?             @relation(fields: [userId], references: [id])
+  distributions    Distribution[]
   padDistributions PadDistribution[]
 
   @@map("beneficiaries")
@@ -133,40 +134,60 @@ model Beneficiary {
 // ==================== VOLUNTEER MANAGEMENT ====================
 
 model Volunteer {
-  id               String   @id @default(cuid())
-  userId           String   @unique
+  id               String  @id @default(cuid())
+  userId           String  @unique
   skills           String?
   availability     String?
   assignedArea     String?
   emergencyContact String?
   idProof          String?
-  status           String   @default("PENDING") // PENDING | ACTIVE | INACTIVE | SUSPENDED
+  status           String  @default("PENDING") // PENDING | ACTIVE | INACTIVE | SUSPENDED
   joinedAt         DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  user          User                  @relation(fields: [userId], references: [id])
-  tasks         VolunteerTask[]
-  attendances   VolunteerAttendance[]
+  user         User                  @relation(fields: [userId], references: [id])
+  tasks        VolunteerTask[]
+  attendances  VolunteerAttendance[]
   distributions Distribution[]
 
   @@map("volunteers")
 }
 
-model VolunteerTask {
+model VolunteerApplication {
   id           String    @id @default(cuid())
-  volunteerId  String
-  title        String
-  description  String?
-  type         String    @default("DISTRIBUTION") // DISTRIBUTION | KIT_SCAN | INVENTORY | EVENT | RESCUE | AMBULANCE
-  priority     String    @default("MEDIUM") // LOW | MEDIUM | HIGH
-  location     String?
-  scheduledDate DateTime
-  status       String    @default("ASSIGNED") // ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
-  completedAt  DateTime?
-  notes        String?
+  userId       String?
+  fullName     String
+  email        String
+  phone        String
+  city         String
+  occupation   String?
+  skills       String?
+  availability String?
+  motivation   String
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewNote   String?
+  tempCreds    String?
   createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  reviewedAt   DateTime?
+
+  @@map("volunteer_applications")
+}
+
+model VolunteerTask {
+  id            String    @id @default(cuid())
+  volunteerId   String
+  title         String
+  description   String?
+  type          String    @default("DISTRIBUTION") // DISTRIBUTION | KIT_SCAN | INVENTORY | EVENT | RESCUE | AMBULANCE
+  priority      String    @default("MEDIUM") // LOW | MEDIUM | HIGH
+  location      String?
+  scheduledDate DateTime
+  status        String    @default("ASSIGNED") // ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  completedAt   DateTime?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   volunteer Volunteer @relation(fields: [volunteerId], references: [id])
 
@@ -189,31 +210,11 @@ model VolunteerAttendance {
   @@map("volunteer_attendances")
 }
 
-// Volunteer application (public form → temp creds → admin approval)
-model VolunteerApplication {
-  id           String    @id @default(cuid())
-  userId       String?
-  fullName     String
-  email        String
-  phone        String
-  city         String
-  occupation   String?
-  skills       String?
-  availability String?
-  motivation   String
-  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED
-  reviewNote   String?
-  reviewedAt   DateTime?
-  createdAt    DateTime  @default(now())
-
-  @@map("volunteer_applications")
-}
-
-// ==================== MDM (MASTER DATA) ====================
+// ==================== MDM (MASTER DATA MANAGEMENT) ====================
 
 model Master {
   id        String  @id @default(cuid())
-  category  String
+  category  String // CONDITION | ANIMAL_SPECIES | CITY | AVAILABILITY | SKILL | AMBULANCE_TYPE | EMERGENCY_TYPE | INVENTORY_CATEGORY | DISTRIBUTION_TYPE | TASK_TYPE | UNIT | BENEFICIARY_CATEGORY | DONATION_CATEGORY
   value     String
   label     String
   sortOrder Int     @default(0)
@@ -221,123 +222,6 @@ model Master {
 
   @@unique([category, value])
   @@map("masters")
-}
-
-// ==================== INVENTORY MANAGEMENT ====================
-
-model InventoryItem {
-  id          String    @id @default(cuid())
-  name        String
-  description String?
-  category    String    @default("OTHER") // FOOD_KIT | SANITARY_PADS | CLOTHING | MEDICINE | ANIMAL_FEED | EQUIPMENT | OTHER
-  unit        String    @default("piece")
-  quantity    Int       @default(0)
-  minStock    Int       @default(10)
-  pricePerUnit Float?
-  location    String?
-  expiryDate  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  purchases     InventoryPurchase[]
-  distributions InventoryDistribution[]
-
-  @@map("inventory_items")
-}
-
-model InventoryPurchase {
-  id           String   @id @default(cuid())
-  itemId       String
-  quantity     Int
-  pricePerUnit Float?
-  totalPrice   Float?
-  supplier     String?
-  invoiceNumber String?
-  purchaseDate DateTime @default(now())
-  notes        String?
-  createdAt    DateTime @default(now())
-
-  item InventoryItem @relation(fields: [itemId], references: [id])
-
-  @@map("inventory_purchases")
-}
-
-model InventoryDistribution {
-  id            String   @id @default(cuid())
-  itemId        String
-  quantity      Int
-  distributionId String?
-  notes         String?
-  createdAt     DateTime @default(now())
-
-  item InventoryItem @relation(fields: [itemId], references: [id])
-
-  @@map("inventory_distributions")
-}
-
-// ==================== DISTRIBUTION TRACKING ====================
-
-model Distribution {
-  id            String   @id @default(cuid())
-  type          String   @default("FOOD") // FOOD | SANITARY_PADS | EDUCATION_MATERIAL | CLOTHING | MEDICAL | CASH | ANIMAL_FEED | OTHER
-  beneficiaryId String?
-  volunteerId   String?
-  campaignId    String?
-  items         String?
-  quantity      Int      @default(1)
-  value         Float?
-  location      String?
-  latitude      Float?
-  longitude     Float?
-  photos        String?
-  notes         String?
-  distributedAt DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
-  volunteer   Volunteer?   @relation(fields: [volunteerId], references: [id])
-
-  @@map("distributions")
-}
-
-// ==================== SANITARY PADS INITIATIVE ====================
-
-model PadDistribution {
-  id               String   @id @default(cuid())
-  beneficiaryId    String?
-  schoolName       String?
-  area             String
-  girlsCount       Int      @default(0)
-  padsDistributed  Int      @default(0)
-  awarenessSession Boolean  @default(false)
-  sessionAttendees Int?
-  volunteerId      String?
-  distributionDate DateTime @default(now())
-  notes            String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
-
-  @@map("pad_distributions")
-}
-
-model SchoolCoverage {
-  id            String    @id @default(cuid())
-  schoolName    String
-  address       String?
-  city          String?
-  contactPerson String?
-  contactPhone  String?
-  totalGirls    Int       @default(0)
-  lastVisited   DateTime?
-  visitsCount   Int       @default(0)
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  @@map("school_coverages")
 }
 
 // ==================== ADOPT-A-MEDICINE ====================
@@ -348,16 +232,15 @@ model Cause {
   patientName    String
   age            Int
   city           String
-  condition      String   @default("BP") // BP | DIABETES | THYROID | CARDIAC | ASTHMA | ARTHRITIS | OTHER
+  condition      String // BP | DIABETES | THYROID | CARDIAC | ASTHMA | ARTHRITIS | OTHER
   monthlyCost    Float
-  durationMonths Int      @default(12)
+  durationMonths Int
   story          String
   status         String   @default("SEEKING") // SEEKING | PARTIAL | ADOPTED | PAUSED
   adoptedById    String?
   adoptedByName  String?
-  raised         Float    @default(0)
+  raised         Float    @default(0) // sum of ACTIVE monthly pledges
   createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
 
   pledges Pledge[]
 
@@ -374,7 +257,6 @@ model Pledge {
   startDate      DateTime @default(now())
   status         String   @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
   createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
 
   cause Cause @relation(fields: [causeId], references: [id])
 
@@ -397,10 +279,7 @@ model Animal {
   location     String
   status       String   @default("AVAILABLE") // AVAILABLE | FOSTERED | ADOPTED | CRITICAL
   monthlyFood  Float    @default(0)
-  adoptedById  String?
-  adoptedByName String?
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
 
   pledges AnimalPledge[]
 
@@ -416,29 +295,26 @@ model AnimalPledge {
   kind        String   @default("FOOD") // FOOD | MEDICAL | VACCINATION | SHELTER
   amount      Float
   frequency   String   @default("MONTHLY") // ONE_TIME | MONTHLY
-  status      String   @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  status      String   @default("ACTIVE")
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   animal Animal? @relation(fields: [animalId], references: [id])
 
   @@map("animal_pledges")
 }
 
-// ==================== AMBULANCE & GREEN CORRIDOR ====================
+// ==================== AMBULANCE & AI GREEN CORRIDOR ====================
 
 model Ambulance {
-  id          String   @id @default(cuid())
-  code        String   @unique
-  type        String   @default("BLS") // BLS | ALS | PTV | NEONATAL
-  status      String   @default("AVAILABLE") // AVAILABLE | ON_MISSION | MAINTENANCE
+  id          String  @id @default(cuid())
+  code        String  @unique
+  type        String  @default("BLS") // BLS | ALS | PTV | NEONATAL
+  status      String  @default("AVAILABLE") // AVAILABLE | ON_MISSION | MAINTENANCE
   base        String
   driverName  String
   driverPhone String?
   crew        String?
   equipment   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   missions Mission[]
 
@@ -487,7 +363,7 @@ model CorridorEvent {
   @@map("corridor_events")
 }
 
-// ==================== RATION KIT SYSTEM (QR) ====================
+// ==================== RATION KIT SYSTEM ====================
 
 model KitTemplate {
   id          String   @id @default(cuid())
@@ -496,7 +372,6 @@ model KitTemplate {
   items       String // JSON [{name, qty, unit}]
   costPerUnit Float    @default(0)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   batches KitBatch[]
 
@@ -512,7 +387,6 @@ model KitBatch {
   instructions String?
   status       String   @default("READY") // READY | IN_PROGRESS | DEPLETED
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
 
   template KitTemplate @relation(fields: [templateId], references: [id])
   units    KitUnit[]
@@ -523,17 +397,134 @@ model KitBatch {
 model KitUnit {
   id            String    @id @default(cuid())
   batchId       String
-  code          String    @unique
+  code          String    @unique // UAR-RK-2026-000001
   status        String    @default("READY") // READY | SCANNED | EXPIRED
   scannedAt     DateTime?
   scannedById   String?
   scannedByName String?
   location      String?
-  createdAt     DateTime  @default(now())
 
   batch KitBatch @relation(fields: [batchId], references: [id])
 
   @@map("kit_units")
+}
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+model InventoryItem {
+  id           String    @id @default(cuid())
+  name         String
+  description  String?
+  category     String    @default("OTHER") // FOOD_KIT | SANITARY_PADS | CLOTHING | MEDICINE | ANIMAL_FEED | EQUIPMENT | EDUCATION_MATERIAL | OTHER
+  unit         String    @default("piece")
+  quantity     Int       @default(0)
+  minStock     Int       @default(10)
+  pricePerUnit Float?
+  location     String?
+  expiryDate   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  purchases     InventoryPurchase[]
+  distributions InventoryDistribution[]
+
+  @@map("inventory_items")
+}
+
+model InventoryPurchase {
+  id           String   @id @default(cuid())
+  itemId       String
+  quantity     Int
+  pricePerUnit Float?
+  totalPrice   Float?
+  supplier     String?
+  invoiceNumber String?
+  purchaseDate DateTime @default(now())
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@map("inventory_purchases")
+}
+
+model InventoryDistribution {
+  id            String   @id @default(cuid())
+  itemId        String
+  quantity      Int
+  distributionId String?
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@map("inventory_distributions")
+}
+
+// ==================== DISTRIBUTION TRACKING ====================
+
+model Distribution {
+  id            String   @id @default(cuid())
+  type          String   @default("FOOD") // FOOD | SANITARY_PADS | MEDICAL | EDUCATION_MATERIAL | CLOTHING | CASH | ANIMAL_FEED | OTHER
+  beneficiaryId String?
+  volunteerId   String?
+  campaignId    String?
+  items         String?
+  quantity      Int      @default(1)
+  value         Float?
+  location      String?
+  latitude      Float?
+  longitude     Float?
+  photos        String?
+  notes         String?
+  distributedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
+  volunteer   Volunteer?   @relation(fields: [volunteerId], references: [id])
+
+  @@map("distributions")
+}
+
+// ==================== SANITARY PADS INITIATIVE ====================
+
+model PadDistribution {
+  id               String   @id @default(cuid())
+  beneficiaryId    String?
+  schoolName       String?
+  area             String
+  girlsCount       Int      @default(0)
+  padsDistributed  Int      @default(0)
+  awarenessSession Boolean  @default(false)
+  sessionAttendees Int?
+  volunteerId      String?
+  volunteerName    String?
+  distributionDate DateTime @default(now())
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
+
+  @@map("pad_distributions")
+}
+
+model SchoolCoverage {
+  id            String    @id @default(cuid())
+  schoolName    String
+  address       String?
+  city          String?
+  contactPerson String?
+  contactPhone  String?
+  totalGirls    Int       @default(0)
+  lastVisited   DateTime?
+  visitsCount   Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("school_coverages")
 }
 
 // ==================== NOTIFICATIONS ====================
@@ -589,17 +580,17 @@ model Setting {
 // ==================== CONTACT QUERIES ====================
 
 model ContactQuery {
-  id        String    @id @default(cuid())
-  name      String
-  email     String
-  phone     String?
-  subject   String
-  message   String
-  status    String    @default("PENDING") // PENDING | RESOLVED | CLOSED
+  id         String    @id @default(cuid())
+  name       String
+  email      String
+  phone      String?
+  subject    String
+  message    String
+  status     String    @default("PENDING") // PENDING | RESOLVED | CLOSED
   resolvedAt DateTime?
   resolvedBy String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@map("contact_queries")
 }

@@ -1,120 +1,157 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
+import {
+  getSession,
+  requireAuth,
+  ApiError,
+  json,
+  handleError,
+  logActivity,
+} from "@/lib/session";
 
-// GET all donations
-export async function GET(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+async function nextReceiptNumber(): Promise<string> {
+  const year = new Date().getFullYear();
+  let n = (await db.donation.count()) + 1;
+  let receiptNumber = `UAR-RCPT-${year}-${String(n).padStart(5, "0")}`;
+  // loop while exists
+  while (await db.donation.findUnique({ where: { receiptNumber } })) {
+    n += 1;
+    receiptNumber = `UAR-RCPT-${year}-${String(n).padStart(5, "0")}`;
+  }
+  return receiptNumber;
+}
+
+// GET /api/donations — mine=1 | public feed | admin filtered list
+export async function GET(req: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const category = searchParams.get("category");
-    const status = searchParams.get("status");
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    const sp = new URL(req.url).searchParams;
+    const mine = sp.get("mine") === "1";
+    const isPublic = sp.get("public") === "1";
+    const session = await getSession();
+
+    if (mine) {
+      const s = await requireAuth();
+      const limit = sp.get("limit") ? parseInt(sp.get("limit")!, 10) : undefined;
+      const donations = await db.donation.findMany({
+        where: { donorId: s.userId },
+        orderBy: { createdAt: "desc" },
+        ...(limit && limit > 0 ? { take: limit } : {}),
+        include: { campaign: { select: { title: true, accent: true } } },
+      });
+      return json(donations);
+    }
+
+    if (isPublic || !session) {
+      // Public wall — latest 8 completed, anonymous-masked
+      const donations = await db.donation.findMany({
+        where: { paymentStatus: "COMPLETED" },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        include: { campaign: { select: { title: true, accent: true } } },
+      });
+      return json(
+        donations.map((d) => ({
+          ...d,
+          donorName: d.isAnonymous ? "Anonymous" : d.donorName,
+        }))
+      );
+    }
+
+    // Signed-in (admin) view — filterable
+    const campaignId = sp.get("campaignId");
+    const status = sp.get("status") ?? sp.get("paymentStatus");
+    const q = sp.get("q")?.trim();
+    const limit = sp.get("limit") ? parseInt(sp.get("limit")!, 10) : 50;
 
     const where: Record<string, unknown> = {};
-    
-    if (category && category !== "all") {
-      where.category = category.toUpperCase();
-    }
-    if (status && status !== "all") {
-      where.paymentStatus = status.toUpperCase();
-    }
+    if (campaignId) where.campaignId = campaignId;
+    if (status) where.paymentStatus = status;
+    if (q) where.donorName = { contains: q };
 
     const donations = await db.donation.findMany({
       where,
-      take: limit,
-      skip: offset,
       orderBy: { createdAt: "desc" },
-      include: {
-        donor: {
-          select: { name: true, email: true },
-        },
-        campaign: {
-          select: { title: true },
-        },
-      },
+      ...(limit > 0 ? { take: limit } : {}),
+      include: { campaign: { select: { title: true, accent: true } } },
     });
 
-    const total = await db.donation.count({ where });
-
-    return NextResponse.json({
-      success: true,
-      data: donations,
-      pagination: {
-        total,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching donations:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch donations" },
-      { status: 500 }
-    );
+    return json(donations);
+  } catch (e) {
+    return handleError(e);
   }
 }
 
-// POST create new donation
-export async function POST(request: NextRequest) {
+// POST /api/donations — public or logged-in donor
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    
-    const {
-      donorId,
-      donorName,
-      donorEmail,
-      donorPhone,
-      amount,
-      type = "ONE_TIME",
-      category = "GENERAL",
-      paymentMethod = "UPI",
-      campaignId,
-      message,
-      isAnonymous = false,
-    } = body;
+    const body = await req.json().catch(() => ({}));
+    const session = await getSession();
 
-    // Generate receipt number
-    const receiptNumber = `UAR-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    const amount = Number(body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0)
+      throw new ApiError("Amount must be greater than zero", 400);
+
+    const campaignId = body?.campaignId ? String(body.campaignId) : null;
+    if (campaignId) {
+      const campaign = await db.campaign.findUnique({ where: { id: campaignId } });
+      if (!campaign) throw new ApiError("Selected campaign was not found", 400);
+    }
+
+    const donorName = (body?.donorName ? String(body.donorName).trim() : session?.name ?? "").trim();
+    const donorEmail = (body?.donorEmail ? String(body.donorEmail).trim() : session?.email ?? "").trim().toLowerCase();
+    if (!donorName || !donorEmail)
+      throw new ApiError("Donor name and email are required", 400);
+
+    const pan = body?.pan ? String(body.pan).trim().toUpperCase() : null;
+
+    const receiptNumber = await nextReceiptNumber();
 
     const donation = await db.donation.create({
       data: {
-        donorId,
+        donorId: session?.userId ?? null,
         donorName,
         donorEmail,
-        donorPhone,
-        amount: parseFloat(amount),
-        type: type.toUpperCase(),
-        category: category.toUpperCase(),
-        paymentMethod: paymentMethod.toUpperCase(),
+        donorPhone: body?.donorPhone ? String(body.donorPhone).trim() : null,
+        amount,
+        type: body?.type === "RECURRING" ? "RECURRING" : "ONE_TIME",
+        category: body?.category ? String(body.category) : "GENERAL",
+        paymentMethod: body?.paymentMethod ? String(body.paymentMethod) : "UPI",
+        paymentStatus: "COMPLETED",
         receiptNumber,
         campaignId,
-        message,
-        isAnonymous,
-        paymentStatus: "PENDING",
+        message: body?.message ? String(body.message) : null,
+        isAnonymous: Boolean(body?.isAnonymous),
       },
+      include: { campaign: { select: { title: true } } },
     });
 
-    // Create activity log
-    await db.activityLog.create({
-      data: {
-        userId: donorId,
-        action: "DONATION_CREATED",
-        entityType: "DONATION",
-        entityId: donation.id,
-        details: JSON.stringify({ amount: donation.amount, category: donation.category }),
-      },
-    });
+    if (campaignId) {
+      await db.campaign.update({
+        where: { id: campaignId },
+        data: { raisedAmount: { increment: amount } },
+      });
+    }
 
-    return NextResponse.json({
-      success: true,
-      data: donation,
-      message: "Donation recorded successfully",
-    });
-  } catch (error) {
-    console.error("Error creating donation:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create donation" },
-      { status: 500 }
+    // Persist PAN on the donor profile for 80G receipts
+    if (pan && session) {
+      await db.user.update({
+        where: { id: session.userId },
+        data: { pan },
+      });
+    }
+
+    await logActivity(
+      donorName,
+      "DONATION",
+      "DONATION",
+      `₹${amount} → ${donation.campaign?.title ?? "General Fund"}`,
+      session?.userId
     );
+
+    return json(donation, 201);
+  } catch (e) {
+    return handleError(e);
   }
 }

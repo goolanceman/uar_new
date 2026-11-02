@@ -1,113 +1,117 @@
-import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import {
+  requireAuth,
+  requireRole,
+  json,
+  handleError,
+  ApiError,
+  logActivity,
+} from "@/lib/session";
 
-// GET all pad distributions
-export async function GET(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+// GET /api/pad-distributions?q= (auth)
+export async function GET(req: Request) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    await requireAuth();
+    const sp = new URL(req.url).searchParams;
+    const q = sp.get("q")?.trim() || undefined;
 
-    const distributions = await db.padDistribution.findMany({
-      take: limit,
-      skip: offset,
+    const where: Prisma.PadDistributionWhereInput = {};
+    if (q)
+      where.OR = [
+        { schoolName: { contains: q } },
+        { area: { contains: q } },
+      ];
+
+    const rows = await db.padDistribution.findMany({
+      where,
       orderBy: { distributionDate: "desc" },
-      include: {
-        beneficiary: {
-          select: { name: true, location: true },
-        },
-      },
     });
 
-    const total = await db.padDistribution.count();
-
-    // Get monthly stats
-    const monthlyStats = await db.padDistribution.groupBy({
-      by: ['distributionDate'],
-      _sum: {
-        girlsCount: true,
-        padsDistributed: true,
-      },
-      _count: true,
-    });
-
-    // Get total counts
-    const totals = await db.padDistribution.aggregate({
-      _sum: {
-        girlsCount: true,
-        padsDistributed: true,
-      },
-      _count: {
-        awarenessSession: true,
-      },
-    });
-
-    return NextResponse.json({
-      success: true,
-      data: distributions,
-      stats: {
-        totalGirls: totals._sum.girlsCount || 0,
-        totalPads: totals._sum.padsDistributed || 0,
-        awarenessSessions: totals._count.awarenessSession || 0,
-      },
-      pagination: {
-        total,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching pad distributions:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch pad distributions" },
-      { status: 500 }
+    // PadDistribution has volunteerId but no Prisma relation — attach volunteer info manually
+    const volunteerIds = Array.from(
+      new Set(rows.map((r) => r.volunteerId).filter((v): v is string => Boolean(v)))
     );
+    const volunteers = volunteerIds.length
+      ? await db.volunteer.findMany({
+          where: { id: { in: volunteerIds } },
+          select: { id: true, user: { select: { name: true } } },
+        })
+      : [];
+    const volunteerMap = new Map(
+      volunteers.map((v) => [v.id, { id: v.id, name: v.user.name }])
+    );
+
+    return json(
+      rows.map((r) => ({
+        ...r,
+        volunteer: r.volunteerId ? volunteerMap.get(r.volunteerId) ?? null : null,
+      }))
+    );
+  } catch (e) {
+    return handleError(e);
   }
 }
 
-// POST create new pad distribution
-export async function POST(request: NextRequest) {
+// POST /api/pad-distributions (VOLUNTEER | ADMIN)
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    
-    const {
-      beneficiaryId,
-      schoolName,
-      area,
-      girlsCount,
-      padsDistributed,
-      awarenessSession = false,
-      sessionAttendees,
-      volunteerId,
-      distributionDate,
-      notes,
-    } = body;
+    const session = await requireRole("VOLUNTEER", "ADMIN");
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
-    const distribution = await db.padDistribution.create({
+    const area = String(body.area ?? "").trim();
+    if (!area) throw new ApiError("area is required", 400);
+
+    const girlsCount = Math.max(0, Math.trunc(Number(body.girlsCount ?? 0)) || 0);
+    const padsDistributed = Math.max(
+      0,
+      Math.trunc(Number(body.padsDistributed ?? 0)) || 0
+    );
+    const awarenessSession = Boolean(body.awarenessSession);
+    const sessionAttendees =
+      body.sessionAttendees !== undefined &&
+      body.sessionAttendees !== null &&
+      body.sessionAttendees !== ""
+        ? Math.max(0, Math.trunc(Number(body.sessionAttendees)) || 0)
+        : null;
+
+    const distributionDateRaw = body.distributionDate
+      ? new Date(String(body.distributionDate))
+      : new Date();
+    const distributionDate = Number.isNaN(distributionDateRaw.getTime())
+      ? new Date()
+      : distributionDateRaw;
+
+    // attribute to the session's volunteer profile
+    const volunteer = await db.volunteer.findUnique({
+      where: { userId: session.userId },
+    });
+
+    const row = await db.padDistribution.create({
       data: {
-        beneficiaryId,
-        schoolName,
+        schoolName: body.schoolName ? String(body.schoolName).trim() : null,
         area,
-        girlsCount: parseInt(girlsCount),
-        padsDistributed: parseInt(padsDistributed),
+        girlsCount,
+        padsDistributed,
         awarenessSession,
-        sessionAttendees: sessionAttendees ? parseInt(sessionAttendees) : null,
-        volunteerId,
-        distributionDate: distributionDate ? new Date(distributionDate) : new Date(),
-        notes,
+        sessionAttendees,
+        notes: body.notes ? String(body.notes) : null,
+        volunteerId: volunteer?.id ?? null,
+        distributionDate,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      data: distribution,
-      message: "Pad distribution recorded successfully",
-    });
-  } catch (error) {
-    console.error("Error creating pad distribution:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create pad distribution" },
-      { status: 500 }
+    await logActivity(
+      session.name,
+      "PAD_DRIVE",
+      "PadDistribution",
+      `${area} · ${padsDistributed} pads · ${girlsCount} girls`,
+      session.userId
     );
+    return json(row, 201);
+  } catch (e) {
+    return handleError(e);
   }
 }

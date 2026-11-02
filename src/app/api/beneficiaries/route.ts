@@ -1,114 +1,110 @@
-import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import {
+  requireAuth,
+  requireRole,
+  json,
+  handleError,
+  ApiError,
+  logActivity,
+} from "@/lib/session";
 
-// GET all beneficiaries
-export async function GET(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+const CATEGORIES = [
+  "WIDOW",
+  "ORPHAN",
+  "STUDENT",
+  "ELDERLY",
+  "DISABLED",
+  "SINGLE_MOTHER",
+  "POOR_FAMILY",
+  "PATIENT",
+  "DAILY_WAGE",
+  "OTHER",
+];
+const URGENCY = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+// GET /api/beneficiaries?q=&category=&active=0/1 (auth)
+export async function GET(req: Request) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const category = searchParams.get("category");
-    const urgency = searchParams.get("urgency");
-    const status = searchParams.get("status");
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    await requireAuth();
+    const sp = new URL(req.url).searchParams;
+    const q = sp.get("q")?.trim() || undefined;
+    const category = sp.get("category") || undefined;
+    const active = sp.get("active");
 
-    const where: Record<string, unknown> = {};
-    
-    if (category && category !== "all") {
-      where.category = category.toUpperCase();
-    }
-    if (urgency && urgency !== "all") {
-      where.urgencyLevel = urgency.toUpperCase();
-    }
-    if (status && status !== "all") {
-      where.isActive = status === "active";
-    }
+    const where: Prisma.BeneficiaryWhereInput = {};
+    if (q)
+      where.OR = [
+        { name: { contains: q } },
+        { phone: { contains: q } },
+        { city: { contains: q } },
+      ];
+    if (category) where.category = category;
+    if (active === "0" || active === "1") where.isActive = active === "1";
 
-    const beneficiaries = await db.beneficiary.findMany({
+    const rows = await db.beneficiary.findMany({
       where,
-      take: limit,
-      skip: offset,
       orderBy: { createdAt: "desc" },
-      include: {
-        _count: {
-          select: { distributions: true },
-        },
-      },
     });
-
-    const total = await db.beneficiary.count({ where });
-
-    return NextResponse.json({
-      success: true,
-      data: beneficiaries.map(b => ({
-        ...b,
-        distributionsCount: b._count.distributions,
-      })),
-      pagination: {
-        total,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching beneficiaries:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch beneficiaries" },
-      { status: 500 }
-    );
+    return json(rows);
+  } catch (e) {
+    return handleError(e);
   }
 }
 
-// POST create new beneficiary
-export async function POST(request: NextRequest) {
+// POST /api/beneficiaries (ADMIN | VOLUNTEER)
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    
-    const {
-      name,
-      phone,
-      email,
-      address,
-      city,
-      state,
-      pincode,
-      category = "OTHER",
-      urgencyLevel = "MEDIUM",
-      familyMembers = 1,
-      monthlyIncome,
-      needs,
-      documents,
-      notes,
-    } = body;
+    const session = await requireRole("ADMIN", "VOLUNTEER");
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+
+    const name = String(body.name ?? "").trim();
+    const category = String(body.category ?? "").trim().toUpperCase() || "OTHER";
+    const urgencyLevel =
+      String(body.urgencyLevel ?? "").trim().toUpperCase() || "MEDIUM";
+    if (!name) throw new ApiError("name is required", 400);
+    if (!CATEGORIES.includes(category)) throw new ApiError("Invalid category", 400);
+    if (!URGENCY.includes(urgencyLevel))
+      throw new ApiError("Invalid urgencyLevel", 400);
+
+    const familyMembers = Number.isFinite(Number(body.familyMembers))
+      ? Math.max(1, Math.trunc(Number(body.familyMembers)))
+      : 1;
+    const monthlyIncome =
+      body.monthlyIncome !== undefined &&
+      body.monthlyIncome !== null &&
+      body.monthlyIncome !== "" &&
+      Number.isFinite(Number(body.monthlyIncome))
+        ? Number(body.monthlyIncome)
+        : null;
 
     const beneficiary = await db.beneficiary.create({
       data: {
         name,
-        phone,
-        email,
-        address,
-        city,
-        state,
-        pincode,
-        category: category.toUpperCase(),
-        urgencyLevel: urgencyLevel.toUpperCase(),
+        phone: body.phone ? String(body.phone).trim() : null,
+        city: body.city ? String(body.city).trim() : null,
+        category,
+        urgencyLevel,
         familyMembers,
-        monthlyIncome: monthlyIncome ? parseFloat(monthlyIncome) : null,
-        needs: needs ? JSON.stringify(needs) : null,
-        documents: documents ? JSON.stringify(documents) : null,
-        notes,
+        monthlyIncome,
+        needs: body.needs ? String(body.needs) : null,
+        notes: body.notes ? String(body.notes) : null,
+        address: body.address ? String(body.address) : null,
+        onboardedByName: session.name,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      data: beneficiary,
-      message: "Beneficiary registered successfully",
-    });
-  } catch (error) {
-    console.error("Error creating beneficiary:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create beneficiary" },
-      { status: 500 }
+    await logActivity(
+      session.name,
+      "BENEFICIARY_ADD",
+      "Beneficiary",
+      `${name} (${category})`,
+      session.userId
     );
+    return json(beneficiary, 201);
+  } catch (e) {
+    return handleError(e);
   }
 }

@@ -1,97 +1,110 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
+import {
+  getSession,
+  requireRole,
+  ApiError,
+  json,
+  handleError,
+  logActivity,
+} from "@/lib/session";
 
-// GET all campaigns
-export async function GET(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+async function uniqueSlug(title: string): Promise<string> {
+  const base = slugify(title) || "campaign";
+  let candidate = base;
+  let n = 2;
+  // ensure unique (append -2, -3, …)
+  while (await db.campaign.findUnique({ where: { slug: candidate } })) {
+    candidate = `${base}-${n}`;
+    n += 1;
+  }
+  return candidate;
+}
+
+// GET /api/campaigns?category&status&q&featured&all=1
+export async function GET(req: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const status = searchParams.get("status");
-    const limit = parseInt(searchParams.get("limit") || "20");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    const sp = new URL(req.url).searchParams;
+    const session = await getSession();
+    const isAdmin = session?.role === "ADMIN";
+    const all = sp.get("all") === "1";
+
+    const category = sp.get("category");
+    const status = sp.get("status");
+    const q = sp.get("q")?.trim();
+    const featured = sp.get("featured") === "1";
 
     const where: Record<string, unknown> = {};
-    
-    if (status && status !== "all") {
-      where.status = status.toUpperCase();
-    }
+    if (!isAdmin || !all) where.status = { not: "DRAFT" };
+    if (status) where.status = status;
+    if (category) where.category = category;
+    if (featured) where.featured = true;
+    if (q) where.title = { contains: q };
 
     const campaigns = await db.campaign.findMany({
       where,
-      take: limit,
-      skip: offset,
-      orderBy: { createdAt: "desc" },
-      include: {
-        _count: {
-          select: { donations: true },
-        },
-      },
+      orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
     });
 
-    const total = await db.campaign.count({ where });
-
-    return NextResponse.json({
-      success: true,
-      data: campaigns.map(c => ({
-        ...c,
-        donors: c._count.donations,
-      })),
-      pagination: {
-        total,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching campaigns:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch campaigns" },
-      { status: 500 }
-    );
+    return json(campaigns);
+  } catch (e) {
+    return handleError(e);
   }
 }
 
-// POST create new campaign
-export async function POST(request: NextRequest) {
+// POST /api/campaigns — admin creates a campaign
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    
-    const {
-      title,
-      description,
-      category = "GENERAL",
-      targetAmount,
-      startDate,
-      endDate,
-      location,
-      images,
-      createdBy,
-    } = body;
+    const session = await requireRole("ADMIN");
+    const body = await req.json().catch(() => ({}));
+
+    const title = String(body?.title ?? "").trim();
+    const description = String(body?.description ?? "").trim();
+    const category = String(body?.category ?? "GENERAL");
+    const targetAmount = Number(body?.targetAmount);
+
+    if (!title || !description)
+      throw new ApiError("Title and description are required", 400);
+    if (!Number.isFinite(targetAmount) || targetAmount <= 0)
+      throw new ApiError("Target amount must be a positive number", 400);
 
     const campaign = await db.campaign.create({
       data: {
         title,
+        slug: await uniqueSlug(title),
+        tagline: body?.tagline ? String(body.tagline).trim() : null,
         description,
-        category: category.toUpperCase(),
-        targetAmount: parseFloat(targetAmount),
-        startDate: new Date(startDate),
-        endDate: endDate ? new Date(endDate) : null,
-        location,
-        images: images ? JSON.stringify(images) : null,
-        createdBy,
-        status: "DRAFT",
+        category,
+        targetAmount,
+        icon: body?.icon ? String(body.icon) : "heart",
+        accent: body?.accent ? String(body.accent) : "emerald",
+        helpline: body?.helpline ? String(body.helpline).trim() : null,
+        featured: Boolean(body?.featured),
+        status: body?.status ? String(body.status) : "ACTIVE",
+        startDate: new Date(),
+        createdBy: session.userId,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      data: campaign,
-      message: "Campaign created successfully",
-    });
-  } catch (error) {
-    console.error("Error creating campaign:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create campaign" },
-      { status: 500 }
+    await logActivity(
+      session.name,
+      "CAMPAIGN_CREATE",
+      "CAMPAIGN",
+      `${campaign.title} (₹${campaign.targetAmount})`,
+      session.userId
     );
+
+    return json(campaign, 201);
+  } catch (e) {
+    return handleError(e);
   }
 }

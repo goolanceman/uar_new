@@ -1,58 +1,71 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
+import {
+  setSession,
+  hashPassword,
+  ApiError,
+  json,
+  handleError,
+  logActivity,
+} from "@/lib/session";
 
-export async function POST(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+const ALLOWED_ROLES = ["DONOR", "VOLUNTEER", "BENEFICIARY"];
+
+function tempPassword(): string {
+  return `UAR${Math.floor(10000 + Math.random() * 90000)}@`;
+}
+
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const { name, email, phone, password, role = "DONOR" } = body;
+    const body = await req.json().catch(() => ({}));
+    const name = String(body?.name ?? "").trim();
+    const email = String(body?.email ?? "").trim().toLowerCase();
+    const phone = String(body?.phone ?? "").trim();
+    const city = body?.city ? String(body.city).trim() : null;
+    const role = ALLOWED_ROLES.includes(String(body?.role)) ? String(body.role) : "DONOR";
 
-    // Check if user already exists
-    const existingUser = await db.user.findUnique({
-      where: { email },
+    if (!name || !email || !phone)
+      throw new ApiError("Name, email and phone are required", 400);
+    if (!/^\S+@\S+\.\S+$/.test(email))
+      throw new ApiError("Please enter a valid email address", 400);
+
+    const existing = await db.user.findFirst({
+      where: { email: { equals: email } },
     });
+    if (existing)
+      throw new ApiError("An account with this email already exists", 409);
 
-    if (existingUser) {
-      return NextResponse.json(
-        { success: false, error: "Email already registered" },
-        { status: 400 }
-      );
-    }
-
-    // Create user
-    // In production, hash the password!
+    const password = tempPassword();
     const user = await db.user.create({
       data: {
         name,
         email,
         phone,
-        password, // TODO: Hash in production!
-        role: role.toUpperCase() as "ADMIN" | "VOLUNTEER" | "DONOR" | "BENEFICIARY",
+        city,
+        role,
+        password: hashPassword(password),
+        status: role === "VOLUNTEER" ? "PENDING" : "ACTIVE",
+        isActive: role !== "VOLUNTEER",
       },
     });
 
-    // Create activity log
-    await db.activityLog.create({
-      data: {
-        userId: user.id,
-        action: "REGISTER",
-        entityType: "USER",
-        entityId: user.id,
-      },
+    await setSession({
+      userId: user.id,
+      role: user.role,
+      name: user.name,
+      email: user.email,
     });
 
-    // Return user without password
-    const { password: _, ...userWithoutPassword } = user;
+    await logActivity(name, "REGISTER", "USER", role, user.id);
 
-    return NextResponse.json({
-      success: true,
-      data: userWithoutPassword,
-      message: "Registration successful",
+    const { password: _pw, ...userSafe } = user;
+    return json({
+      user: userSafe,
+      tempCreds: { email, password, fullName: name },
     });
-  } catch (error) {
-    console.error("Error during registration:", error);
-    return NextResponse.json(
-      { success: false, error: "Registration failed" },
-      { status: 500 }
-    );
+  } catch (e) {
+    return handleError(e);
   }
 }

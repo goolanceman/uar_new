@@ -1,109 +1,133 @@
-import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import {
+  requireAuth,
+  requireRole,
+  json,
+  handleError,
+  ApiError,
+  logActivity,
+} from "@/lib/session";
 
-// GET all distributions
-export async function GET(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+const TYPES = [
+  "FOOD",
+  "SANITARY_PADS",
+  "MEDICAL",
+  "ANIMAL_FEED",
+  "CLOTHING",
+  "EDUCATION_MATERIAL",
+  "CASH",
+  "OTHER",
+];
+
+// GET /api/distributions?type=&q=&limit=&mine=1 (auth)
+export async function GET(req: Request) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const type = searchParams.get("type");
-    const status = searchParams.get("status");
-    const limit = parseInt(searchParams.get("limit") || "50");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    const session = await requireAuth();
+    const sp = new URL(req.url).searchParams;
+    const type = sp.get("type") || undefined;
+    const q = sp.get("q")?.trim() || undefined;
+    const limit = Math.min(200, Math.max(1, Math.trunc(Number(sp.get("limit")) || 50)));
 
-    const where: Record<string, unknown> = {};
-    
-    if (type && type !== "all") {
-      where.type = type.toUpperCase();
+    const where: Prisma.DistributionWhereInput = {};
+    if (type) where.type = type;
+    if (q)
+      where.OR = [
+        { location: { contains: q } },
+        { notes: { contains: q } },
+      ];
+    if (sp.get("mine")) {
+      const volunteer = await db.volunteer.findUnique({
+        where: { userId: session.userId },
+      });
+      if (!volunteer) return json([]);
+      where.volunteerId = volunteer.id;
     }
 
-    const distributions = await db.distribution.findMany({
+    const rows = await db.distribution.findMany({
       where,
-      take: limit,
-      skip: offset,
       orderBy: { distributedAt: "desc" },
+      take: limit,
       include: {
-        beneficiary: {
-          select: { name: true, category: true },
-        },
-        volunteer: {
-          include: {
-            user: {
-              select: { name: true },
-            },
-          },
-        },
+        beneficiary: { select: { name: true } },
+        volunteer: { include: { user: { select: { name: true } } } },
       },
     });
 
-    const total = await db.distribution.count({ where });
-
-    return NextResponse.json({
-      success: true,
-      data: distributions,
-      pagination: {
-        total,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching distributions:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch distributions" },
-      { status: 500 }
+    // Distribution has campaignId but no Prisma relation — attach campaign info manually
+    const campaignIds = Array.from(
+      new Set(rows.map((r) => r.campaignId).filter((v): v is string => Boolean(v)))
     );
+    const campaigns = campaignIds.length
+      ? await db.campaign.findMany({
+          where: { id: { in: campaignIds } },
+          select: { id: true, title: true, accent: true },
+        })
+      : [];
+    const campaignMap = new Map(campaigns.map((c) => [c.id, c]));
+
+    return json(
+      rows.map((r) => ({
+        ...r,
+        campaign: r.campaignId ? campaignMap.get(r.campaignId) ?? null : null,
+      }))
+    );
+  } catch (e) {
+    return handleError(e);
   }
 }
 
-// POST create new distribution
-export async function POST(request: NextRequest) {
+// POST /api/distributions (VOLUNTEER | ADMIN)
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    
-    const {
-      type,
-      beneficiaryId,
-      volunteerId,
-      campaignId,
-      items,
-      quantity = 1,
-      value,
-      location,
-      latitude,
-      longitude,
-      photos,
-      notes,
-      distributedAt,
-    } = body;
+    const session = await requireRole("VOLUNTEER", "ADMIN");
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
-    const distribution = await db.distribution.create({
+    const type = String(body.type ?? "").trim().toUpperCase();
+    if (!TYPES.includes(type)) throw new ApiError("Invalid distribution type", 400);
+    const quantity = Math.trunc(Number(body.quantity ?? 1));
+    if (!Number.isFinite(quantity) || quantity < 1)
+      throw new ApiError("quantity must be at least 1", 400);
+    const location = String(body.location ?? "").trim();
+    if (!location) throw new ApiError("location is required", 400);
+
+    const distributedAtRaw = body.distributedAt
+      ? new Date(String(body.distributedAt))
+      : new Date();
+    const distributedAt = Number.isNaN(distributedAtRaw.getTime())
+      ? new Date()
+      : distributedAtRaw;
+
+    // attribute to the session's volunteer profile (ADMIN without profile → null)
+    const volunteer = await db.volunteer.findUnique({
+      where: { userId: session.userId },
+    });
+
+    const row = await db.distribution.create({
       data: {
-        type: type.toUpperCase(),
-        beneficiaryId,
-        volunteerId,
-        campaignId,
-        items: items ? JSON.stringify(items) : null,
+        type,
+        beneficiaryId: body.beneficiaryId ? String(body.beneficiaryId) : null,
+        campaignId: body.campaignId ? String(body.campaignId) : null,
+        volunteerId: volunteer?.id ?? null,
+        items: body.items ? JSON.stringify(body.items) : null,
         quantity,
-        value: value ? parseFloat(value) : null,
         location,
-        latitude,
-        longitude,
-        photos: photos ? JSON.stringify(photos) : null,
-        notes,
-        distributedAt: distributedAt ? new Date(distributedAt) : new Date(),
+        notes: body.notes ? String(body.notes) : null,
+        distributedAt,
       },
     });
 
-    return NextResponse.json({
-      success: true,
-      data: distribution,
-      message: "Distribution recorded successfully",
-    });
-  } catch (error) {
-    console.error("Error creating distribution:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create distribution" },
-      { status: 500 }
+    await logActivity(
+      session.name,
+      "DISTRIBUTION",
+      "Distribution",
+      `${type} ×${quantity} @ ${location}`,
+      session.userId
     );
+    return json(row, 201);
+  } catch (e) {
+    return handleError(e);
   }
 }

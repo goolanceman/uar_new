@@ -12,7 +12,7 @@ export interface Session {
   email: string;
 }
 
-// ─── Passwords (scrypt with salt; legacy plain-text supported) ───────────────
+// ─── Passwords (scrypt; verifies legacy plain-text values too) ──────────────
 
 export function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -22,8 +22,8 @@ export function hashPassword(pw: string): string {
 
 export function verifyPassword(pw: string, stored: string): boolean {
   try {
+    if (!stored) return false;
     if (stored.includes(":")) {
-      // new scrypt format
       const [salt, hash] = stored.split(":");
       const test = crypto.scryptSync(pw, salt, 32).toString("hex");
       return crypto.timingSafeEqual(
@@ -31,8 +31,8 @@ export function verifyPassword(pw: string, stored: string): boolean {
         Buffer.from(test, "hex")
       );
     }
-    // legacy plain-text (seeded accounts) — auto-upgraded on next profile save
-    return stored === pw;
+    // legacy plain-text (pre-hash seed) accounts
+    return crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(stored));
   } catch {
     return false;
   }
@@ -113,6 +113,32 @@ export async function requireRole(...roles: string[]): Promise<Session> {
   return s;
 }
 
+export function publicUser(u: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  phone?: string | null;
+  city?: string | null;
+  avatar?: string | null;
+  pan?: string | null;
+  about?: string | null;
+}) {
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    status: u.isActive ? u.status : "SUSPENDED",
+    phone: u.phone,
+    city: u.city,
+    avatar: u.avatar,
+    pan: u.pan,
+    about: u.about,
+  };
+}
+
 export async function logActivity(
   actorName: string | null,
   action: string,
@@ -125,11 +151,10 @@ export async function logActivity(
     await db.activityLog.create({
       data: {
         userId: userId ?? null,
-        actorName: actorName ?? "System",
+        actorName,
         action,
         entityType: entity ?? "SYSTEM",
-        entityId: null,
-        details: detail ?? null,
+        details: detail,
       },
     });
   } catch {

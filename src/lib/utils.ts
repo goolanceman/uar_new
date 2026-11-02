@@ -1,8 +1,8 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return twMerge(clsx(inputs));
 }
 
 export function formatINR(n: number | undefined | null): string {
@@ -60,4 +60,9 @@ export function titleCase(s: string | undefined | null): string {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+export function pct(part: number, total: number): number {
+  if (!total) return 0;
+  return Math.min(100, Math.round((part / total) * 100));
 }

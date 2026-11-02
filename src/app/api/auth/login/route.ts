@@ -1,61 +1,56 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
+import {
+  setSession,
+  verifyPassword,
+  hashPassword,
+  ApiError,
+  json,
+  handleError,
+  logActivity,
+} from "@/lib/session";
 
-export async function POST(request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const { email, password } = body;
+    const body = await req.json().catch(() => ({}));
+    const email = String(body?.email ?? "").trim().toLowerCase();
+    const password = String(body?.password ?? "");
 
-    // Find user by email
-    const user = await db.user.findUnique({
-      where: { email },
+    if (!email || !password)
+      throw new ApiError("Email and password are required", 400);
+
+    const user = await db.user.findFirst({
+      where: { email: { equals: email } },
     });
 
-    if (!user) {
-      return NextResponse.json(
-        { success: false, error: "Invalid credentials" },
-        { status: 401 }
-      );
-    }
+    if (!user || !verifyPassword(password, user.password))
+      throw new ApiError("Invalid email or password", 401);
 
-    // In production, compare hashed passwords!
-    if (user.password !== password) {
-      return NextResponse.json(
-        { success: false, error: "Invalid credentials" },
-        { status: 401 }
-      );
-    }
+    if (user.status === "SUSPENDED")
+      throw new ApiError("Account suspended", 403);
 
-    if (!user.isActive) {
-      return NextResponse.json(
-        { success: false, error: "Account is deactivated" },
-        { status: 403 }
-      );
-    }
-
-    // Create activity log
-    await db.activityLog.create({
-      data: {
-        userId: user.id,
-        action: "LOGIN",
-        entityType: "USER",
-        entityId: user.id,
-      },
+    await setSession({
+      userId: user.id,
+      role: user.role,
+      name: user.name,
+      email: user.email,
     });
 
-    // Return user without password
-    const { password: _, ...userWithoutPassword } = user;
+    // Upgrade legacy plain-text password to scrypt hash
+    if (!user.password.includes(":")) {
+      await db.user.update({
+        where: { id: user.id },
+        data: { password: hashPassword(password) },
+      });
+    }
 
-    return NextResponse.json({
-      success: true,
-      data: userWithoutPassword,
-      message: "Login successful",
-    });
-  } catch (error) {
-    console.error("Error during login:", error);
-    return NextResponse.json(
-      { success: false, error: "Login failed" },
-      { status: 500 }
-    );
+    await logActivity(user.name, "LOGIN", "USER", undefined, user.id);
+
+    const { password: _pw, ...userSafe } = user;
+    return json({ user: userSafe });
+  } catch (e) {
+    return handleError(e);
   }
 }

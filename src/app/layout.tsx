@@ -20,9 +20,10 @@ export const metadata: Metadata = {
     template: "%s | United Angel Reach",
   },
   description:
-    "United Angel Reach is a Bengaluru-based charitable trust serving all of India — anti-drug & cyber-safety awareness, women & child safety, adopt-a-medicine, animal welfare, ration kits and AI green-corridor ambulances.",
+    "United Angel Reach is a Bengaluru-based charitable trust serving all of India — anti-drug & cyber-safety awareness, women & child safety, adopt-a-medicine, animal welfare, ration kits, sanitary pads and AI green-corridor ambulances.",
   keywords: [
     "charity Bengaluru",
+    "United Angel Reach",
     "anti drug campaign India",
     "cyber crime helpline 1930",
     "women safety 181",
@@ -30,7 +31,9 @@ export const metadata: Metadata = {
     "adopt a medicine",
     "animal adoption",
     "green corridor ambulance",
+    "80G donation",
   ],
+  icons: { icon: "/logo.svg" },
 };
 
 export const viewport: Viewport = {
@@ -41,9 +44,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body
