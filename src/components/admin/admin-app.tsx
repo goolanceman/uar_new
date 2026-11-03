@@ -103,7 +103,7 @@ function AdminNav({
     <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="Admin sections">
       {NAV.map((group: { group: string; items: NavItem[] }) => (
         <div key={group.group}>
-          <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground/80">
+          <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-sidebar-foreground/45">
             {group.group}
           </p>
           <div className="space-y-0.5">
@@ -121,7 +121,7 @@ function AdminNav({
                     "flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                     active
                       ? "bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/40"
-                      : "text-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   )}
                 >
                   <Icon className="size-4 shrink-0" />
@@ -191,8 +191,8 @@ export default function AdminApp() {
             <ShieldCheck className="size-5" />
           </span>
           <span>
-            <span className="block text-sm font-bold leading-tight">United Angel Reach</span>
-            <span className="block text-[11px] text-muted-foreground">Admin Console · Bengaluru</span>
+            <span className="block text-sm font-bold leading-tight text-sidebar-foreground">United Angel Reach</span>
+            <span className="block text-[11px] text-sidebar-foreground/55">Admin Console · Bengaluru</span>
           </span>
         </button>
         <AdminNav view={view} />
