@@ -5,6 +5,7 @@ import {
   Baby,
   HandHeart,
   HeartHandshake,
+  Info,
   LifeBuoy,
   Package,
   PackageOpen,
@@ -15,7 +16,6 @@ import {
   Shield,
   ShieldAlert,
   Siren,
-  Trash2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -23,24 +23,22 @@ import { useMasters, labelOf } from "@/hooks/use-masters";
 import type { SessionUser } from "@/hooks/use-auth";
 import { get, post } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
-import { formatDate, titleCase } from "@/lib/format";
+import { formatDate, formatDateTime, titleCase } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { phoneRule, minLen, required, fieldError } from "@/lib/validators";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { StatusBadge } from "@/components/shared/status-badge";
+import {
+  FieldGrid,
+  TextField,
+  TextareaField,
+  SelectField,
+} from "@/components/shared/form-fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 
 /* Official helplines — numbers per CONVENTIONS.md */
 const HELPLINES: { num: string; label: string; desc: string }[] = [
@@ -50,20 +48,23 @@ const HELPLINES: { num: string; label: string; desc: string }[] = [
   { num: "181", label: "Women safety", desc: "Sakhi / Abhayam support" },
 ];
 
-const URGENCIES = [
+const URGENCIES: { value: string; label: string }[] = [
   { value: "LOW", label: "Can wait a few days" },
   { value: "MEDIUM", label: "Within this week" },
   { value: "HIGH", label: "Urgent — this affects us now" },
   { value: "CRITICAL", label: "Critical — need help today" },
-] as const;
+];
 
-interface SavedRequest {
+/** Row returned by GET /api/beneficiary-requests?mine=1 */
+interface RequestRow {
   id: string;
+  name: string;
+  phone?: string | null;
   category: string;
-  categoryLabel: string;
   urgency: string;
-  message: string;
-  phone?: string;
+  details: string;
+  status: string; // PENDING | IN_REVIEW | APPROVED | FULFILLED | REJECTED
+  reviewNote?: string | null;
   createdAt: string;
 }
 
@@ -153,47 +154,55 @@ const PROGRAMMES: {
   },
 ];
 
-function storageKey(userId: string) {
-  return `uar-beneficiary-requests-${userId}`;
+interface RequestForm {
+  name: string;
+  phone: string;
+  category: string;
+  urgency: string;
+  details: string;
 }
 
-function loadRequests(userId: string): SavedRequest[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(storageKey(userId));
-    const parsed = raw ? (JSON.parse(raw) as SavedRequest[]) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRequests(userId: string, list: SavedRequest[]) {
-  try {
-    window.localStorage.setItem(storageKey(userId), JSON.stringify(list.slice(0, 10)));
-  } catch {
-    // storage full/blocked — non-fatal
-  }
-}
+type RequestErrors = Partial<Record<keyof RequestForm, string | null>>;
 
 export default function BeneficiaryHub({ user }: { user: SessionUser }) {
   const { options: categoryOptions } = useMasters("BENEFICIARY_CATEGORY");
 
-  const [category, setCategory] = useState("");
-  const [urgency, setUrgency] = useState("MEDIUM");
-  const [message, setMessage] = useState("");
-  const [phone, setPhone] = useState(user.phone ?? "");
+  const [form, setForm] = useState<RequestForm>({
+    name: user.name ?? "",
+    phone: user.phone ?? "",
+    category: "",
+    urgency: "MEDIUM",
+    details: "",
+  });
+  const [errors, setErrors] = useState<RequestErrors>({});
   const [submitting, setSubmitting] = useState(false);
 
-  const [requests, setRequests] = useState<SavedRequest[]>([]);
+  const [requests, setRequests] = useState<RequestRow[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState(true);
   const [caseRow, setCaseRow] = useState<BeneficiaryRow | null>(null);
   const [received, setReceived] = useState<Distribution[]>([]);
   const [loadingCase, setLoadingCase] = useState(true);
 
-  useEffect(() => {
-    setRequests(loadRequests(user.id));
-  }, [user.id]);
+  const setField = (key: keyof RequestForm) => (v: string) => {
+    setForm((f) => ({ ...f, [key]: v }));
+    setErrors((e) => (e[key] ? { ...e, [key]: null } : e));
+  };
 
+  // ── My requests — real backend, no localStorage ──────────────────────────
+  const loadRequests = useCallback(async () => {
+    setLoadingRequests(true);
+    try {
+      const rows = await get<unknown>("/api/beneficiary-requests?mine=1");
+      setRequests(Array.isArray(rows) ? (rows as RequestRow[]) : []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load your requests");
+      setRequests([]);
+    } finally {
+      setLoadingRequests(false);
+    }
+  }, []);
+
+  // ── Case record + support received ────────────────────────────────────────
   const loadCase = useCallback(async () => {
     setLoadingCase(true);
     try {
@@ -204,12 +213,18 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
         list.find(
           (r) => r.email && user.email && r.email.toLowerCase() === user.email.toLowerCase()
         ) ??
+        list[0] ??
         null;
       setCaseRow(mine);
       if (mine) {
-        const dists = await get<unknown>("/api/distributions?limit=200").catch(() => []);
+        const dists = await get<unknown>("/api/distributions?limit=200").catch(() => {
+          toast.error("Could not load your support history right now");
+          return [];
+        });
         const list2 = Array.isArray(dists) ? (dists as Distribution[]) : [];
         setReceived(list2.filter((d) => d.beneficiaryId === mine.id).slice(0, 10));
+      } else {
+        setReceived([]);
       }
     } finally {
       setLoadingCase(false);
@@ -217,46 +232,39 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
   }, [user.id, user.email]);
 
   useEffect(() => {
-    loadCase();
+    void loadRequests();
+  }, [loadRequests]);
+
+  useEffect(() => {
+    void loadCase();
   }, [loadCase]);
 
   const submit = async () => {
-    if (!category) {
-      toast.error("Pick the kind of help you need");
+    const errs: RequestErrors = {
+      name: fieldError(form.name, [required("Name")]),
+      phone: fieldError(form.phone, [phoneRule(true)]),
+      category: fieldError(form.category, [required("Help type")]),
+      details: fieldError(form.details, [minLen(10, "Details")]),
+    };
+    setErrors(errs);
+    if (Object.values(errs).some(Boolean)) {
+      toast.error("Please complete the highlighted fields");
       return;
     }
-    if (message.trim().length < 10) {
-      toast.error("Please describe your need in at least 10 characters");
-      return;
-    }
-    const categoryLabel = labelOf(categoryOptions, category);
     setSubmitting(true);
     try {
-      const created = await post<{ id?: string }>("/api/contact-queries", {
-        name: user.name,
-        email: user.email,
-        phone: phone.trim() || user.phone || undefined,
-        subject: `Help request — ${categoryLabel} (${titleCase(urgency)})`,
-        message: `[${categoryLabel} · urgency ${titleCase(urgency)}] ${message.trim()}`,
+      await post("/api/beneficiary-requests", {
+        name: form.name.trim(),
+        phone: form.phone.trim() || undefined,
+        category: form.category,
+        urgency: form.urgency,
+        details: form.details.trim(),
       });
-      const entry: SavedRequest = {
-        id: created?.id ?? `${Date.now()}`,
-        category,
-        categoryLabel,
-        urgency,
-        message: message.trim(),
-        phone: phone.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      };
-      const next = [entry, ...requests];
-      setRequests(next);
-      saveRequests(user.id, next);
       toast.success(
         "Request received — our case team will call you within 48 hours. Keep your phone nearby."
       );
-      setCategory("");
-      setUrgency("MEDIUM");
-      setMessage("");
+      setForm((f) => ({ ...f, category: "", urgency: "MEDIUM", details: "" }));
+      await loadRequests();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not send your request");
     } finally {
@@ -264,11 +272,8 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
     }
   };
 
-  const removeRequest = (id: string) => {
-    const next = requests.filter((r) => r.id !== id);
-    setRequests(next);
-    saveRequests(user.id, next);
-  };
+  const categoryLabel = (value: string) =>
+    categoryOptions.find((o) => o.value === value)?.label ?? titleCase(value);
 
   return (
     <div className="space-y-6">
@@ -286,7 +291,7 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
         icon={<HandHeart className="size-5" />}
       >
         {loadingCase ? (
-          <div className="space-y-2">
+          <div className="space-y-2" aria-label="Loading case record">
             <Skeleton className="h-5 w-52" />
             <Skeleton className="h-5 w-72" />
           </div>
@@ -297,7 +302,7 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
               <span className="font-semibold">{caseRow.name}</span>
               <span className="text-muted-foreground">
                 {" "}
-                · {labelOf(categoryOptions, caseRow.category) ?? titleCase(caseRow.category)}
+                · {categoryLabel(caseRow.category)}
                 {caseRow.city ? ` · ${caseRow.city}` : ""}
               </span>
             </p>
@@ -317,11 +322,11 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
             </p>
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            Your case record isn&apos;t linked to this login yet — that&apos;s okay.
-            Send a request below and our team will register and call you within 48
-            hours.
-          </p>
+          <EmptyState
+            icon={<HandHeart className="size-5" />}
+            title="Case record not linked yet"
+            hint="That's okay — send a request below and our team will register you and call within 48 hours."
+          />
         )}
       </SectionCard>
 
@@ -332,7 +337,7 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
         icon={<PackageOpen className="size-5" />}
       >
         {loadingCase ? (
-          <div className="space-y-3">
+          <div className="space-y-3" aria-label="Loading support history">
             <Skeleton className="h-12 w-full rounded-lg" />
           </div>
         ) : !caseRow || received.length === 0 ? (
@@ -346,7 +351,7 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
             }
           />
         ) : (
-          <ul className="divide-y">
+          <ul className="max-h-96 divide-y overflow-y-auto scrollbar-thin">
             {received.map((d) => (
               <li key={d.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -372,114 +377,105 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
         description="Tell us what you need — a case worker calls you back within 48 hours. There is no fee and no paperwork needed to ask."
         icon={<HandHeart className="size-5" />}
       >
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="bh-category">What kind of help?</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger id="bh-category" className="w-full">
-                  <SelectValue placeholder="Select the kind of support" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categoryOptions.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="bh-urgency">How urgent is it?</Label>
-              <Select value={urgency} onValueChange={setUrgency}>
-                <SelectTrigger id="bh-urgency" className="w-full">
-                  <SelectValue placeholder="Select urgency" />
-                </SelectTrigger>
-                <SelectContent>
-                  {URGENCIES.map((u) => (
-                    <SelectItem key={u.value} value={u.value}>
-                      {u.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="bh-phone">Contact phone</Label>
-              <Input
-                id="bh-phone"
-                type="tel"
-                inputMode="tel"
-                placeholder="+91 98765 43210"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                autoComplete="tel"
-              />
-            </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="bh-message">Describe your need</Label>
-              <Textarea
-                id="bh-message"
-                rows={4}
-                placeholder="e.g. Family of four in BTM Layout, lost daily-wage income this month, need ration support…"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                aria-describedby="bh-privacy"
-              />
-              <p id="bh-privacy" className="text-xs text-muted-foreground">
-                Only our case team reads this. We never share your details publicly.
-              </p>
-            </div>
-          </div>
-          <Button className="min-h-11 gap-1.5" onClick={submit} disabled={submitting}>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+          noValidate
+          className="space-y-4"
+        >
+          <FieldGrid>
+            <TextField
+              label="Your name"
+              required
+              value={form.name}
+              onChange={setField("name")}
+              error={errors.name}
+              placeholder="Full name"
+            />
+            <SelectField
+              label="What kind of help?"
+              required
+              value={form.category}
+              onChange={(v) => setField("category")(v)}
+              error={errors.category}
+              options={categoryOptions}
+              placeholder="Select the kind of support"
+            />
+            <TextField
+              label="Contact phone"
+              type="tel"
+              inputMode="tel"
+              value={form.phone}
+              onChange={setField("phone")}
+              error={errors.phone}
+              hint="Optional — helps our case team call you back"
+              placeholder="+91 98765 43210"
+            />
+            <SelectField
+              label="How urgent is it?"
+              value={form.urgency}
+              onChange={(v) => setField("urgency")(v)}
+              options={URGENCIES}
+              placeholder="Select urgency"
+            />
+          </FieldGrid>
+          <TextareaField
+            label="Describe your need"
+            required
+            rows={4}
+            value={form.details}
+            onChange={setField("details")}
+            error={errors.details}
+            hint="Only our case team reads this. We never share your details publicly."
+            placeholder="e.g. Family of four in BTM Layout, lost daily-wage income this month, need ration support…"
+          />
+          <Button type="submit" className="min-h-11 gap-1.5" disabled={submitting}>
             <Send className="size-4" aria-hidden="true" />
             {submitting ? "Sending…" : "Send request"}
           </Button>
-        </div>
+        </form>
       </SectionCard>
 
       {/* My requests */}
       <SectionCard
         title="My requests"
-        description="Sent from this device — our team updates you by phone"
+        description="Sent from your account — our case team updates you by phone"
         icon={<Send className="size-5" />}
       >
-        {requests.length === 0 ? (
+        {loadingRequests ? (
+          <div className="space-y-3" aria-label="Loading your requests">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full rounded-lg" />
+            ))}
+          </div>
+        ) : requests.length === 0 ? (
           <EmptyState
             icon={<Send className="size-5" />}
             title="No requests yet"
             hint="Whenever you send one above, it's listed here so you can track what you asked for."
           />
         ) : (
-          <ul className="divide-y">
+          <ul className="max-h-96 divide-y overflow-y-auto scrollbar-thin">
             {requests.map((r) => (
-              <li key={r.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium">{r.categoryLabel}</p>
-                    <Badge
-                      variant="outline"
-                      className="rounded-full border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400"
-                    >
-                      With our team
-                    </Badge>
-                    <span className="text-[11px] text-muted-foreground">
-                      {formatDate(r.createdAt)} · urgency {titleCase(r.urgency)}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                    {r.message}
-                  </p>
+              <li key={r.id} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-medium">{categoryLabel(r.category)}</p>
+                  <StatusBadge status={r.status} />
+                  <span className="text-[11px] text-muted-foreground">
+                    Submitted {formatDateTime(r.createdAt)} · urgency {titleCase(r.urgency)}
+                  </span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-11 shrink-0 text-muted-foreground hover:text-red-600 dark:hover:text-red-400"
-                  onClick={() => removeRequest(r.id)}
-                  aria-label={`Remove request from ${formatDate(r.createdAt)} from this list`}
-                >
-                  <Trash2 className="size-4" aria-hidden="true" />
-                </Button>
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{r.details}</p>
+                {r.reviewNote ? (
+                  <p className="mt-1.5 flex items-start gap-1.5 rounded-md bg-muted/60 p-2 text-xs leading-relaxed">
+                    <Info className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    <span>
+                      <span className="font-semibold">Case team note:</span> {r.reviewNote}
+                    </span>
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

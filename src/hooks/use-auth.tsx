@@ -47,14 +47,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    try {
-      const data = await get<{ user: SessionUser | null }>("/api/auth/me");
-      setUser(data.user);
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
+    // Retry transient network failures (dev server restarts, cold starts) so
+    // a live session is never dropped because of a momentary blip.
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const data = await get<{ user: SessionUser | null }>("/api/auth/me");
+        setUser(data.user);
+        setLoading(false);
+        return;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : "";
+        // 401 means genuinely unauthenticated — stop retrying immediately.
+        if (/sign in|401|Invalid/i.test(msg)) {
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+      }
     }
+    console.warn("[auth] session check failed after retries", lastErr);
+    setLoading(false);
   }, []);
 
   useEffect(() => {

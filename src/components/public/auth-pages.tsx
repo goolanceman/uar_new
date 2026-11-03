@@ -307,7 +307,6 @@ export function LoginPage() {
           required
           type="email"
           inputMode="email"
-          autoComplete="email"
           value={email}
           onChange={(v) => {
             setEmail(v);
@@ -411,17 +410,23 @@ const ROLE_OPTIONS = [
   {
     value: "DONOR",
     label: "Donor",
+    short: "Give once or monthly",
     hint: "Give once or monthly — receipts and impact notes included.",
+    icon: Heart,
   },
   {
     value: "VOLUNTEER",
     label: "Volunteer",
+    short: "Field shifts & drives",
     hint: "You'll get temporary credentials now; an admin approves your portal access.",
+    icon: HandHeart,
   },
   {
     value: "BENEFICIARY",
     label: "Beneficiary",
+    short: "Request support",
     hint: "Request support — a case worker verifies and follows up.",
+    icon: HeartHandshake,
   },
 ];
 
@@ -434,33 +439,36 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [role, setRole] = useState("DONOR");
+  const [errors, setErrors] = useState<{
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    password?: string | null;
+    confirm?: string | null;
+  }>({});
   const [busy, setBusy] = useState(false);
   const [creds, setCreds] = useState<TempCreds | null>(null);
 
   const score = useMemo(() => pwScore(password), [password]);
 
+  const clearError = (k: "name" | "email" | "phone" | "password" | "confirm") =>
+    setErrors((e) => (e[k] ? { ...e, [k]: null } : e));
+
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (name.trim().length < 3) {
-      toast.error("Please enter your full name");
-      return;
-    }
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
-      toast.error("Please enter a valid email");
-      return;
-    }
-    if (phone.replace(/\D/g, "").length !== 10) {
-      toast.error("Please enter a valid 10-digit phone");
-      return;
-    }
-    if (score < 2 || password.length < 8) {
-      toast.error("Choose a password of at least 8 characters with mixed case and a number");
-      return;
-    }
-    if (password !== confirm) {
-      toast.error("Passwords don't match");
-      return;
-    }
+    const errs: NonNullable<typeof errors> = {
+      name: fieldError(name, [required("Full name"), minLen(3, "Full name")]),
+      email: fieldError(email, [emailRule()]),
+      phone: fieldError(phone, [phoneRule()]),
+      password:
+        fieldError(password, [minLen(6, "Password")]) ??
+        (score < 2 || password.length < 8
+          ? "Use 8+ characters with mixed case and a number for a stronger password"
+          : null),
+      confirm: password !== confirm ? "Passwords don't match" : null,
+    };
+    setErrors(errs);
+    if (Object.values(errs).some(Boolean)) return;
     setBusy(true);
     try {
       const tempCreds = await register({
@@ -492,50 +500,87 @@ export function RegisterPage() {
       subtitle="Join as a donor, volunteer or beneficiary."
       icon={<UserPlus className="size-6" aria-hidden />}
     >
-      <form onSubmit={submit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="r-name">Full name</Label>
-          <Input id="r-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
-        </div>
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        <TextField
+          label="Full name"
+          required
+          value={name}
+          onChange={(v) => {
+            setName(v);
+            clearError("name");
+          }}
+          error={errors.name}
+          placeholder="Your name"
+        />
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="r-email">Email</Label>
-            <Input id="r-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="r-phone">Phone</Label>
-            <Input id="r-phone" inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile" />
-          </div>
+          <TextField
+            label="Email"
+            required
+            type="email"
+            inputMode="email"
+            value={email}
+            onChange={(v) => {
+              setEmail(v);
+              clearError("email");
+            }}
+            error={errors.email}
+            placeholder="you@example.com"
+          />
+          <TextField
+            label="Phone"
+            required
+            type="tel"
+            inputMode="tel"
+            value={phone}
+            onChange={(v) => {
+              setPhone(v);
+              clearError("phone");
+            }}
+            error={errors.phone}
+            hint="10-digit Indian mobile — case teams call this number"
+            placeholder="10-digit mobile"
+          />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="r-city">City</Label>
-          <Input id="r-city" value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Bengaluru" />
-        </div>
+        <TextField
+          label="City"
+          value={city}
+          onChange={setCity}
+          placeholder="e.g. Bengaluru"
+        />
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="r-password">Password</Label>
+          <Field label="Password" required htmlFor="r-password" error={errors.password}>
             <PasswordInput
               id="r-password"
               value={password}
-              onChange={setPassword}
+              onChange={(v) => {
+                setPassword(v);
+                clearError("password");
+              }}
               autoComplete="new-password"
               placeholder="min 8 characters"
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="r-confirm">Confirm password</Label>
+          </Field>
+          <Field
+            label="Confirm password"
+            required
+            htmlFor="r-confirm"
+            error={
+              errors.confirm ??
+              (confirm.length > 0 && confirm !== password
+                ? "Passwords don't match yet"
+                : null)
+            }
+          >
             <PasswordInput
               id="r-confirm"
               value={confirm}
-              onChange={setConfirm}
+              onChange={(v) => {
+                setConfirm(v);
+                clearError("confirm");
+              }}
               autoComplete="new-password"
             />
-            {confirm.length > 0 && confirm !== password && (
-              <p className="text-xs font-medium text-red-600 dark:text-red-400">
-                Passwords don&rsquo;t match yet
-              </p>
-            )}
-          </div>
+          </Field>
         </div>
 
         {/* Strength meter */}
@@ -560,24 +605,62 @@ export function RegisterPage() {
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <Label htmlFor="r-role">I am joining as</Label>
-          <Select value={role} onValueChange={setRole}>
-            <SelectTrigger id="r-role" className="h-10">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ROLE_OPTIONS.map((r) => (
-                <SelectItem key={r.value} value={r.value}>
-                  {r.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Role picker — cards */}
+        <div>
+          <p className="mb-1.5 text-xs font-medium">
+            I am joining as
+            <span className="ml-0.5 text-destructive" aria-hidden>
+              *
+            </span>
+          </p>
+          <div
+            role="radiogroup"
+            aria-label="I am joining as"
+            className="grid gap-2.5 sm:grid-cols-3"
+          >
+            {ROLE_OPTIONS.map((r) => {
+              const selected = role === r.value;
+              return (
+                <button
+                  key={r.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setRole(r.value)}
+                  className={cn(
+                    "relative flex min-h-[44px] flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    selected
+                      ? "border-emerald-500/50 bg-emerald-500/10"
+                      : "bg-card hover:bg-accent"
+                  )}
+                >
+                  {selected && (
+                    <span
+                      aria-hidden
+                      className="absolute right-2.5 top-2.5 flex size-5 items-center justify-center rounded-full bg-emerald-600 text-white"
+                    >
+                      <Check className="size-3" />
+                    </span>
+                  )}
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "flex size-9 items-center justify-center rounded-lg",
+                      selected ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    <r.icon className="size-4" />
+                  </span>
+                  <span className="text-sm font-semibold">{r.label}</span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">{r.short}</span>
+                </button>
+              );
+            })}
+          </div>
           {roleHint && (
             <p
               className={cn(
-                "flex items-start gap-1.5 rounded-md p-2 text-xs leading-relaxed",
+                "mt-2 flex items-start gap-1.5 rounded-md p-2 text-xs leading-relaxed",
                 role === "VOLUNTEER"
                   ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
                   : "bg-muted text-muted-foreground"
@@ -626,5 +709,4 @@ export function RoleBadge({ role }: { role: string }) {
   );
 }
 
-/* Keep tree-shakers honest about the check glyph used in brand bullets */
-void Check;
+/* Check glyph is used by the register role picker cards (selected state). */

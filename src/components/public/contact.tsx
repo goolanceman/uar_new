@@ -138,7 +138,6 @@ export function ContactPage() {
                     onChange={setField("name")}
                     error={errors.name}
                     placeholder="Your name"
-                    autoComplete="name"
                   />
                   <TextField
                     label="Email"
@@ -149,7 +148,6 @@ export function ContactPage() {
                     onChange={setField("email")}
                     error={errors.email}
                     placeholder="you@example.com"
-                    autoComplete="email"
                   />
                   <TextField
                     label="Phone"
@@ -160,7 +158,6 @@ export function ContactPage() {
                     error={errors.phone}
                     hint="Optional — a 10-digit Indian mobile"
                     placeholder="10-digit mobile (optional)"
-                    autoComplete="tel"
                   />
                   <TextField
                     label="Subject"
