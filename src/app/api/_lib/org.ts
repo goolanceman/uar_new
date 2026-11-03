@@ -128,13 +128,13 @@ export function printDocument(
 <style>
   @page { size: A4${landscape ? " landscape" : ""}; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #eef2f0; }
-  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: #1c2b26; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { background: #eef1f4; }
+  body { font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: #101a16; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .serif { font-family: Georgia, 'Times New Roman', serif; }
-  .sheet { background: #ffffff; margin: 24px auto; box-shadow: 0 8px 32px rgba(4, 60, 40, 0.18); }
+  .sheet { background: #ffffff; margin: 24px auto; box-shadow: 0 10px 40px rgba(15, 31, 26, 0.16); }
   .toolbar { position: fixed; top: 14px; right: 14px; z-index: 9; }
-  .toolbar button { font: 600 14px 'Segoe UI', Arial, sans-serif; padding: 10px 18px; border-radius: 999px; border: 1px solid #047857; background: #047857; color: #fff; cursor: pointer; box-shadow: 0 2px 8px rgba(4,120,87,.35); }
-  .toolbar button:hover { background: #065f46; }
+  .toolbar button { font: 600 13.5px 'Segoe UI', Arial, sans-serif; padding: 10px 18px; border-radius: 999px; border: 1px solid #0f1f1a; background: #0f1f1a; color: #fff; cursor: pointer; box-shadow: 0 2px 10px rgba(15,31,26,.28); transition: background .15s; }
+  .toolbar button:hover { background: #064e3b; border-color: #064e3b; }
   @media print {
     html, body { background: #ffffff; }
     .sheet { margin: 0; box-shadow: none; }
