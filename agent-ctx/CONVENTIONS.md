@@ -186,3 +186,27 @@ Import from `@/components/shared/`:
 6. PaginationBar + PageSizeSelect under the table. Loading = Skeletons matching the active view. Empty = EmptyState with CTA.
 7. Add/Edit = FormSheet (size lg for ≥10 fields, md otherwise, xl for multi-section like missions). Delete = ConfirmDialog.
 8. Detail = read-only Sheet with SectionCards + DataField grids + related-records tabs where applicable.
+
+## ROUND-5 COMPONENT CONTRACTS (NEW — all list/detail/form work MUST use these)
+
+### FormSheet — `src/components/shared/form-sheet.tsx`
+Slide-over for ALL add/edit. Sizes: `sm|md|lg|xl|full` — every size ≥60vw on desktop (60/68/76/88/100). `size="full"` = full-screen workbench for detail-heavy forms (distributions, campaign composer). Props: `open, onOpenChange, title, description, badge?, onSubmit, submitLabel, loading, dirty, footerExtra`. Mobile = full-screen always.
+
+### DetailSheet — `src/components/shared/detail-sheet.tsx`
+Full-screen slide-over for VIEWING a record (distributions view, campaign view, any detail-heavy read). Props: `open, onOpenChange, eyebrow, title, description, status?, actions?, footer?, loading`. Exports `DetailSection({title, description?, actions?, children})` and `DetailGrid({cols:1|2|3|4})` for key-value grids (pair with DataField).
+
+### DataTable — `src/components/shared/data-table.tsx`
+THE standard table for every list page. Props: `columns: DataTableColumn<T>[]` (`{key, header, className?, align?, mono?, hideBelow?: 'sm'|'md'|'lg', accessor?}`), `rows, rowKey, loading, skeletonRows=8, height: 'fill'|'auto'|'max-h-… class', fillOffset=260, onRowClick, children(row,col), empty?, page, pages, total, pageSize, onPage, onPageSize, itemLabel`.
+- `height="fill"` makes the card fill the viewport minus `fillOffset` px, header sticky, body scrollable.
+- Built-in pagination footer: range count, page-size select, numbered pages + first/last.
+- Loading shows skeleton rows automatically. Empty shows built-in empty state unless `empty` given.
+- Cell content: use `children={(row,col)=>…}` render prop.
+
+### Existing shared components (keep using)
+`form-fields.tsx` (TextField/SelectField/TextareaField/…), `page-header.tsx`, `section-card.tsx`, `stat-card.tsx`, `status-badge.tsx`, `confirm-dialog.tsx`, `empty-state.tsx`, `csv.tsx` (toCSV/downloadCSV), `view-switcher.tsx` (useViewPref/ViewSwitcher/DataViewMode), `theme-toggle.tsx`, `data-field.tsx`.
+
+### Sidebar tokens (light-mode fix — DO NOT revert)
+Sidebar uses `bg-sidebar` + `text-sidebar-foreground` tokens. In light mode sidebar is OFF-WHITE (`--sidebar: oklch(0.985 0.004 145)`), nav text `text-sidebar-foreground/75`. Never hardcode dark sidebar colors or `text-foreground` inside sidebar.
+
+### Print documents (redesigned round-5)
+80G receipts: `/api/receipts/:receiptNumber/html` — neutral ink palette + 80G watermark. Certificates: `/api/certificates/:code/html` — ivory paper, hairline frame, UAR watermark rings, gold seal. Shared shell: `src/app/api/_lib/org.ts printDocument`. Do NOT reintroduce all-green designs.
