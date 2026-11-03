@@ -3,43 +3,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowDownToLine,
-  ArrowUpFromLine,
   Boxes,
   MapPin,
   RefreshCw,
-  ScrollText,
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import type { VolunteerProfile } from "../portal-router";
-import { get, patch } from "@/lib/api-client";
-import { titleCase } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { get } from "@/lib/api-client";
+import { cn, formatNumber, titleCase } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
+import { StatCard } from "@/components/shared/stat-card";
 import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ViewSwitcher, useViewPref, type DataViewMode } from "@/components/shared/view-switcher";
 import {
   Table,
   TableBody,
@@ -48,7 +30,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 
 interface InventoryItem {
   id: string;
@@ -67,10 +48,14 @@ function asArray<T>(data: unknown): T[] {
   return [];
 }
 
-const formatNumber = (n: number) => n.toLocaleString("en-IN");
+/** Stock-level bar — quantity relative to 3× the min-stock threshold (healthy buffer). */
+function levelPct(item: InventoryItem): number {
+  const healthy = Math.max(1, item.minStock * 3);
+  return Math.min(100, Math.round((item.quantity / healthy) * 100));
+}
 
 export default function VolunteerInventory({
-  volunteer,
+  volunteer: _volunteer,
 }: {
   user: SessionUser;
   volunteer?: VolunteerProfile | null;
@@ -78,14 +63,7 @@ export default function VolunteerInventory({
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-
-  // Stock movement dialog
-  const [moveOpen, setMoveOpen] = useState(false);
-  const [moveItemId, setMoveItemId] = useState("");
-  const [direction, setDirection] = useState<"IN" | "OUT">("IN");
-  const [moveQty, setMoveQty] = useState("");
-  const [moveNotes, setMoveNotes] = useState("");
-  const [moving, setMoving] = useState(false);
+  const [view, setView] = useViewPref("volunteer-inventory", "table");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,46 +94,33 @@ export default function VolunteerInventory({
     );
   }, [items, query]);
 
-  const lowItems = useMemo(
-    () => items.filter((i) => i.quantity <= i.minStock),
-    [items]
-  );
+  const lowItems = useMemo(() => items.filter((i) => i.quantity <= i.minStock), [items]);
+  const totalUnits = items.reduce((s, i) => s + i.quantity, 0);
 
-  const openMove = () => {
-    setMoveItemId(lowItems[0]?.id ?? filtered[0]?.id ?? items[0]?.id ?? "");
-    setDirection("IN");
-    setMoveQty("");
-    setMoveNotes("");
-    setMoveOpen(true);
-  };
-
-  const submitMove = async () => {
-    const qty = Number(moveQty);
-    if (!moveItemId) {
-      toast.error("Select an item");
-      return;
-    }
-    if (!Number.isFinite(qty) || qty < 1) {
-      toast.error("Enter a quantity of at least 1");
-      return;
-    }
-    setMoving(true);
-    try {
-      await patch(`/api/inventory/${moveItemId}`, {
-        addQuantity: direction === "IN" ? Math.round(qty) : -Math.round(qty),
-      });
-      toast.success(
-        direction === "IN"
-          ? `Stock in recorded (+${Math.round(qty)}) — the movement is audit-logged under your name.`
-          : `Stock out recorded (−${Math.round(qty)}) — the movement is audit-logged under your name.`
-      );
-      setMoveOpen(false);
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not record stock movement");
-    } finally {
-      setMoving(false);
-    }
+  const LevelBar = ({ item }: { item: InventoryItem }) => {
+    const pct = levelPct(item);
+    return (
+      <div
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${item.name} stock level`}
+        className="h-2 w-full overflow-hidden rounded-full bg-muted"
+      >
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            item.quantity <= item.minStock
+              ? "bg-amber-500"
+              : pct < 50
+                ? "bg-teal-500"
+                : "bg-emerald-500"
+          )}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    );
   };
 
   const LowBadge = () => (
@@ -179,7 +144,8 @@ export default function VolunteerInventory({
         }
         icon={<Boxes className="size-5" />}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <ViewSwitcher value={view} onChange={(m: DataViewMode) => setView(m)} options={["table", "list"]} />
             <Button
               variant="outline"
               size="sm"
@@ -190,18 +156,42 @@ export default function VolunteerInventory({
               <RefreshCw className="size-4" aria-hidden="true" />
               Refresh
             </Button>
-            <Button
-              size="sm"
-              className="min-h-11 gap-1.5 sm:min-h-9"
-              onClick={openMove}
-              disabled={items.length === 0}
-            >
-              <ArrowDownToLine className="size-4" aria-hidden="true" />
-              Log stock in/out
-            </Button>
           </div>
         }
       />
+
+      {/* Read-only note + stats */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Stock items"
+          value={loading ? "" : String(items.length)}
+          hint="Across all UAR stock rooms"
+          icon={<Boxes className="size-5" />}
+          accent="emerald"
+          loading={loading}
+        />
+        <StatCard
+          label="Low stock"
+          value={loading ? "" : String(lowItems.length)}
+          hint="At or below minimum — flag to your coordinator"
+          icon={<AlertTriangle className="size-5" />}
+          accent="amber"
+          loading={loading}
+        />
+        <StatCard
+          label="Total units"
+          value={loading ? "" : formatNumber(totalUnits)}
+          hint="All quantities combined"
+          icon={<Boxes className="size-5" />}
+          accent="teal"
+          loading={loading}
+        />
+      </div>
+
+      <p className="rounded-xl border border-teal-500/20 bg-teal-500/5 p-3 text-xs text-muted-foreground">
+        Inventory is read-only in the volunteer portal — stock in/out is logged by the
+        admin console. If a drive needs stock, ask your coordinator before handover.
+      </p>
 
       {/* Search */}
       {!loading && items.length > 0 && (
@@ -246,18 +236,18 @@ export default function VolunteerInventory({
             </Button>
           </EmptyState>
         </SectionCard>
-      ) : (
-        <>
-          {/* Desktop table */}
-          <div className="hidden overflow-x-auto rounded-xl border md:block">
+      ) : view === "table" ? (
+        <SectionCard title="Stock list" description="Progress shows quantity against a healthy 3× buffer" bodyClassName="px-0">
+          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Item</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead className="w-44">Stock level</TableHead>
                   <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Min stock</TableHead>
-                  <TableHead>Location</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">Min</TableHead>
+                  <TableHead className="hidden md:table-cell">Location</TableHead>
                   <TableHead className="w-16" aria-label="Status" />
                 </TableRow>
               </TableHeader>
@@ -265,23 +255,21 @@ export default function VolunteerInventory({
                 {filtered.map((i) => {
                   const low = i.quantity <= i.minStock;
                   return (
-                    <TableRow key={i.id} className={cn(low && "bg-amber-500/10")}>
+                    <TableRow key={i.id} className={cn(low && "bg-amber-500/5")}>
                       <TableCell className="font-medium">{i.name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {titleCase(i.category)}
+                      <TableCell className="text-muted-foreground">{titleCase(i.category)}</TableCell>
+                      <TableCell>
+                        <LevelBar item={i} />
                       </TableCell>
                       <TableCell
-                        className={cn(
-                          "text-right font-semibold",
-                          low && "text-amber-700 dark:text-amber-400"
-                        )}
+                        className={cn("text-right font-semibold", low && "text-amber-700 dark:text-amber-400")}
                       >
                         {formatNumber(i.quantity)} {i.unit}
                       </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
+                      <TableCell className="hidden text-right text-muted-foreground sm:table-cell">
                         {formatNumber(i.minStock)}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="hidden text-muted-foreground md:table-cell">
                         <span className="inline-flex items-center gap-1">
                           <MapPin className="size-3" aria-hidden="true" />
                           {i.location ?? "—"}
@@ -294,152 +282,48 @@ export default function VolunteerInventory({
               </TableBody>
             </Table>
           </div>
-
-          {/* Mobile cards */}
-          <div className="grid gap-3 md:hidden">
-            {filtered.map((i) => {
-              const low = i.quantity <= i.minStock;
-              return (
-                <div
-                  key={i.id}
-                  className={cn(
-                    "rounded-xl border bg-card p-4",
-                    low && "border-amber-500/40 bg-amber-500/10"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold">{i.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {titleCase(i.category)} · min {formatNumber(i.minStock)}
-                      </p>
-                      <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                        <MapPin className="size-3" aria-hidden="true" />
-                        {i.location ?? "—"}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p
-                        className={cn(
-                          "text-base font-bold",
-                          low && "text-amber-700 dark:text-amber-400"
-                        )}
-                      >
-                        {formatNumber(i.quantity)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{i.unit}</p>
-                    </div>
+        </SectionCard>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((i) => {
+            const low = i.quantity <= i.minStock;
+            return (
+              <div
+                key={i.id}
+                className={cn(
+                  "rounded-xl border bg-card p-4",
+                  low && "border-amber-500/40 bg-amber-500/5"
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{i.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {titleCase(i.category)} · min {formatNumber(i.minStock)}
+                    </p>
                   </div>
-                  {low && (
-                    <div className="mt-2">
-                      <LowBadge />
-                    </div>
-                  )}
+                  <div className="text-right">
+                    <p className={cn("text-base font-bold", low && "text-amber-700 dark:text-amber-400")}>
+                      {formatNumber(i.quantity)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{i.unit}</p>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
+                <div className="mt-3">
+                  <LevelBar item={i} />
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <p className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <MapPin className="size-3" aria-hidden="true" />
+                    <span className="truncate">{i.location ?? "—"}</span>
+                  </p>
+                  {low && <LowBadge />}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
-
-      {/* ---------- Stock movement dialog ---------- */}
-      <Dialog open={moveOpen} onOpenChange={setMoveOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Log stock in / out</DialogTitle>
-            <DialogDescription>
-              Received a purchase or donation? Moving stock out for a drive? Record
-              it — every movement is audit-logged with your name.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Movement direction">
-              <Button
-                type="button"
-                variant={direction === "IN" ? "default" : "outline"}
-                className={cn("min-h-11 gap-1.5", direction === "OUT" && "border-zinc-500/30")}
-                onClick={() => setDirection("IN")}
-                aria-pressed={direction === "IN"}
-              >
-                <ArrowDownToLine className="size-4" aria-hidden="true" />
-                Stock in
-              </Button>
-              <Button
-                type="button"
-                variant={direction === "OUT" ? "default" : "outline"}
-                className={cn("min-h-11 gap-1.5", direction === "IN" && "border-zinc-500/30")}
-                onClick={() => setDirection("OUT")}
-                aria-pressed={direction === "OUT"}
-              >
-                <ArrowUpFromLine className="size-4" aria-hidden="true" />
-                Stock out
-              </Button>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="inv-item">Item</Label>
-              <Select value={moveItemId} onValueChange={setMoveItemId}>
-                <SelectTrigger id="inv-item" className="w-full">
-                  <SelectValue placeholder="Select item" />
-                </SelectTrigger>
-                <SelectContent>
-                  {items.map((i) => (
-                    <SelectItem key={i.id} value={i.id}>
-                      {i.name} ({formatNumber(i.quantity)} {i.unit})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="inv-qty">
-                Quantity {direction === "IN" ? "received" : "issued"}
-              </Label>
-              <Input
-                id="inv-qty"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                placeholder="e.g. 50"
-                value={moveQty}
-                onChange={(e) => setMoveQty(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="inv-notes">Notes (optional)</Label>
-              <Textarea
-                id="inv-notes"
-                rows={2}
-                placeholder={
-                  direction === "IN"
-                    ? "e.g. Received from donor Amit — 50 rice bags"
-                    : volunteer?.assignedArea
-                      ? `e.g. Issued for ${volunteer.assignedArea} drive`
-                      : "e.g. Issued for Saturday drive"
-                }
-                value={moveNotes}
-                onChange={(e) => setMoveNotes(e.target.value)}
-              />
-            </div>
-            <p className="flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-              <ScrollText className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              Stock-outs can&apos;t push a quantity below zero. Deleting items is
-              admin-only — volunteers adjust quantities safely here.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setMoveOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button className="min-h-11" onClick={submitMove} disabled={moving}>
-              {moving ? "Recording…" : direction === "IN" ? "Record stock in" : "Record stock out"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

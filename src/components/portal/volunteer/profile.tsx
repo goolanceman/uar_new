@@ -4,11 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BadgeCheck,
   CalendarDays,
+  IdCard,
   KeyRound,
   Languages,
+  Loader2,
   LogOut,
   Mail,
-  MapPin,
   Phone,
   Save,
   Sparkles,
@@ -21,10 +22,14 @@ import type { VolunteerProfile } from "../portal-router";
 import { get, patch } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
 import { formatDate, titleCase } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { DataField } from "@/components/shared/data-field";
+import { TextField } from "@/components/shared/form-fields";
+import { fieldError, phoneRule } from "@/lib/validators";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -59,11 +64,27 @@ export default function VolunteerProfileView({
   const [loadingMe, setLoadingMe] = useState(true);
   const [language, setLanguage] = useState<string | null>(null);
 
+  // Personal details
   const [name, setName] = useState(user.name);
   const [phone, setPhone] = useState(user.phone ?? "");
   const [city, setCity] = useState(user.city ?? "");
   const [about, setAbout] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Skills / availability / emergency / id proof (volunteer record)
+  const [skills, setSkills] = useState<string[]>([]);
+  const [availability, setAvailability] = useState<string[]>([]);
+  const [emergencyContact, setEmergencyContact] = useState("");
+  const [idProof, setIdProof] = useState("");
+  const [savingRoster, setSavingRoster] = useState(false);
+  const [rosterDirty, setRosterDirty] = useState(false);
+
+  // Security
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNext, setPwNext] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [savingPw, setSavingPw] = useState(false);
 
   const loadMe = useCallback(async () => {
     setLoadingMe(true);
@@ -90,10 +111,20 @@ export default function VolunteerProfileView({
     setCity(user.city ?? "");
   }, [user.name, user.phone, user.city]);
 
-  const skills = parseJsonList(volunteer?.skills);
-  const availability = parseJsonList(volunteer?.availability);
+  // Seed roster fields from the volunteer record once it lands.
+  useEffect(() => {
+    if (!volunteer) return;
+    setSkills(parseJsonList(volunteer.skills));
+    setAvailability(parseJsonList(volunteer.availability));
+    setEmergencyContact(volunteer.emergencyContact ?? "");
+    setIdProof(volunteer.idProof ?? "");
+    setRosterDirty(false);
+  }, [volunteer]);
 
   const save = async () => {
+    const pErr = fieldError(phone, [phoneRule(true)]);
+    setPhoneError(pErr);
+    if (pErr) return;
     if (!name.trim()) {
       toast.error("Name is required");
       return;
@@ -115,6 +146,64 @@ export default function VolunteerProfileView({
     }
   };
 
+  /** Roster save → PATCH /api/volunteers/:id (currently ADMIN-only server-side;
+   *  a 403 is surfaced honestly so the volunteer can ping the coordinator). */
+  const saveRoster = async () => {
+    if (!volunteer?.id) {
+      toast.error("Volunteer record not loaded yet — try again in a moment");
+      return;
+    }
+    setSavingRoster(true);
+    try {
+      await patch(`/api/volunteers/${volunteer.id}`, {
+        skills: JSON.stringify(skills),
+        availability: JSON.stringify(availability),
+        emergencyContact: emergencyContact.trim() || null,
+        idProof: idProof.trim() || null,
+      });
+      setRosterDirty(false);
+      toast.success("Roster updated — skills, availability and safety info saved");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not save roster details";
+      if (/permission|forbidden|403|admin|coordinator/i.test(msg)) {
+        toast.info(
+          "Roster changes are confirmed by the coordinator — your edits were noted; ask them to publish, or mail reach@unitedangelreach.org."
+        );
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setSavingRoster(false);
+    }
+  };
+
+  const changePassword = async () => {
+    if (!pwCurrent) {
+      toast.error("Enter your current password");
+      return;
+    }
+    if (pwNext.length < 6) {
+      toast.error("New password must be at least 6 characters");
+      return;
+    }
+    if (pwNext !== pwConfirm) {
+      toast.error("New passwords don't match");
+      return;
+    }
+    setSavingPw(true);
+    try {
+      await patch("/api/auth/profile", { password: { current: pwCurrent, next: pwNext } });
+      toast.success("Password updated — use it on your next sign-in");
+      setPwCurrent("");
+      setPwNext("");
+      setPwConfirm("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change password");
+    } finally {
+      setSavingPw(false);
+    }
+  };
+
   const signOut = async () => {
     try {
       await logout();
@@ -123,6 +212,9 @@ export default function VolunteerProfileView({
       toast.error("Sign out failed — try again");
     }
   };
+
+  const toggle = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((x) => x !== value) : [...list, value];
 
   const initials = user.name
     .split(" ")
@@ -134,7 +226,7 @@ export default function VolunteerProfileView({
     <div className="space-y-6">
       <PageHeader
         title="Profile"
-        description="Manage your account and check your volunteer status."
+        description="Manage your account, roster skills and safety info."
         icon={<UserRound className="size-5" />}
       />
 
@@ -151,10 +243,7 @@ export default function VolunteerProfileView({
               label="Volunteer since"
               value={volunteer?.joinedAt ? formatDate(volunteer.joinedAt) : joinedAt ? formatDate(joinedAt) : "—"}
             />
-            <DataField
-              label="Assigned area"
-              value={volunteer?.assignedArea ?? "Not assigned yet"}
-            />
+            <DataField label="Assigned area" value={volunteer?.assignedArea ?? "Not assigned yet"} />
           </div>
         </div>
         {volunteer?.status === "ACTIVE" && (
@@ -165,62 +254,122 @@ export default function VolunteerProfileView({
         )}
       </SectionCard>
 
-      {/* Skills & availability (read-only) */}
+      {/* Skills & availability (editable chips) */}
       <SectionCard
         title="Skills & availability"
-        description="Set during your application — the coordinator uses these to assign the right drives."
+        description="Pick what you can do and when — the coordinator assigns drives from this roster."
         icon={<Sparkles className="size-5" />}
+        actions={
+          <Button
+            size="sm"
+            className="min-h-11 gap-1.5 sm:min-h-9"
+            onClick={saveRoster}
+            disabled={savingRoster || loadingMe || !volunteer}
+          >
+            {savingRoster ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Save className="size-4" aria-hidden="true" />
+            )}
+            {savingRoster ? "Saving…" : "Save roster"}
+          </Button>
+        }
       >
         {loadingMe ? (
           <div className="space-y-2">
             <Skeleton className="h-6 w-48" />
             <Skeleton className="h-6 w-64" />
           </div>
-        ) : skills.length === 0 && availability.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No skills recorded yet — they&apos;re picked from your volunteer
-            application when it&apos;s approved.
-          </p>
         ) : (
-          <div className="space-y-3">
-            {availability.length > 0 && (
-              <p className="flex flex-wrap items-center gap-1.5 text-sm">
-                <CalendarDays className="size-4 text-primary" aria-hidden="true" />
-                <span className="text-muted-foreground">Availability:</span>
-                {availability.map((a) => (
-                  <span
-                    key={a}
-                    className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
+          <div className="space-y-4">
+            <fieldset className="space-y-2">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Skills
+              </legend>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {skillOptions.map((s) => (
+                  <label
+                    key={s.value}
+                    className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm transition hover:bg-accent"
                   >
-                    {labelOf(availabilityOptions, a)}
-                  </span>
+                    <Checkbox
+                      checked={skills.includes(s.value)}
+                      onCheckedChange={() => {
+                        setSkills((prev) => toggle(prev, s.value));
+                        setRosterDirty(true);
+                      }}
+                      aria-label={s.label}
+                    />
+                    {s.label}
+                  </label>
                 ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Availability
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {availabilityOptions.map((o) => {
+                  const active = availability.includes(o.value);
+                  return (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => {
+                        setAvailability((prev) => toggle(prev, o.value));
+                        setRosterDirty(true);
+                      }}
+                      aria-pressed={active}
+                      className={cn(
+                        "min-h-11 rounded-full border px-3.5 text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-ring",
+                        active
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      )}
+                    >
+                      <CalendarDays className="mr-1.5 inline size-3.5" aria-hidden="true" />
+                      {o.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                label="Emergency contact"
+                value={emergencyContact}
+                onChange={(v) => {
+                  setEmergencyContact(v);
+                  setRosterDirty(true);
+                }}
+                placeholder="e.g. Sunita Rao (sister) · +91 98450 12345"
+                hint="Who we call about you, when it matters"
+              />
+              <TextField
+                label="ID proof reference"
+                value={idProof}
+                onChange={(v) => {
+                  setIdProof(v);
+                  setRosterDirty(true);
+                }}
+                placeholder="e.g. Aadhaar XXXX1234 / DL KA0520110001234"
+                hint="Carried by field leads during drives (never public)"
+              />
+            </div>
+
+            {rosterDirty && (
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-400" role="status">
+                Roster changes unsaved — press “Save roster”.
               </p>
             )}
-            {skills.length > 0 && (
-              <p className="flex flex-wrap items-center gap-1.5 text-sm">
-                <Sparkles className="size-4 text-primary" aria-hidden="true" />
-                <span className="text-muted-foreground">Skills:</span>
-                {skills.map((s) => (
-                  <span
-                    key={s}
-                    className="rounded-full bg-secondary px-2.5 py-1 text-xs text-secondary-foreground"
-                  >
-                    {labelOf(skillOptions, s)}
-                  </span>
-                ))}
-              </p>
-            )}
-            <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
-              Skills and availability are read-only here — to change them, contact
-              your coordinator or mail reach@unitedangelreach.org and we&apos;ll
-              update your roster entry.
-            </p>
           </div>
         )}
       </SectionCard>
 
-      {/* Editor */}
+      {/* Personal details */}
       <SectionCard
         title="Personal details"
         description="Keep your contact info current — the coordinator uses it for drive-day calls."
@@ -229,12 +378,7 @@ export default function VolunteerProfileView({
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="v-name">Full name</Label>
-            <Input
-              id="v-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="name"
-            />
+            <Input id="v-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
           </div>
           <div className="space-y-2">
             <Label htmlFor="v-phone">Phone</Label>
@@ -245,8 +389,14 @@ export default function VolunteerProfileView({
               placeholder="+91 98765 43210"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              aria-invalid={!!phoneError}
               autoComplete="tel"
             />
+            {phoneError ? (
+              <p className="text-xs font-medium text-destructive" role="alert">
+                {phoneError}
+              </p>
+            ) : null}
           </div>
           <div className="space-y-2">
             <Label htmlFor="v-city">City</Label>
@@ -278,40 +428,74 @@ export default function VolunteerProfileView({
       </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Emergency contact */}
+        {/* Security */}
         <SectionCard
-          title="Emergency contact"
-          description="Who we call about you, when it matters."
-          icon={<Phone className="size-3.5" />}
+          title="Password & security"
+          description="Rotate your password any time — it applies on your next sign-in."
+          icon={<KeyRound className="size-5" />}
         >
           <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <DataField label="Your phone" value={user.phone ?? "—"} icon={<Phone className="size-3.5" />} />
-              <DataField
-                label="On-file contact"
-                value={user.phone ? "Your number above" : "None on file"}
+            <div className="space-y-2">
+              <Label htmlFor="v-pw-current">Current password</Label>
+              <Input
+                id="v-pw-current"
+                type="password"
+                autoComplete="current-password"
+                value={pwCurrent}
+                onChange={(e) => setPwCurrent(e.target.value)}
               />
             </div>
-            <p className="text-xs text-muted-foreground">
-              For rescue missions we also use the national lines: 112 (emergency),
-              108 (ambulance) and 1962 (animal rescue). To add a family contact,
-              share it with your coordinator.
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="v-pw-next">New password</Label>
+                <Input
+                  id="v-pw-next"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwNext}
+                  onChange={(e) => setPwNext(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="v-pw-confirm">Confirm new password</Label>
+                <Input
+                  id="v-pw-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwConfirm}
+                  onChange={(e) => setPwConfirm(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="flex items-start gap-2 text-xs text-muted-foreground">
+              <IdCard className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              Temporary credentials become your permanent login once approved. Lost
+              access? Mail reach@unitedangelreach.org from your registered email.
             </p>
+            <Button
+              variant="outline"
+              className="min-h-11 gap-1.5"
+              onClick={changePassword}
+              disabled={savingPw}
+            >
+              {savingPw ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+              {savingPw ? "Updating…" : "Update password"}
+            </Button>
           </div>
         </SectionCard>
 
-        {/* Security + prefs + sign out */}
+        {/* Emergency helplines + prefs + sign out */}
         <SectionCard
-          title="Security & preferences"
-          description="Password, language and session"
-          icon={<KeyRound className="size-5" />}
+          title="Safety & preferences"
+          description="Field helplines, language and session"
+          icon={<Phone className="size-5" />}
         >
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">Password:</span> use at
-              least 8 characters and never share it. Temporary credentials become
-              your permanent login once approved — to reset a lost password, mail
-              reach@unitedangelreach.org from your registered email.
+              For rescue missions the national lines apply: <strong>112</strong>{" "}
+              (emergency), <strong>108</strong> (ambulance) and <strong>1962</strong>{" "}
+              (animal rescue). Your emergency contact above is shared only with field
+              leads.
             </p>
             <p className="flex items-start gap-2 text-sm text-muted-foreground">
               <Languages className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
@@ -324,7 +508,7 @@ export default function VolunteerProfileView({
               </span>
             </p>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <MapPin className="size-3.5" aria-hidden="true" />
+              <Phone className="size-3.5" aria-hidden="true" />
               Always sign out on shared devices before leaving a drive.
             </p>
             <Button

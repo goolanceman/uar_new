@@ -69,9 +69,16 @@ export default function VolunteerScan({
   const [location, setLocation] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<ScanOutcome>(null);
+  const [shake, setShake] = useState(false);
+  const [sessionCount, setSessionCount] = useState(0);
   const [recent, setRecent] = useState<KitUnit[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
   const codeRef = useRef<HTMLInputElement>(null);
+
+  // Big-code field keeps focus — scanner guns and phone keyboards stay ready.
+  useEffect(() => {
+    codeRef.current?.focus();
+  }, []);
 
   const loadRecent = useCallback(async () => {
     setLoadingRecent(true);
@@ -79,10 +86,7 @@ export default function VolunteerScan({
       const data = await get<unknown>("/api/kit-units?mine=1&limit=200");
       const units = asArray<KitUnit>(data)
         .filter((u) => u.scannedAt)
-        .sort(
-          (a, b) =>
-            new Date(b.scannedAt ?? 0).getTime() - new Date(a.scannedAt ?? 0).getTime()
-        )
+        .sort((a, b) => new Date(b.scannedAt ?? 0).getTime() - new Date(a.scannedAt ?? 0).getTime())
         .slice(0, 8);
       setRecent(units);
     } catch {
@@ -95,6 +99,11 @@ export default function VolunteerScan({
   useEffect(() => {
     loadRecent();
   }, [loadRecent]);
+
+  const triggerShake = () => {
+    setShake(true);
+    window.setTimeout(() => setShake(false), 550);
+  };
 
   const scan = async () => {
     const c = code.trim().toUpperCase();
@@ -124,6 +133,7 @@ export default function VolunteerScan({
         location: res.unit?.location ?? (location.trim() || null),
       });
       setCode("");
+      setSessionCount((n) => n + 1);
       toast.success("Kit deducted from batch — handed over!");
       await loadRecent();
     } catch (e) {
@@ -138,6 +148,7 @@ export default function VolunteerScan({
       } else {
         setOutcome({ kind: "error", message: msg });
       }
+      triggerShake();
     } finally {
       setBusy(false);
       codeRef.current?.focus();
@@ -145,9 +156,7 @@ export default function VolunteerScan({
   };
 
   const remaining =
-    outcome?.kind === "success"
-      ? Math.max(0, outcome.totalUnits - outcome.scannedUnits)
-      : 0;
+    outcome?.kind === "success" ? Math.max(0, outcome.totalUnits - outcome.scannedUnits) : 0;
   const pct =
     outcome?.kind === "success" && outcome.totalUnits > 0
       ? Math.min(100, Math.round((outcome.scannedUnits / outcome.totalUnits) * 100))
@@ -161,10 +170,16 @@ export default function VolunteerScan({
         icon={<ScanLine className="size-5" />}
       />
 
-      {/* ---------- Terminal ---------- */}
-      <style>{`@keyframes uar-scanline{0%,100%{transform:translateY(4px)}50%{transform:translateY(52px)}}.uar-scanline{animation:uar-scanline 2.2s ease-in-out infinite}@keyframes uar-grid{0%{background-position:0 0}100%{background-position:40px 40px}}.uar-grid-bg{background-image:linear-gradient(rgba(16,185,129,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(16,185,129,.08) 1px,transparent 1px);background-size:20px 20px;animation:uar-grid 6s linear infinite}`}</style>
+      <style>{`@keyframes uar-scanline{0%,100%{transform:translateY(4px)}50%{transform:translateY(52px)}}.uar-scanline{animation:uar-scanline 2.2s ease-in-out infinite}@keyframes uar-grid{0%{background-position:0 0}100%{background-position:40px 40px}}.uar-grid-bg{background-image:linear-gradient(rgba(16,185,129,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(16,185,129,.08) 1px,transparent 1px);background-size:20px 20px;animation:uar-grid 6s linear infinite}@keyframes uar-shake{10%,90%{transform:translateX(-1px)}20%,80%{transform:translateX(2px)}30%,50%,70%{transform:translateX(-4px)}40%,60%{transform:translateX(4px)}}.uar-shake{animation:uar-shake .5s cubic-bezier(.36,.07,.19,.97) both}`}</style>
 
-      <div className="overflow-hidden rounded-2xl border bg-zinc-900 text-zinc-100 shadow-xl">
+      {/* ---------- Terminal ---------- */}
+      <div
+        className={cn(
+          "overflow-hidden rounded-2xl border bg-zinc-900 text-zinc-100 shadow-xl",
+          shake && "uar-shake"
+        )}
+        aria-live="polite"
+      >
         <div className="uar-grid-bg relative border-b border-zinc-800 px-6 py-8 sm:px-10">
           {outcome === null && !busy && (
             <div
@@ -173,9 +188,17 @@ export default function VolunteerScan({
             />
           )}
           <div className="relative mx-auto max-w-md text-center">
-            <span className="mx-auto flex size-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
-              <ScanLine className="size-6" aria-hidden="true" />
-            </span>
+            <div className="flex items-center justify-center gap-3">
+              <span className="flex size-12 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-400">
+                <ScanLine className="size-6" aria-hidden="true" />
+              </span>
+              <span
+                className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300"
+                aria-label={`Session scan count: ${sessionCount}`}
+              >
+                Session: {sessionCount} kit{sessionCount === 1 ? "" : "s"}
+              </span>
+            </div>
             <p className="mt-3 font-mono text-xs uppercase tracking-[0.25em] text-emerald-400">
               UAR · Ration Kit Terminal
             </p>
@@ -197,8 +220,7 @@ export default function VolunteerScan({
                       {outcome.location ? ` at ${outcome.location}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-zinc-500">
-                      Scanned by {outcome.scannedByName ?? "you"} ·{" "}
-                      {formatDateTime(outcome.scannedAt)}
+                      Scanned by {outcome.scannedByName ?? "you"} · {formatDateTime(outcome.scannedAt)}
                     </p>
                     {outcome.totalUnits > 0 && (
                       <div className="mt-3">
@@ -230,7 +252,7 @@ export default function VolunteerScan({
                 </Button>
               </div>
             ) : outcome ? (
-              /* ---------- Warning / error ---------- */
+              /* ---------- Warning / error (with shake) ---------- */
               <div
                 className={cn(
                   "mt-6 rounded-xl border p-5 text-left",
@@ -338,8 +360,8 @@ export default function VolunteerScan({
                 </Button>
                 <p className="flex items-start gap-2 text-xs text-zinc-500">
                   <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                  Scanning auto-decrements batch inventory — count only kits that
-                  physically left with a family.
+                  Scanning auto-decrements batch inventory — count only kits that physically
+                  left with a family.
                 </p>
               </div>
             )}
@@ -388,20 +410,40 @@ export default function VolunteerScan({
 
       {/* ---------- Explainer ---------- */}
       <SectionCard
-        title="Where do the QR labels come from?"
-        description="A quick word on the kit pipeline"
+        title="How scanning works"
+        description="From template to family, in four steps"
         icon={<QrCode className="size-5" />}
       >
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Admins assemble ration kits from a <strong>kit template</strong> (the item
-          list and cost per kit) into a <strong>batch</strong> — say &quot;Diwali
-          Drive · 120 kits&quot;. Each kit in the batch gets a unique code
-          (<span className="font-mono text-xs">UAR-RK-YYYY-NNNNNN</span>) and a
-          printed QR label sheet, generated straight from the batch view in the
-          admin console. The label goes on the kit; when you scan it here, the kit
-          is counted as delivered and the batch&apos;s remaining count drops by one —
-          which keeps the public impact numbers honest, in real time.
-        </p>
+        <ol className="space-y-3">
+          {[
+            {
+              title: "Templates → batches",
+              body: "Admins assemble ration kits from a kit template (item list + cost per kit) into a batch — say “Diwali Drive · 120 kits”.",
+            },
+            {
+              title: "Unique codes + QR labels",
+              body: "Each kit in the batch gets a unique code (UAR-RK-YYYY-NNNNNN) and a printed QR label sheet, generated from the batch view in the admin console.",
+            },
+            {
+              title: "You scan at handover",
+              body: "When a kit physically leaves with a family, scan it here — the unit flips to SCANNED and is tied to your name, time and location.",
+            },
+            {
+              title: "Impact stays honest",
+              body: "The batch's remaining count drops by one, which keeps the public impact numbers real-time accurate — no manual stocktaking.",
+            },
+          ].map((step, i) => (
+            <li key={i} className="flex items-start gap-3">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-bold text-primary">
+                {i + 1}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{step.title}</p>
+                <p className="text-sm text-muted-foreground">{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
       </SectionCard>
     </div>
   );

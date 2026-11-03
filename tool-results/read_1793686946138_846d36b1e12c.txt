@@ -1,0 +1,847 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import * as React from "react";
+     4→     4→import { useEffect, useRef, useState } from "react";
+     5→     5→import { Link } from "@/lib/router";
+     6→     6→import { get } from "@/lib/api-client";
+     7→     7→import { cn } from "@/lib/utils";
+     8→     8→import { toast } from "sonner";
+     9→     9→import { Button } from "@/components/ui/button";
+    10→    10→import { Card } from "@/components/ui/card";
+    11→    11→import { Badge } from "@/components/ui/badge";
+    12→    12→import { Skeleton } from "@/components/ui/skeleton";
+    13→    13→import { Section, HelplineCard } from "@/components/public/shared";
+    14→    14→import {
+    15→    15→  ResponsiveContainer,
+    16→    16→  LineChart,
+    17→    17→  Line,
+    18→    18→  XAxis,
+    19→    19→  YAxis,
+    20→    20→  CartesianGrid,
+    21→    21→  Tooltip,
+    22→    22→  Legend,
+    23→    23→} from "recharts";
+    24→    24→import {
+    25→    25→  Ambulance,
+    26→    26→  ArrowRight,
+    27→    27→  Bluetooth,
+    28→    28→  Car,
+    29→    29→  Gauge,
+    30→    30→  Heart,
+    31→    31→  Play,
+    32→    32→  Phone,
+    33→    33→  Radio,
+    34→    34→  RadioTower,
+    35→    35→  RotateCcw,
+    36→    36→  Siren,
+    37→    37→  Smartphone,
+    38→    38→  Timer,
+    39→    39→  Volume2,
+    40→    40→  Waves,
+    41→    41→} from "lucide-react";
+    42→    42→
+    43→    43→/* ================================================================== */
+    44→    44→/* LiveCorridorDemo — pure client-side simulation (no API)             */
+    45→    45→/* ================================================================== */
+    46→    46→
+    47→    47→type Congestion = "LOW" | "MODERATE" | "HEAVY" | "GRIDLOCK";
+    48→    48→
+    49→    49→interface Segment {
+    50→    50→  name: string;
+    51→    51→  km: number;
+    52→    52→}
+    53→    53→
+    54→    54→const SEGMENTS: Segment[] = [
+    55→    55→  { name: "Hebbal Flyover", km: 3.1 },
+    56→    56→  { name: "ORR · Nagawara", km: 2.6 },
+    57→    57→  { name: "Silk Board Jn", km: 2.2 },
+    58→    58→  { name: "KR Puram Jn", km: 2.8 },
+    59→    59→  { name: "Tin Factory", km: 2.4 },
+    60→    60→];
+    61→    61→
+    62→    62→interface CongestionMeta {
+    63→    63→  label: string;
+    64→    64→  color: string;
+    65→    65→  chip: string;
+    66→    66→  method: string;
+    67→    67→  methodBadge: string;
+    68→    68→  saved: [number, number];
+    69→    69→}
+    70→    70→
+    71→    71→const META: Record<Congestion, CongestionMeta> = {
+    72→    72→  LOW: {
+    73→    73→    label: "Low",
+    74→    74→    color: "#10b981",
+    75→    75→    chip: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    76→    76→    method: "FM RDS",
+    77→    77→    methodBadge: "bg-zinc-800 text-white",
+    78→    78→    saved: [2, 4],
+    79→    79→  },
+    80→    80→  MODERATE: {
+    81→    81→    label: "Moderate",
+    82→    82→    color: "#f59e0b",
+    83→    83→    chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    84→    84→    method: "BLE Mesh",
+    85→    85→    methodBadge: "bg-teal-600 text-white",
+    86→    86→    saved: [5, 10],
+    87→    87→  },
+    88→    88→  HEAVY: {
+    89→    89→    label: "Heavy",
+    90→    90→    color: "#f97316",
+    91→    91→    chip: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+    92→    92→    method: "Cell Broadcast",
+    93→    93→    methodBadge: "bg-orange-600 text-white",
+    94→    94→    saved: [15, 25],
+    95→    95→  },
+    96→    96→  GRIDLOCK: {
+    97→    97→    label: "Gridlock",
+    98→    98→    color: "#ef4444",
+    99→    99→    chip: "bg-red-500/15 text-red-600 dark:text-red-400",
+   100→   100→    method: "V2X 5G + BLE",
+   101→   101→    methodBadge: "bg-red-600 text-white",
+   102→   102→    saved: [30, 45],
+   103→   103→  },
+   104→   104→};
+   105→   105→
+   106→   106→const TOTAL_KM = SEGMENTS.reduce((n, s) => n + s.km, 0);
+   107→   107→
+   108→   108→const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+   109→   109→
+   110→   110→function randInt(min: number, max: number): number {
+   111→   111→  return min + Math.floor(Math.random() * (max - min + 1));
+   112→   112→}
+   113→   113→
+   114→   114→function pickCongestion(): Congestion {
+   115→   115→  const r = Math.random();
+   116→   116→  if (r < 0.25) return "LOW";
+   117→   117→  if (r < 0.55) return "MODERATE";
+   118→   118→  if (r < 0.85) return "HEAVY";
+   119→   119→  return "GRIDLOCK";
+   120→   120→}
+   121→   121→
+   122→   122→interface LogEntry {
+   123→   123→  id: number;
+   124→   124→  segment: string;
+   125→   125→  method: string;
+   126→   126→  vehicles: number;
+   127→   127→  saved: number;
+   128→   128→  congestion: Congestion;
+   129→   129→}
+   130→   130→
+   131→   131→export function LiveCorridorDemo() {
+   132→   132→  const [phase, setPhase] = useState<"idle" | "running" | "done">("idle");
+   133→   133→  const [cong, setCong] = useState<Congestion[]>(SEGMENTS.map(() => "LOW"));
+   134→   134→  const [revealed, setRevealed] = useState<boolean[]>(SEGMENTS.map(() => false));
+   135→   135→  const [cars, setCars] = useState<number[]>(SEGMENTS.map(() => 4));
+   136→   136→  const [alerted, setAlerted] = useState<boolean[]>(SEGMENTS.map(() => false));
+   137→   137→  const [pulse, setPulse] = useState(-1);
+   138→   138→  const [ambX, setAmbX] = useState(1);
+   139→   139→  const [log, setLog] = useState<LogEntry[]>([]);
+   140→   140→  const [savedSec, setSavedSec] = useState(0);
+   141→   141→  const [alertedTotal, setAlertedTotal] = useState(0);
+   142→   142→  const [method, setMethod] = useState<string>("—");
+   143→   143→  const cancelled = useRef(false);
+   144→   144→  const logId = useRef(0);
+   145→   145→
+   146→   146→  useEffect(() => {
+   147→   147→    return () => {
+   148→   148→      cancelled.current = true;
+   149→   149→    };
+   150→   150→  }, []);
+   151→   151→
+   152→   152→  const reset = () => {
+   153→   153→    cancelled.current = true;
+   154→   154→    setPhase("idle");
+   155→   155→    setCong(SEGMENTS.map(() => "LOW"));
+   156→   156→    setRevealed(SEGMENTS.map(() => false));
+   157→   157→    setCars(SEGMENTS.map(() => 4));
+   158→   158→    setAlerted(SEGMENTS.map(() => false));
+   159→   159→    setPulse(-1);
+   160→   160→    setAmbX(1);
+   161→   161→    setLog([]);
+   162→   162→    setSavedSec(0);
+   163→   163→    setAlertedTotal(0);
+   164→   164→    setMethod("—");
+   165→   165→    // allow a fresh run on next tick
+   166→   166→    setTimeout(() => {
+   167→   167→      cancelled.current = false;
+   168→   168→    }, 0);
+   169→   169→  };
+   170→   170→
+   171→   171→  const run = async () => {
+   172→   172→    if (phase === "running") return;
+   173→   173→    cancelled.current = false;
+   174→   174→
+   175→   175→    // Generate today's traffic
+   176→   176→    const nextCong: Congestion[] = SEGMENTS.map(() => pickCongestion());
+   177→   177→    const nextCars: number[] = SEGMENTS.map(() => randInt(3, 6));
+   178→   178→
+   179→   179→    setPhase("running");
+   180→   180→    setCong(nextCong);
+   181→   181→    setCars(nextCars);
+   182→   182→    setRevealed(SEGMENTS.map(() => false));
+   183→   183→    setAlerted(SEGMENTS.map(() => false));
+   184→   184→    setLog([]);
+   185→   185→    setSavedSec(0);
+   186→   186→    setAlertedTotal(0);
+   187→   187→    setMethod("Scanning traffic…");
+   188→   188→    setPulse(-1);
+   189→   189→    setAmbX(1);
+   190→   190→
+   191→   191→    await sleep(700);
+   192→   192→    if (cancelled.current) return;
+   193→   193→    setRevealed(SEGMENTS.map(() => true));
+   194→   194→
+   195→   195→    await sleep(600);
+   196→   196→    if (cancelled.current) return;
+   197→   197→
+   198→   198→    let totalSaved = 0;
+   199→   199→    let totalAlerted = 0;
+   200→   200→
+   201→   201→    for (let i = 0; i < SEGMENTS.length; i++) {
+   202→   202→      // Ambulance rolls into the segment
+   203→   203→      setAmbX(i * 20 + 1);
+   204→   204→      await sleep(150);
+   205→   205→      if (cancelled.current) return;
+   206→   206→
+   207→   207→      // Corridor alert fires for this segment
+   208→   208→      const meta = META[nextCong[i]];
+   209→   209→      const vehicles = nextCars[i] + randInt(1, 3);
+   210→   210→      const saved = randInt(meta.saved[0], meta.saved[1]);
+   211→   211→      totalSaved += saved;
+   212→   212→      totalAlerted += vehicles;
+   213→   213→
+   214→   214→      setAlerted((prev) => prev.map((v, idx) => idx === i || v));
+   215→   215→      setPulse(i);
+   216→   216→      setMethod(meta.method);
+   217→   217→      setSavedSec(totalSaved);
+   218→   218→      setAlertedTotal(totalAlerted);
+   219→   219→      setLog((prev) => [
+   220→   220→        {
+   221→   221→          id: ++logId.current,
+   222→   222→          segment: SEGMENTS[i].name,
+   223→   223→          method: meta.method,
+   224→   224→          vehicles,
+   225→   225→          saved,
+   226→   226→          congestion: nextCong[i],
+   227→   227→        },
+   228→   228→        ...prev,
+   229→   229→      ]);
+   230→   230→
+   231→   231→      await sleep(650); // cars react & shift
+   232→   232→      if (cancelled.current) return;
+   233→   233→      setPulse(-1);
+   234→   234→
+   235→   235→      // Cross the segment
+   236→   236→      setAmbX(i * 20 + 19);
+   237→   237→      await sleep(1800);
+   238→   238→      if (cancelled.current) return;
+   239→   239→    }
+   240→   240→
+   241→   241→    setMethod("Mission complete");
+   242→   242→    setPhase("done");
+   243→   243→    toast.success(
+   244→   244→      `Corridor run complete — ${totalSaved}s saved, ${totalAlerted} vehicles alerted across ${SEGMENTS.length} segments.`
+   245→   245→    );
+   246→   246→  };
+   247→   247→
+   248→   248→  const totalDistance = Math.round(((ambX - 1) / 98) * TOTAL_KM * 10) / 10;
+   249→   249→
+   250→   250→  return (
+   251→   251→    <Card className="overflow-hidden p-0">
+   252→   252→      {/* Header */}
+   253→   253→      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-4 py-3 sm:px-5">
+   254→   254→        <div className="flex items-center gap-2">
+   255→   255→          <span className="flex size-8 items-center justify-center rounded-lg bg-red-100 text-red-700">
+   256→   256→            <Ambulance className="size-4" aria-hidden />
+   257→   257→          </span>
+   258→   258→          <div>
+   259→   259→            <p className="text-sm font-bold leading-tight">Live corridor simulation</p>
+   260→   260→            <p className="text-[11px] text-muted-foreground">
+   261→   261→              Hebbal → Tin Factory · {TOTAL_KM} km · randomised traffic
+   262→   262→            </p>
+   263→   263→          </div>
+   264→   264→        </div>
+   265→   265→        <Badge className={cn("border-0", method === "—" ? "bg-muted text-muted-foreground" : method === "Mission complete" ? "bg-emerald-600 text-white" : "bg-red-600 text-white")}>
+   266→   266→          <Radio className="mr-1 size-3" aria-hidden />
+   267→   267→          {method}
+   268→   268→        </Badge>
+   269→   269→      </div>
+   270→   270→
+   271→   271→      {/* Segment labels + congestion chips */}
+   272→   272→      <div className="grid grid-cols-5 gap-1 px-3 pt-3 sm:px-5">
+   273→   273→        {SEGMENTS.map((s, i) => (
+   274→   274→          <div key={s.name} className="text-center">
+   275→   275→            <p className="truncate text-[10px] font-semibold text-muted-foreground sm:text-xs">
+   276→   276→              {s.name}
+   277→   277→            </p>
+   278→   278→            <span
+   279→   279→              className={cn(
+   280→   280→                "mt-1 inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold sm:text-[10px]",
+   281→   281→                revealed[i] ? META[cong[i]].chip : "bg-muted text-muted-foreground"
+   282→   282→              )}
+   283→   283→            >
+   284→   284→              {revealed[i] ? META[cong[i]].label : "—"}
+   285→   285→            </span>
+   286→   286→          </div>
+   287→   287→        ))}
+   288→   288→      </div>
+   289→   289→
+   290→   290→      {/* Road */}
+   291→   291→      <div className="px-3 pt-2 sm:px-5">
+   292→   292→        <div className="relative h-32 overflow-hidden rounded-xl bg-zinc-200 dark:bg-zinc-800 sm:h-36" role="img" aria-label="Road simulation with an ambulance crossing five segments">
+   293→   293→          {/* Asphalt + lanes */}
+   294→   294→          <div className="absolute inset-x-0 top-6 bottom-6 bg-zinc-500 dark:bg-zinc-600" />
+   295→   295→          <div className="absolute inset-x-0 top-[calc(50%+1px)] border-t-2 border-dashed border-white/70" aria-hidden />
+   296→   296→
+   297→   297→          {/* Congestion tints */}
+   298→   298→          {SEGMENTS.map((s, i) => (
+   299→   299→            <div
+   300→   300→              key={s.name}
+   301→   301→              className="absolute top-6 bottom-6 transition-colors duration-700"
+   302→   302→              style={{
+   303→   303→                left: `${i * 20}%`,
+   304→   304→                width: "20%",
+   305→   305→                backgroundColor: revealed[i] ? META[cong[i]].color : "transparent",
+   306→   306→                opacity: revealed[i] ? 0.35 : 0,
+   307→   307→              }}
+   308→   308→            />
+   309→   309→          ))}
+   310→   310→
+   311→   311→          {/* Segment dividers */}
+   312→   312→          {[20, 40, 60, 80].map((p) => (
+   313→   313→            <div
+   314→   314→              key={p}
+   315→   315→              aria-hidden
+   316→   316→              className="absolute top-4 bottom-4 w-px bg-white/40"
+   317→   317→              style={{ left: `${p}%` }}
+   318→   318→            />
+   319→   319→          ))}
+   320→   320→
+   321→   321→          {/* Pulse ring at alerting segment */}
+   322→   322→          {pulse >= 0 && (
+   323→   323→            <span
+   324→   324→              aria-hidden
+   325→   325→              className="absolute top-1/2 size-10 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full border-4 border-white/80 bg-white/30"
+   326→   326→              style={{ left: `${pulse * 20 + 10}%` }}
+   327→   327→            />
+   328→   328→          )}
+   329→   329→
+   330→   330→          {/* Cars */}
+   331→   331→          {SEGMENTS.map((s, i) =>
+   332→   332→            Array.from({ length: cars[i] }).map((_, j) => {
+   333→   333→              const pos = i * 20 + ((j + 0.8) / (cars[i] + 0.6)) * 20;
+   334→   334→              const isAlerted = alerted[i];
+   335→   335→              return (
+   336→   336→                <span
+   337→   337→                  key={`${i}-${j}`}
+   338→   338→                  className={cn(
+   339→   339→                    "absolute flex size-5 -translate-x-1/2 items-center justify-center rounded-full transition-all duration-700 sm:size-6",
+   340→   340→                    isAlerted
+   341→   341→                      ? "bg-emerald-500 text-white shadow-md"
+   342→   342→                      : "bg-zinc-100 text-zinc-500 ring-1 ring-zinc-400/60"
+   343→   343→                  )}
+   344→   344→                  style={{
+   345→   345→                    left: `${pos}%`,
+   346→   346→                    top: isAlerted ? "4px" : j % 2 === 0 ? "38%" : "62%",
+   347→   347→                  }}
+   348→   348→                >
+   349→   349→                  <Car className="size-3" aria-hidden />
+   350→   350→                </span>
+   351→   351→              );
+   352→   352→            })
+   353→   353→          )}
+   354→   354→
+   355→   355→          {/* Ambulance */}
+   356→   356→          <span
+   357→   357→            className="absolute top-1/2 z-10 flex size-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg bg-white text-red-600 shadow-lg transition-[left] duration-[1800ms] ease-linear sm:size-10"
+   358→   358→            style={{ left: `${ambX}%` }}
+   359→   359→            aria-label="Ambulance"
+   360→   360→          >
+   361→   361→            <Ambulance className="size-5" aria-hidden />
+   362→   362→            <span className="absolute inset-0 rounded-lg ring-2 ring-red-500/60" aria-hidden />
+   363→   363→          </span>
+   364→   364→
+   365→   365→          {/* Coverage note */}
+   366→   366→          <div className="absolute bottom-1 right-2 text-[10px] font-medium text-white/90">
+   367→   367→            2 km ahead broadcast · 4-layer mesh
+   368→   368→          </div>
+   369→   369→        </div>
+   370→   370→      </div>
+   371→   371→
+   372→   372→      {/* Counters */}
+   373→   373→      <div className="grid grid-cols-2 gap-3 px-3 pt-4 sm:grid-cols-4 sm:px-5">
+   374→   374→        <div className="rounded-lg border bg-card p-3">
+   375→   375→          <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+   376→   376→            <Timer className="size-3.5" aria-hidden /> Time saved
+   377→   377→          </p>
+   378→   378→          <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{savedSec}s</p>
+   379→   379→        </div>
+   380→   380→        <div className="rounded-lg border bg-card p-3">
+   381→   381→          <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+   382→   382→            <Waves className="size-3.5" aria-hidden /> Vehicles alerted
+   383→   383→          </p>
+   384→   384→          <p className="text-lg font-bold">{alertedTotal}</p>
+   385→   385→        </div>
+   386→   386→        <div className="rounded-lg border bg-card p-3">
+   387→   387→          <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+   388→   388→            <Gauge className="size-3.5" aria-hidden /> Distance
+   389→   389→          </p>
+   390→   390→          <p className="text-lg font-bold">{totalDistance} km</p>
+   391→   391→        </div>
+   392→   392→        <div className="rounded-lg border bg-card p-3">
+   393→   393→          <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+   394→   394→            <Radio className="size-3.5" aria-hidden /> Alert method
+   395→   395→          </p>
+   396→   396→          <p className="truncate text-sm font-bold">{method}</p>
+   397→   397→        </div>
+   398→   398→      </div>
+   399→   399→
+   400→   400→      {/* Controls */}
+   401→   401→      <div className="flex flex-wrap items-center gap-2 px-3 pt-4 sm:px-5">
+   402→   402→        <Button
+   403→   403→          onClick={run}
+   404→   404→          disabled={phase === "running"}
+   405→   405→          className="bg-red-600 text-white hover:bg-red-700"
+   406→   406→        >
+   407→   407→          <Play className="size-4" aria-hidden />
+   408→   408→          {phase === "running" ? "Mission running…" : phase === "done" ? "Run again" : "Run mission"}
+   409→   409→        </Button>
+   410→   410→        <Button variant="outline" onClick={reset} disabled={phase === "running"}>
+   411→   411→          <RotateCcw className="size-4" aria-hidden /> Reset
+   412→   412→        </Button>
+   413→   413→        <p className="text-xs text-muted-foreground">
+   414→   414→          GRIDLOCK → V2X 5G + BLE · HEAVY → Cell broadcast · MODERATE → BLE mesh · LOW → FM RDS
+   415→   415→        </p>
+   416→   416→      </div>
+   417→   417→
+   418→   418→      {/* Event log */}
+   419→   419→      <div className="px-3 pb-4 pt-4 sm:px-5">
+   420→   420→        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   421→   421→          Per-segment event log
+   422→   422→        </p>
+   423→   423→        <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border scrollbar-thin">
+   424→   424→          {log.length === 0 ? (
+   425→   425→            <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+   426→   426→              No corridor events yet — press “Run mission”.
+   427→   427→            </p>
+   428→   428→          ) : (
+   429→   429→            <ul className="divide-y">
+   430→   430→              {log.map((e) => (
+   431→   431→                <li key={e.id} className="flex items-center gap-2 px-3 py-2 text-xs">
+   432→   432→                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold", META[e.congestion].chip)}>
+   433→   433→                    {META[e.congestion].label}
+   434→   434→                  </span>
+   435→   435→                  <span className="min-w-0 flex-1 truncate font-medium">{e.segment}</span>
+   436→   436→                  <span className="hidden font-semibold text-muted-foreground sm:inline">{e.method}</span>
+   437→   437→                  <span className="text-muted-foreground">{e.vehicles} veh</span>
+   438→   438→                  <span className="font-bold text-emerald-600 dark:text-emerald-400">−{e.saved}s</span>
+   439→   439→                </li>
+   440→   440→              ))}
+   441→   441→            </ul>
+   442→   442→          )}
+   443→   443→        </div>
+   444→   444→      </div>
+   445→   445→    </Card>
+   446→   446→  );
+   447→   447→}
+   448→   448→
+   449→   449→/* ================================================================== */
+   450→   450→/* CorridorLiveStats — /api/corridor-stats (graceful when signed out)  */
+   451→   451→/* ================================================================== */
+   452→   452→
+   453→   453→interface CorridorStats {
+   454→   454→  missions?: { total?: number; completed?: number; active?: number };
+   455→   455→  vehiclesAlerted?: number;
+   456→   456→  timeSavedMin?: number;
+   457→   457→  avgSavedSec?: number;
+   458→   458→  byMethod?: { method: string; count: number; savedSec: number }[];
+   459→   459→}
+   460→   460→
+   461→   461→function CorridorLiveStats() {
+   462→   462→  const [stats, setStats] = useState<CorridorStats | null>(null);
+   463→   463→  const [failed, setFailed] = useState(false);
+   464→   464→
+   465→   465→  useEffect(() => {
+   466→   466→    let alive = true;
+   467→   467→    get<CorridorStats>("/api/corridor-stats")
+   468→   468→      .then((d) => alive && setStats(d ?? null))
+   469→   469→      .catch(() => {
+   470→   470→        if (alive) {
+   471→   471→          setFailed(true);
+   472→   472→        }
+   473→   473→      });
+   474→   474→    return () => {
+   475→   475→      alive = false;
+   476→   476→    };
+   477→   477→  }, []);
+   478→   478→
+   479→   479→  if (failed) {
+   480→   480→    return (
+   481→   481→      <Card className="p-5">
+   482→   482→        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+   483→   483→          <Radio className="mt-0.5 size-4 shrink-0 text-red-600 dark:text-red-400" aria-hidden />
+   484→   484→          Live ops-desk counters are visible to signed-in volunteers and admins. The pilot
+   485→   485→          benchmarks below and the simulation above tell the story meanwhile — every corridor
+   486→   486→          event is timestamped per segment and fully auditable.
+   487→   487→        </p>
+   488→   488→      </Card>
+   489→   489→    );
+   490→   490→  }
+   491→   491→
+   492→   492→  if (stats === null) {
+   493→   493→    return (
+   494→   494→      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+   495→   495→        {Array.from({ length: 4 }).map((_, i) => (
+   496→   496→          <Skeleton key={i} className="h-24 rounded-xl" />
+   497→   497→        ))}
+   498→   498→      </div>
+   499→   499→    );
+   500→   500→  }
+   501→   501→
+   502→   502→  const kpis = [
+   503→   503→    { label: "corridor missions", value: stats.missions?.total ?? 0 },
+   504→   504→    { label: "completed", value: stats.missions?.completed ?? 0 },
+   505→   505→    { label: "minutes saved", value: stats.timeSavedMin ?? 0 },
+   506→   506→    { label: "vehicles alerted", value: stats.vehiclesAlerted ?? 0 },
+   507→   507→  ];
+   508→   508→
+   509→   509→  return (
+   510→   510→    <div>
+   511→   511→      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+   512→   512→        {kpis.map((k) => (
+   513→   513→          <Card key={k.label} className="p-4 text-center sm:p-5">
+   514→   514→            <p className="text-2xl font-extrabold text-red-600 dark:text-red-400">
+   515→   515→              {k.value.toLocaleString("en-IN")}
+   516→   516→            </p>
+   517→   517→            <p className="mt-1 text-xs text-muted-foreground">{k.label}</p>
+   518→   518→          </Card>
+   519→   519→        ))}
+   520→   520→      </div>
+   521→   521→      {stats.byMethod && stats.byMethod.length > 0 && (
+   522→   522→        <div className="mt-3 flex flex-wrap items-center gap-2">
+   523→   523→          <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+   524→   524→            Alerts by layer
+   525→   525→          </span>
+   526→   526→          {stats.byMethod.map((m) => (
+   527→   527→            <Badge key={m.method} variant="outline" className="gap-1 text-[10px]">
+   528→   528→              {m.method} · {m.count}
+   529→   529→            </Badge>
+   530→   530→          ))}
+   531→   531→        </div>
+   532→   532→      )}
+   533→   533→    </div>
+   534→   534→  );
+   535→   535→}
+   536→   536→
+   537→   537→/* ================================================================== */
+   538→   538→/* GreenCorridorPage                                                   */
+   539→   539→/* ================================================================== */
+   540→   540→
+   541→   541→const MESH_LAYERS = [
+   542→   542→  {
+   543→   543→    n: 1,
+   544→   544→    icon: Radio,
+   545→   545→    title: "V2X 5G",
+   546→   546→    reach: "2 km ahead",
+   547→   547→    desc: "Connected cars and nav apps receive the ambulance's route broadcast over 5G V2X. Highest-capacity layer — reroutes modern fleets before they ever hear a siren.",
+   548→   548→  },
+   549→   549→  {
+   550→   550→    n: 2,
+   551→   551→    icon: Smartphone,
+   552→   552→    title: "Cell Broadcast",
+   553→   553→    reach: "5 km radius",
+   554→   554→    desc: "If V2X coverage drops, the alert falls back to cell broadcast — the same channel as severe-weather warnings. Every phone in the corridor buzzes, no app required.",
+   555→   555→  },
+   556→   556→  {
+   557→   557→    n: 3,
+   558→   558→    icon: Bluetooth,
+   559→   559→    title: "BLE Mesh (offline-proof)",
+   560→   560→    reach: "800 m hops",
+   561→   561→    desc: "₹500 Bluetooth beacons on poles pass the alert hop-by-hop with NO internet, no SIM, no tower. Built for dead zones, tunnels and flood days when networks fail.",
+   562→   562→  },
+   563→   563→  {
+   564→   564→    n: 4,
+   565→   565→    icon: RadioTower,
+   566→   566→    title: "FM-RDS Break-in",
+   567→   567→    reach: "every radio",
+   568→   568→    desc: "Legacy cars and radios receive a break-in alert on the FM band. Old technology, near-universal reach — no smart car required.",
+   569→   569→  },
+   570→   570→  {
+   571→   571→    n: 5,
+   572→   572→    icon: Siren,
+   573→   573→    title: "Adaptive Siren",
+   574→   574→    reach: "last resort",
+   575→   575→    desc: "If every network layer fails, a siren that adapts pattern and direction by congestion, with junction approach-lights — a structured sound corridor, not panic-blare.",
+   576→   576→  },
+   577→   577→];
+   578→   578→
+   579→   579→const HOTSPOTS = [
+   580→   580→  { jn: "Hebbal Flyover", peak: "Gridlock (morning peak)", layer: "V2X 5G + Cell broadcast" },
+   581→   581→  { jn: "ORR · Nagawara", peak: "Heavy all day", layer: "V2X 5G + BLE mesh" },
+   582→   582→  { jn: "Silk Board Junction", peak: "Gridlock (evening peak)", layer: "Cell broadcast + BLE" },
+   583→   583→  { jn: "KR Puram Junction", peak: "Heavy · bridge dead zones", layer: "BLE mesh (offline-proof)" },
+   584→   584→  { jn: "Tin Factory", peak: "Moderate", layer: "FM-RDS + adaptive siren" },
+   585→   585→];
+   586→   586→
+   587→   587→export function GreenCorridorPage() {
+   588→   588→  return (
+   589→   589→    <>
+   590→   590→      {/* Hero */}
+   591→   591→      <section className="bg-red-600 text-white">
+   592→   592→        <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
+   593→   593→          <Badge className="border-0 bg-white/15 text-white">
+   594→   594→            <Siren className="mr-1 size-3" aria-hidden /> Programme · green-corridor
+   595→   595→          </Badge>
+   596→   596→          <h1 className="mt-4 max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl">
+   597→   597→            AI Green Corridor — ambulances that clear their own path
+   598→   598→          </h1>
+   599→   599→          <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/90 sm:text-base">
+   600→   600→            City ambulances average 11 km/h in traffic while cardiac survival drops 10–15% every
+   601→   601→            minute. Our four-layer alert mesh reorganises the road itself — 40–60% faster
+   602→   602→            missions, audited to the second.
+   603→   603→          </p>
+   604→   604→          <div className="mt-6 flex flex-wrap gap-2.5">
+   605→   605→            {[
+   606→   606→              { k: "11 km/h", v: "avg ambulance speed in traffic" },
+   607→   607→              { k: "10–15%/min", v: "cardiac survival lost to delay" },
+   608→   608→              { k: "40–60%", v: "faster with the corridor" },
+   609→   609→            ].map((s) => (
+   610→   610→              <span
+   611→   611→                key={s.k}
+   612→   612→                className="rounded-full bg-white/15 px-3.5 py-1.5 text-xs font-semibold ring-1 ring-white/25"
+   613→   613→              >
+   614→   614→                {s.k} <span className="font-normal text-white/80">· {s.v}</span>
+   615→   615→              </span>
+   616→   616→            ))}
+   617→   617→          </div>
+   618→   618→          <div className="mt-8 flex flex-wrap gap-3">
+   619→   619→            <Button size="lg" className="border-0 bg-white text-red-700 hover:bg-white/90" asChild>
+   620→   620→              <a href="tel:108">
+   621→   621→                <Phone className="size-5" aria-hidden /> Call 108
+   622→   622→              </a>
+   623→   623→            </Button>
+   624→   624→            <Button
+   625→   625→              size="lg"
+   626→   626→              variant="outline"
+   627→   627→              className="border-white bg-transparent text-white hover:bg-white/10"
+   628→   628→              asChild
+   629→   629→            >
+   630→   630→              <a href="tel:112">Emergency 112</a>
+   631→   631→            </Button>
+   632→   632→            <Button
+   633→   633→              size="lg"
+   634→   634→              variant="outline"
+   635→   635→              className="border-white bg-transparent text-white hover:bg-white/10"
+   636→   636→              asChild
+   637→   637→            >
+   638→   638→              <Link href="/donate?campaign=green-corridor">
+   639→   639→                <Heart className="size-5" aria-hidden /> Fund a corridor
+   640→   640→              </Link>
+   641→   641→            </Button>
+   642→   642→          </div>
+   643→   643→        </div>
+   644→   644→      </section>
+   645→   645→
+   646→   646→      {/* Live ops stats */}
+   647→   647→      <Section title="Live from the ops desk" subtitle="Real counters from logged corridor missions — updated as events land." className="pb-0">
+   648→   648→        <CorridorLiveStats />
+   649→   649→      </Section>
+   650→   650→
+   651→   651→      {/* Live demo */}
+   652→   652→      <Section
+   653→   653→        title="Run a live mission"
+   654→   654→        subtitle="Randomised Bengaluru traffic, five segments, one ambulance. Watch which layer fires at each junction — and count the seconds."
+   655→   655→        className="pb-0"
+   656→   656→      >
+   657→   657→        <LiveCorridorDemo />
+   658→   658→      </Section>
+   659→   659→
+   660→   660→      {/* 5-layer mesh */}
+   661→   661→      <Section
+   662→   662→        title="The 5-layer alert mesh"
+   663→   663→        subtitle="No single technology covers India's mixed traffic. Five independent layers do — if one fails, the next takes over automatically, and the siren is always the last resort."
+   664→   664→        className="pt-12"
+   665→   665→      >
+   666→   666→        {/* Fallback chain explainer */}
+   667→   667→        <div
+   668→   668→          className="mb-5 flex flex-wrap items-center gap-1.5 rounded-xl border bg-muted/40 p-3 text-xs font-semibold text-muted-foreground"
+   669→   669→          aria-label="Layer fallback order"
+   670→   670→        >
+   671→   671→          <span className="mr-1 text-[11px] font-bold uppercase tracking-wide">Fallback order</span>
+   672→   672→          {["V2X / 5G", "Cell broadcast", "BLE mesh (offline)", "FM-RDS", "Adaptive siren"].map(
+   673→   673→            (s, i, arr) => (
+   674→   674→              <React.Fragment key={s}>
+   675→   675→                <span className="rounded-full border bg-card px-2.5 py-1 text-foreground">{s}</span>
+   676→   676→                {i < arr.length - 1 && (
+   677→   677→                  <ArrowRight className="size-3.5 text-red-500/70" aria-hidden />
+   678→   678→                )}
+   679→   679→              </React.Fragment>
+   680→   680→            )
+   681→   681→          )}
+   682→   682→          <span className="ml-1 text-[11px] font-normal">
+   683→   683→            — each layer catches what the previous one misses.
+   684→   684→          </span>
+   685→   685→        </div>
+   686→   686→
+   687→   687→        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+   688→   688→          {MESH_LAYERS.map((l) => (
+   689→   689→            <Card key={l.n} className="flex flex-col p-5">
+   690→   690→              <div className="flex items-center gap-3">
+   691→   691→                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-600 dark:text-red-400">
+   692→   692→                  <l.icon className="size-5" aria-hidden />
+   693→   693→                </span>
+   694→   694→                <div>
+   695→   695→                  <p className="text-[11px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400">
+   696→   696→                    Layer {l.n}
+   697→   697→                  </p>
+   698→   698→                  <Badge variant="outline" className="mt-0.5 border-red-500/25 text-[10px] text-red-600 dark:text-red-400">
+   699→   699→                    {l.reach}
+   700→   700→                  </Badge>
+   701→   701→                </div>
+   702→   702→              </div>
+   703→   703→              <h3 className="mt-3 font-semibold leading-snug">{l.title}</h3>
+   704→   704→              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{l.desc}</p>
+   705→   705→            </Card>
+   706→   706→          ))}
+   707→   707→        </div>
+   708→   708→
+   709→   709→        {/* Why Bluetooth matters */}
+   710→   710→        <Card className="mt-6 border-teal-500/25 bg-teal-500/10 p-6">
+   711→   711→          <div className="flex items-start gap-4">
+   712→   712→            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-teal-500/15 text-teal-600 dark:text-teal-400">
+   713→   713→              <Bluetooth className="size-6" aria-hidden />
+   714→   714→            </span>
+   715→   715→            <div>
+   716→   716→              <h3 className="font-semibold text-teal-700 dark:text-teal-400">Why Bluetooth matters</h3>
+   717→   717→              <ul className="mt-3 grid gap-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
+   718→   718→                <li>• Works with no internet, no SIM, no tower — exactly when floods and storms cut networks.</li>
+   719→   719→                <li>• A beacon costs ~₹500; a city corridor needs dozens, not crores.</li>
+   720→   720→                <li>• Messages hop car-to-car and beacon-to-beacon, bending around obstacles.</li>
+   721→   721→                <li>• No tracking, no personal data — just &ldquo;ambulance coming, clear left lane&rdquo;.</li>
+   722→   722→              </ul>
+   723→   723→            </div>
+   724→   724→          </div>
+   725→   725→        </Card>
+   726→   726→      </Section>
+   727→   727→
+   728→   728→      {/* Hotspot table */}
+   729→   729→      <Section
+   730→   730→        title="Bengaluru hotspot map"
+   731→   731→        subtitle="Where minutes die — and which layer we prioritise at each junction."
+   732→   732→        className="bg-muted/40"
+   733→   733→      >
+   734→   734→        <Card className="overflow-hidden p-0">
+   735→   735→          <div className="grid grid-cols-3 gap-2 border-b bg-muted/60 px-4 py-2.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+   736→   736→            <span>Junction</span>
+   737→   737→            <span>Peak congestion</span>
+   738→   738→            <span>Primary alert layer</span>
+   739→   739→          </div>
+   740→   740→          {HOTSPOTS.map((h) => (
+   741→   741→            <div
+   742→   742→              key={h.jn}
+   743→   743→              className="grid grid-cols-3 gap-2 border-b px-4 py-3 text-xs last:border-0 sm:text-sm"
+   744→   744→            >
+   745→   745→              <span className="font-semibold">{h.jn}</span>
+   746→   746→              <span className="text-muted-foreground">{h.peak}</span>
+   747→   747→              <span className="font-medium text-red-600 dark:text-red-400">{h.layer}</span>
+   748→   748→            </div>
+   749→   749→          ))}
+   750→   750→        </Card>
+   751→   751→      </Section>
+   752→   752→
+   753→   753→      {/* Impact chart */}
+   754→   754→      <Section
+   755→   755→        title="Measured impact"
+   756→   756→        subtitle="Sample route timings from corridor pilots — the advantage compounds with congestion."
+   757→   757→      >
+   758→   758→        <div className="grid gap-4 lg:grid-cols-2">
+   759→   759→          <CorridorLineChart />
+   760→   760→          <div className="grid grid-cols-2 gap-3">
+   761→   761→            {[
+   762→   762→              { k: "25 min", v: "median time saved per cross-city mission" },
+   763→   763→              { k: "1,800+", v: "vehicles alerted in pilot week" },
+   764→   764→              { k: "₹500", v: "per roadside BLE beacon" },
+   765→   765→              { k: "100%", v: "of corridor events logged & auditable" },
+   766→   766→            ].map((s) => (
+   767→   767→              <Card key={s.k} className="p-4">
+   768→   768→                <p className="text-xl font-extrabold text-red-600 dark:text-red-400">{s.k}</p>
+   769→   769→                <p className="mt-1 text-xs leading-snug text-muted-foreground">{s.v}</p>
+   770→   770→              </Card>
+   771→   771→            ))}
+   772→   772→          </div>
+   773→   773→        </div>
+   774→   774→      </Section>
+   775→   775→
+   776→   776→      {/* Emergency cards */}
+   777→   777→      <Section title="Emergency? Numbers first." className="bg-muted/40">
+   778→   778→        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   779→   779→          <HelplineCard name="Ambulance (GVK EMRI)" number="108" desc="Free emergency response" accent="red" />
+   780→   780→          <HelplineCard name="Police & Fire" number="112" desc="Any emergency, 24×7" accent="orange" />
+   781→   781→          <HelplineCard name="UAR Corridor Desk" number="112" desc="Junction-blocker reports" accent="emerald" />
+   782→   782→        </div>
+   783→   783→      </Section>
+   784→   784→    </>
+   785→   785→  );
+   786→   786→}
+   787→   787→
+   788→   788→/* Bespoke 2-series line chart (shared ChartBox is single-series) */
+   789→   789→function CorridorLineChart() {
+   790→   790→  const data = [
+   791→   791→    { congestion: "Light", without: 22, with: 17 },
+   792→   792→    { congestion: "Moderate", without: 34, with: 25 },
+   793→   793→    { congestion: "Heavy", without: 48, with: 33 },
+   794→   794→    { congestion: "Gridlock", without: 65, with: 42 },
+   795→   795→  ];
+   796→   796→
+   797→   797→  return (
+   798→   798→    <Card className="p-5">
+   799→   799→      <h3 className="font-semibold leading-snug">Journey minutes: with vs without corridor</h3>
+   800→   800→      <p className="mt-1 text-xs text-muted-foreground">
+   801→   801→        The corridor&rsquo;s edge grows as traffic worsens — gridlock runs save ~23 minutes.
+   802→   802→      </p>
+   803→   803→      <div className="mt-4 h-56 sm:h-72">
+   804→   804→        <ResponsiveContainer width="100%" height="100%">
+   805→   805→          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -8 }}>
+   806→   806→            <CartesianGrid strokeDasharray="3 3" stroke="#98989d" strokeOpacity={0.3} />
+   807→   807→            <XAxis
+   808→   808→              dataKey="congestion"
+   809→   809→              tick={{ fontSize: 11, fill: "#71717a" }}
+   810→   810→              interval={0}
+   811→   811→              tickLine={false}
+   812→   812→              axisLine={{ stroke: "#98989d", strokeOpacity: 0.4 }}
+   813→   813→            />
+   814→   814→            <YAxis
+   815→   815→              tick={{ fontSize: 11, fill: "#71717a" }}
+   816→   816→              width={40}
+   817→   817→              tickLine={false}
+   818→   818→              axisLine={false}
+   819→   819→            />
+   820→   820→            <Tooltip
+   821→   821→              contentStyle={{ fontSize: 12, borderRadius: 8 }}
+   822→   822→              formatter={(value) => `${String(value)} min`}
+   823→   823→            />
+   824→   824→            <Legend wrapperStyle={{ fontSize: 12 }} />
+   825→   825→            <Line
+   826→   826→              type="monotone"
+   827→   827→              dataKey="without"
+   828→   828→              name="Without corridor"
+   829→   829→              stroke="#ef4444"
+   830→   830→              strokeWidth={2.5}
+   831→   831→              dot={{ r: 3 }}
+   832→   832→            />
+   833→   833→            <Line
+   834→   834→              type="monotone"
+   835→   835→              dataKey="with"
+   836→   836→              name="With corridor"
+   837→   837→              stroke="#10b981"
+   838→   838→              strokeWidth={2.5}
+   839→   839→              dot={{ r: 3 }}
+   840→   840→            />
+   841→   841→          </LineChart>
+   842→   842→        </ResponsiveContainer>
+   843→   843→      </div>
+   844→   844→    </Card>
+   845→   845→  );
+   846→   846→}
+   847→   847→

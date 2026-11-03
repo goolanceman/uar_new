@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import {
   ArrowRight,
   Bell,
@@ -8,29 +16,41 @@ import {
   CheckCheck,
   HandCoins,
   HeartHandshake,
+  Landmark,
   PawPrint,
   ReceiptText,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import { get, patch } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
-import { financialYear, formatINR, formatDate } from "@/lib/format";
+import { formatINR, formatINRCompact, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import {
+  asArray,
+  currentFyLabel,
+  estimateDeduction,
+  fyMonthBuckets,
+  fyStartYear,
+  fyTimestamps,
+  is80gEligible,
+  openReceipt,
+} from "./portal-utils";
 
 interface Donation {
   id: string;
   receiptNumber: string;
   amount: number;
   category: string;
+  paymentMethod: string;
   paymentStatus: string;
   createdAt: string;
   campaign?: { title: string } | null;
@@ -44,6 +64,8 @@ interface Pledge {
 
 interface AnimalPledge {
   id: string;
+  amount: number;
+  frequency: string;
   status: string;
 }
 
@@ -51,28 +73,8 @@ interface AppNotification {
   id: string;
   title: string;
   message: string;
-  type?: string;
   isRead: boolean;
   createdAt: string;
-  actionUrl?: string | null;
-}
-
-function asArray<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === "object" && Array.isArray((data as { data?: unknown }).data))
-    return (data as { data: T[] }).data;
-  if (data && typeof data === "object" && Array.isArray((data as { notifications?: unknown }).notifications))
-    return (data as { notifications: T[] }).notifications;
-  return [];
-}
-
-/** Current FY window (Apr → Mar) as timestamps. */
-function fyWindow(d = new Date()): { start: number; end: number } {
-  const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
-  return {
-    start: new Date(y, 3, 1).getTime(),
-    end: new Date(y + 1, 2, 31, 23, 59, 59).getTime(),
-  };
 }
 
 const QUICK_ACTIONS = [
@@ -85,7 +87,7 @@ const QUICK_ACTIONS = [
   },
   {
     key: "causes",
-    title: "Adopt a patient",
+    title: "Adopt a medicine",
     desc: "Fund monthly medicines from ₹100/mo",
     icon: HeartHandshake,
     to: "/donor/causes",
@@ -93,13 +95,13 @@ const QUICK_ACTIONS = [
   {
     key: "animals",
     title: "Sponsor an animal",
-    desc: "Food, care & shelter at our shelter",
+    desc: "Food, care & shelter at the UAR shelter",
     icon: PawPrint,
     to: "/donor/animals",
   },
   {
     key: "receipts",
-    title: "View receipts",
+    title: "Download receipts",
     desc: "80G tax receipts & certificates",
     icon: ReceiptText,
     to: "/donor/receipts",
@@ -110,39 +112,47 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
   const [donations, setDonations] = useState<Donation[]>([]);
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [animalPledges, setAnimalPledges] = useState<AnimalPledge[]>([]);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [pan, setPan] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifLoading, setNotifLoading] = useState(true);
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
+
+  const fy = fyStartYear();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadFailed(false);
+    try {
+      const [d, me, p, a] = await Promise.all([
+        get<unknown>("/api/donations?mine=1"),
+        get<{ user?: { pan?: string | null } | null }>("/api/auth/me").catch(() => null),
+        get<unknown>("/api/causes/pledges?mine=1").catch(() => []),
+        get<unknown>("/api/animals/pledges?mine=1").catch(() => []),
+      ]);
+      setDonations(asArray<Donation>(d));
+      setPledges(asArray<Pledge>(p));
+      setAnimalPledges(asArray<AnimalPledge>(a));
+      setPan(me?.user?.pan ?? null);
+    } catch (e) {
+      setLoadFailed(true);
+      toast.error(e instanceof Error ? e.message : "Could not load your dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [d, p, a] = await Promise.all([
-          get<unknown>("/api/donations?mine=1"),
-          get<unknown>("/api/causes/pledges?mine=1").catch(() => []),
-          get<unknown>("/api/animals/pledges?mine=1").catch(() => []),
-        ]);
-        if (!alive) return;
-        setDonations(asArray<Donation>(d));
-        setPledges(asArray<Pledge>(p));
-        setAnimalPledges(asArray<AnimalPledge>(a));
-      } catch {
-        // individual views surface detailed errors
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    load();
+  }, [load]);
 
   const loadNotifications = useCallback(async () => {
     setNotifLoading(true);
     try {
-      const data = await get<unknown>("/api/notifications?limit=3");
+      const data = await get<unknown>("/api/notifications?limit=5");
       setNotifications(asArray<AppNotification>(data));
     } catch {
       setNotifications([]);
@@ -160,9 +170,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
     setMarkingId(n.id);
     try {
       await patch("/api/notifications", { id: n.id, isRead: true });
-      setNotifications((prev) =>
-        prev.map((x) => (x.id === n.id ? { ...x, isRead: true } : x))
-      );
+      setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, isRead: true } : x)));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not mark as read");
     } finally {
@@ -170,98 +178,248 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
     }
   };
 
+  const markAllRead = async () => {
+    setMarkingAll(true);
+    try {
+      await patch("/api/notifications", { all: true });
+      setNotifications((prev) => prev.map((x) => ({ ...x, isRead: true })));
+      toast.success("All notifications marked read");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not mark all as read");
+    } finally {
+      setMarkingAll(false);
+    }
+  };
+
   /* ------------------------------ aggregates ------------------------------ */
-  const completed = donations.filter((d) => d.paymentStatus === "COMPLETED");
-  const totalDonated = completed.reduce((s, d) => s + (d.amount || 0), 0);
-  const fy = fyWindow();
-  const fyTotal = completed
-    .filter((d) => {
+  const completed = useMemo(() => donations.filter((d) => d.paymentStatus === "COMPLETED"), [donations]);
+  const totalDonated = useMemo(() => completed.reduce((s, d) => s + (d.amount || 0), 0), [completed]);
+  const { start: fyStart, end: fyEnd } = useMemo(() => fyTimestamps(fy), [fy]);
+  const fyDonations = useMemo(
+    () => donations.filter((d) => {
       const t = new Date(d.createdAt).getTime();
-      return t >= fy.start && t <= fy.end;
-    })
-    .reduce((s, d) => s + (d.amount || 0), 0);
-  const activePledges = pledges.filter((p) => p.status === "ACTIVE");
+      return t >= fyStart && t <= fyEnd;
+    }),
+    [donations, fyStart, fyEnd]
+  );
+  const fyTotal = useMemo(
+    () => fyDonations.filter((d) => d.paymentStatus === "COMPLETED").reduce((s, d) => s + (d.amount || 0), 0),
+    [fyDonations]
+  );
+  const fyEligible = useMemo(() => fyDonations.filter(is80gEligible), [fyDonations]);
+  const taxSaved = useMemo(() => estimateDeduction(fyDonations), [fyDonations]);
+  const trend = useMemo(() => fyMonthBuckets(fy, donations), [fy, donations]);
+
+  const activePledges = useMemo(() => pledges.filter((p) => p.status === "ACTIVE"), [pledges]);
   const monthlyPledges = activePledges.reduce((s, p) => s + (p.amountPerMonth || 0), 0);
-  const activeAnimalPledges = animalPledges.filter((p) => p.status === "ACTIVE").length;
+  const activeAnimalPledges = animalPledges.filter((p) => p.status === "ACTIVE");
+  const animalMonthly = activeAnimalPledges
+    .filter((p) => p.frequency === "MONTHLY")
+    .reduce((s, p) => s + (p.amount || 0), 0);
+
+  const receiptsReady = completed.filter((d) => d.receiptNumber).length;
+  const recent = donations.slice(0, 3);
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
 
   /* --------------------------- impact snapshot ---------------------------- */
   const byCategory = (cat: string) =>
     completed.filter((d) => d.category === cat).reduce((s, d) => s + (d.amount || 0), 0);
   const kits = Math.floor(byCategory("FOOD_DISTRIBUTION") / 500);
-  const vehicles = Math.floor(
-    (byCategory("EMERGENCY") + byCategory("SAFETY") + byCategory("MOBILITY")) / 120
-  );
   const medDays = Math.floor(byCategory("MEDICAL") / 40);
   const animalMeals = Math.floor(byCategory("ANIMAL") / 60);
   const padPacks = Math.floor(byCategory("SANITARY_PADS") / 150);
   const impactBits: string[] = [];
   if (kits > 0) impactBits.push(`assembled ~${kits} ration kit${kits === 1 ? "" : "s"}`);
-  if (vehicles > 0) impactBits.push(`alerted ~${vehicles} vehicle${vehicles === 1 ? "" : "s"} along the green corridor`);
   if (medDays > 0) impactBits.push(`funded ~${medDays} day${medDays === 1 ? "" : "s"} of medicine`);
-  if (padPacks > 0) impactBits.push(`sent ~${padPacks} pad pack${padPacks === 1 ? "" : "s"} to schools`);
   if (animalMeals > 0) impactBits.push(`fed ~${animalMeals} meal${animalMeals === 1 ? "" : "s"} at the shelter`);
+  if (padPacks > 0) impactBits.push(`sent ~${padPacks} pad pack${padPacks === 1 ? "" : "s"} to schools`);
   if (activePledges.length > 0)
-    impactBits.push(
-      `keep ${activePledges.length} patient${activePledges.length === 1 ? "" : "s"} on monthly medicines`
-    );
-  if (activeAnimalPledges > 0)
-    impactBits.push(`sponsor${activeAnimalPledges === 1 ? "s" : ""} ${activeAnimalPledges} shelter friend${activeAnimalPledges === 1 ? "" : "s"}`);
+    impactBits.push(`keep${activePledges.length === 1 ? "s" : ""} ${activePledges.length} patient${activePledges.length === 1 ? "" : "s"} on monthly medicines`);
+  if (activeAnimalPledges.length > 0)
+    impactBits.push(`sponsor${activeAnimalPledges.length === 1 ? "s" : ""} ${activeAnimalPledges.length} shelter friend${activeAnimalPledges.length === 1 ? "" : "s"}`);
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-
-  const openReceipt = (receiptNumber: string) => {
-    window.open(`/api/receipts/${encodeURIComponent(receiptNumber)}/html`, "_blank", "noopener");
-  };
+  const chartHasData = trend.some((b) => b.amount > 0);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title={`${greet}, ${user.name.split(" ")[0]} 🙏`}
         description="Thank you for powering United Angel Reach — every rupee reaches the ground."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11 gap-1.5 sm:min-h-9"
+            onClick={load}
+            aria-label="Refresh dashboard"
+          >
+            <Sparkles className="size-4" aria-hidden="true" />
+            Refresh
+          </Button>
+        }
       />
 
-      {/* Stats */}
+      {loadFailed && (
+        <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-400">
+          Some data could not load — check your connection and refresh.
+        </div>
+      )}
+
+      {/* ------------------------- FY giving hero ------------------------- */}
+      <section
+        aria-label="Giving summary"
+        className="relative overflow-hidden rounded-2xl border bg-card p-6 shadow-sm sm:p-8"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-16 -top-16 size-56 rounded-full bg-emerald-500/10 blur-3xl"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-20 -left-10 size-56 rounded-full bg-teal-500/10 blur-3xl"
+        />
+        <div className="relative flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 space-y-1.5">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              Total given · all time
+            </p>
+            {loading ? (
+              <Skeleton className="h-12 w-56" />
+            ) : (
+              <p className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
+                {formatINR(totalDonated)}
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {formatINR(fyTotal)} in {currentFyLabel()} across {completed.length} completed
+              donation{completed.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            {pan ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+                80G-ready · PAN {pan}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => navigate("/donor/profile")}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 outline-none transition hover:bg-amber-500/20 focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400 sm:min-h-0"
+                aria-label="Add PAN in profile to make receipts 80G-ready"
+              >
+                <Landmark className="size-3.5" aria-hidden="true" />
+                Add PAN for 80G-ready receipts →
+              </button>
+            )}
+            <p className="text-xs text-muted-foreground sm:text-right">
+              Estimated tax saving this FY:{" "}
+              <span className="font-semibold text-primary">{formatINR(taxSaved)}</span>
+              <br className="hidden sm:block" />
+              (50% deduction u/s 80G, indicative)
+            </p>
+          </div>
+        </div>
+
+        {/* Giving trend — 12 monthly buckets */}
+        <div className="relative mt-6">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Giving trend · {currentFyLabel()}
+          </p>
+          {loading ? (
+            <Skeleton className="h-36 w-full rounded-xl" />
+          ) : chartHasData ? (
+            <div className="h-36 w-full" aria-label="Area chart of monthly giving this financial year">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trend} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="donorTrendFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.32} />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                    tickLine={false}
+                    axisLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={52}
+                    tickFormatter={(v: number) => formatINRCompact(v)}
+                  />
+                  <Tooltip
+                    cursor={{ stroke: "var(--border)" }}
+                    formatter={(v) => [formatINR(Number(v)), "Given"]}
+                    contentStyle={{
+                      background: "var(--card)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 10,
+                      fontSize: 12,
+                      color: "var(--card-foreground)",
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="amount"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    fill="url(#donorTrendFill)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No completed gifts in {currentFyLabel()} yet — your trend line begins with the first one.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* --------------------------- stat strip --------------------------- */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="Total given"
-          value={formatINR(totalDonated)}
-          hint={`${completed.length} completed donation${completed.length === 1 ? "" : "s"}`}
-          icon={<HandCoins className="size-5" />}
-          accent="emerald"
-          loading={loading}
-        />
-        <StatCard
-          label="This FY"
-          value={formatINR(fyTotal)}
-          hint={financialYear(new Date())}
-          icon={<CalendarHeart className="size-5" />}
-          accent="teal"
-          loading={loading}
-        />
-        <StatCard
-          label="Active medicine pledges"
+          label="Active pledges"
           value={String(activePledges.length)}
-          hint={
-            activePledges.length > 0
-              ? `${formatINR(monthlyPledges)}/mo commitment`
-              : "Adopt a patient's medicines"
-          }
+          hint={activePledges.length > 0 ? `${formatINR(monthlyPledges)}/mo medicine commitment` : "Adopt a patient's medicines"}
           icon={<HeartHandshake className="size-5" />}
           accent="amber"
           loading={loading}
         />
         <StatCard
           label="Animals sponsored"
-          value={String(activeAnimalPledges)}
-          hint={activeAnimalPledges > 0 ? "At the UAR shelter" : "Meet the animals →"}
+          value={String(activeAnimalPledges.length)}
+          hint={animalMonthly > 0 ? `${formatINR(animalMonthly)}/mo at the shelter` : "Meet the shelter friends"}
           icon={<PawPrint className="size-5" />}
           accent="lime"
           loading={loading}
         />
+        <StatCard
+          label="Est. tax saved"
+          value={formatINR(taxSaved)}
+          hint={`50% of ${formatINR(fyEligible.reduce((s, d) => s + d.amount, 0))} eligible`}
+          icon={<Landmark className="size-5" />}
+          accent="teal"
+          loading={loading}
+        />
+        <StatCard
+          label="Receipts ready"
+          value={String(receiptsReady)}
+          hint={currentFyLabel()}
+          icon={<ReceiptText className="size-5" />}
+          accent="emerald"
+          loading={loading}
+        />
       </div>
 
-      {/* Impact snapshot */}
+      {/* --------------------------- impact note -------------------------- */}
       <SectionCard
         title="Your impact snapshot"
         description="Warm maths from your completed donations and active pledges"
@@ -291,7 +449,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
         )}
       </SectionCard>
 
-      {/* Quick actions */}
+      {/* --------------------------- quick actions ------------------------ */}
       <section aria-label="Quick actions">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Quick actions
@@ -324,7 +482,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
         </div>
       </section>
 
-      {/* Recent donations */}
+      {/* -------------------------- recent donations ---------------------- */}
       <SectionCard
         title="Recent donations"
         description="Your latest contributions — open the 80G receipt for any completed gift"
@@ -345,7 +503,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
               <Skeleton key={i} className="h-14 w-full rounded-lg" />
             ))}
           </div>
-        ) : donations.length === 0 ? (
+        ) : recent.length === 0 ? (
           <EmptyState
             icon={<HandCoins className="size-5" />}
             title="No donations yet"
@@ -358,11 +516,8 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
           </EmptyState>
         ) : (
           <ul className="divide-y">
-            {donations.slice(0, 5).map((d) => (
-              <li
-                key={d.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0"
-              >
+            {recent.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
                     {d.campaign?.title ?? "General fund"}
@@ -371,21 +526,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
                     {d.receiptNumber} · {formatDate(d.createdAt)}
                   </p>
                 </div>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "rounded-full text-[10px]",
-                    d.paymentStatus === "COMPLETED" &&
-                      "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-                    d.paymentStatus === "PENDING" &&
-                      "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-                    (d.paymentStatus === "FAILED" || d.paymentStatus === "REFUNDED") &&
-                      "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
-                  )}
-                >
-                  {d.paymentStatus}
-                </Badge>
-                <p className="w-20 text-right text-sm font-bold">{formatINR(d.amount)}</p>
+                <p className="text-sm font-bold">{formatINR(d.amount)}</p>
                 {d.paymentStatus === "COMPLETED" && d.receiptNumber && (
                   <Button
                     variant="outline"
@@ -404,22 +545,37 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
         )}
       </SectionCard>
 
-      {/* Notifications preview */}
+      {/* --------------------------- notifications ------------------------ */}
       <SectionCard
         title="Notifications"
-        description="Receipts, pledges and platform updates"
+        description={`Receipts, pledges and platform updates${unreadCount > 0 ? ` · ${unreadCount} unread` : ""}`}
         icon={<Bell className="size-5" />}
         actions={
-          <Button
-            variant="ghost"
-            size="sm"
-            className="min-h-11 gap-1 sm:min-h-9"
-            onClick={loadNotifications}
-            aria-label="Refresh notifications"
-          >
-            <CheckCheck className="size-4" aria-hidden="true" />
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11 gap-1 sm:min-h-9"
+              onClick={loadNotifications}
+              aria-label="Refresh notifications"
+            >
+              <Bell className="size-4" aria-hidden="true" />
+              Refresh
+            </Button>
+            {unreadCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="min-h-11 gap-1 sm:min-h-9"
+                onClick={markAllRead}
+                disabled={markingAll}
+                aria-label="Mark all notifications as read"
+              >
+                <CheckCheck className="size-4" aria-hidden="true" />
+                Mark all read
+              </Button>
+            )}
+          </div>
         }
       >
         {notifLoading ? (
@@ -434,7 +590,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
             pledges update.
           </p>
         ) : (
-          <ul className="divide-y">
+          <ul className="max-h-96 divide-y overflow-y-auto pr-1 scrollbar-thin">
             {notifications.map((n) => (
               <li key={n.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
                 <span
@@ -449,9 +605,7 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
                     {n.title}
                   </p>
                   <p className="line-clamp-2 text-xs text-muted-foreground">{n.message}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {formatDate(n.createdAt)}
-                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{formatDate(n.createdAt)}</p>
                 </div>
                 {!n.isRead && (
                   <Button
@@ -471,6 +625,11 @@ export default function DonorOverview({ user }: { user: SessionUser }) {
           </ul>
         )}
       </SectionCard>
+
+      <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+        <CalendarHeart className="size-3.5" aria-hidden="true" />
+        Every completed gift earns an 80G receipt — see the Tax Centre for FY statements.
+      </p>
     </div>
   );
 }

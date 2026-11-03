@@ -6,6 +6,7 @@ import { Link, useRoute } from "@/lib/router";
 import { get, post } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { formatINR } from "@/lib/format";
+import { emailRule, panRule, phoneRule } from "@/lib/validators";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -36,6 +37,7 @@ import {
   type DonationTier,
 } from "@/components/public/campaign-data";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Banknote,
@@ -53,6 +55,7 @@ import {
   Loader2,
   Lock,
   QrCode,
+  Receipt,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -75,6 +78,7 @@ interface LiveCampaign {
   icon?: string | null;
   accent?: string | null;
   status?: string | null;
+  minDonation?: number | null;
 }
 
 interface RecentDonation {
@@ -123,7 +127,11 @@ const PAYMENT_METHODS = [
   { value: "RAZORPAY", label: "Card / Netbanking (gateway)", icon: CreditCard },
   { value: "BANK_TRANSFER", label: "Bank transfer (NEFT / IMPS)", icon: Building2 },
   { value: "CASH", label: "Cash via volunteer collection", icon: Banknote },
+  { value: "CHEQUE", label: "Cheque / demand draft", icon: Receipt },
 ];
+
+/** Offline/manual methods — backend records these as PENDING until staff verify. */
+const OFFLINE_METHODS = ["CASH", "BANK_TRANSFER", "CHEQUE"];
 
 const WIZARD_STEPS = [
   { n: 1, label: "Choose your gift", icon: Gift },
@@ -131,9 +139,6 @@ const WIZARD_STEPS = [
   { n: 3, label: "Payment", icon: Wallet },
   { n: 4, label: "Thank you", icon: CheckCircle2 },
 ];
-
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -239,6 +244,16 @@ export function DonatePage() {
     ? Number(customAmount) || 0
     : amount;
 
+  /** Campaign-specific minimum gift (falls back to the ₹10 floor). */
+  const minDonation =
+    selected?.minDonation && Number(selected.minDonation) > 0
+      ? Number(selected.minDonation)
+      : null;
+  const minAmount = minDonation ?? 10;
+  const sliderMin = Math.max(SLIDER_MIN, minAmount);
+  const isOfflineMethod = OFFLINE_METHODS.includes(paymentMethod);
+  const cashOverLimit = paymentMethod === "CASH" && effectiveAmount > 2000;
+
   const upiId = org?.upiId || ORG_DEFAULTS.upiId;
   const upiLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
     "UnitedAngelReach"
@@ -247,20 +262,22 @@ export function DonatePage() {
   /* ---------------- step validation ---------------- */
   const validateStep = (s: number): boolean => {
     const e: Record<string, string> = {};
-    if (s === 1) {
-      if (!Number.isFinite(effectiveAmount) || effectiveAmount < 10)
-        e.amount = "Please choose at least ₹10 — the minimum we can process.";
-      if (effectiveAmount > SLIDER_MAX)
+    if (s === 1 || s === 2) {
+      if (!Number.isFinite(effectiveAmount) || effectiveAmount < minAmount)
+        e.amount = minDonation
+          ? `${selected?.title ?? "This campaign"} has a minimum gift of ${formatINR(minDonation)} — please adjust your amount.`
+          : "Please choose at least ₹10 — the minimum we can process.";
+      else if (effectiveAmount > SLIDER_MAX)
         e.amount = `For gifts above ${formatINR(SLIDER_MAX)}, please contact care@unitedangelreach.org.`;
     }
     if (s === 2) {
       if (name.trim().length < 2) e.name = "Please enter your full name.";
-      if (!EMAIL_RE.test(email.trim()))
-        e.email = "A valid email is needed for your 80G receipt.";
-      if (phone.trim() && phone.replace(/\D/g, "").length !== 10)
-        e.phone = "Phone must be exactly 10 digits (or leave it blank).";
-      if (pan.trim() && !PAN_RE.test(pan.trim().toUpperCase()))
-        e.pan = "PAN looks invalid — format is ABCDE1234F.";
+      const emailErr = emailRule(false)(email);
+      if (emailErr) e.email = "A valid email is needed for your 80G receipt.";
+      const phoneErr = phoneRule(true)(phone);
+      if (phoneErr) e.phone = phoneErr;
+      const panErr = panRule(true)(pan);
+      if (panErr) e.pan = "PAN looks invalid — format is ABCDE1234F.";
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -402,6 +419,23 @@ export function DonatePage() {
             </div>
           </div>
 
+          {/* Offline methods: pending-verification note */}
+          {OFFLINE_METHODS.includes(paymentMethod) && (
+            <div
+              className="mx-auto mt-4 max-w-sm rounded-lg border border-teal-500/25 bg-teal-500/10 p-3.5 text-left text-xs leading-relaxed"
+              role="status"
+            >
+              <p className="flex items-center gap-1.5 font-semibold text-teal-700 dark:text-teal-300">
+                <ShieldCheck className="size-3.5" aria-hidden /> Verified within 2 working days
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Offline gifts are recorded as pending — our team verifies the
+                payment and issues your 80G receipt after verification. We&rsquo;ll
+                email {email.trim() || "you"} the moment it&rsquo;s confirmed.
+              </p>
+            </div>
+          )}
+
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             <Button
               className="bg-emerald-600 hover:bg-emerald-700"
@@ -425,14 +459,23 @@ export function DonatePage() {
             </Button>
           </div>
 
-          <p className="mx-auto mt-6 max-w-md text-xs leading-relaxed text-muted-foreground">
-            <ShieldCheck className="mr-1 inline size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
-            Donations are eligible for deduction under Section 80G.{" "}
-            {pan.trim()
-              ? "Your PAN is on the receipt — it's tax-ready."
-              : "Add PAN next time and the receipt is issued tax-ready."}{" "}
-            A copy is on its way to {email.trim() || "your email"}.
-          </p>
+          {paymentMethod === "CASH" && receipt.amount > 2000 ? (
+            <p className="mx-auto mt-6 max-w-md rounded-lg border border-amber-500/25 bg-amber-500/10 p-3.5 text-left text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+              <AlertTriangle className="mr-1 inline size-3.5" aria-hidden />
+              <strong>Cash donations above ₹2,000 are not eligible for 80G deduction</strong>{" "}
+              (Income Tax Act). This receipt is valid as your donation record — for a
+              tax-deductible gift, choose UPI, bank transfer or cheque next time.
+            </p>
+          ) : (
+            <p className="mx-auto mt-6 max-w-md text-xs leading-relaxed text-muted-foreground">
+              <ShieldCheck className="mr-1 inline size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+              Donations are eligible for deduction under Section 80G.{" "}
+              {pan.trim()
+                ? "Your PAN is on the receipt — it's tax-ready."
+                : "Add PAN next time and the receipt is issued tax-ready."}{" "}
+              A copy is on its way to {email.trim() || "your email"}.
+            </p>
+          )}
         </Card>
       </Section>
     );
@@ -599,7 +642,18 @@ export function DonatePage() {
 
                     {/* Preset amounts */}
                     <div>
-                      <Label className="text-sm font-semibold">Pick an amount</Label>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Label className="text-sm font-semibold">Pick an amount</Label>
+                        {minDonation !== null && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-300"
+                          >
+                            <Info className="mr-1 size-3" aria-hidden />
+                            Minimum {formatINR(minDonation)} for {selected?.title}
+                          </Badge>
+                        )}
+                      </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
                         {PRESETS.map((p) => {
                           const active = !customAmount && amount === p;
@@ -641,7 +695,7 @@ export function DonatePage() {
                             id="custom-amount"
                             type="number"
                             inputMode="numeric"
-                            min={10}
+                            min={sliderMin}
                             step={100}
                             value={customAmount}
                             onChange={(e) => {
@@ -657,9 +711,9 @@ export function DonatePage() {
                       </div>
                       <Slider
                         value={[
-                          Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, amount || SLIDER_MIN)),
+                          Math.min(SLIDER_MAX, Math.max(sliderMin, amount || sliderMin)),
                         ]}
-                        min={SLIDER_MIN}
+                        min={sliderMin}
                         max={SLIDER_MAX}
                         step={SLIDER_STEP}
                         onValueChange={(v) => {
@@ -746,6 +800,15 @@ export function DonatePage() {
                         Not sure? The general fund is routed weekly to the
                         highest-need programme — you&rsquo;ll see exactly where it went.
                       </p>
+                      {errors.amount && (
+                        <p
+                          id="amount-error"
+                          className="text-xs font-medium text-red-600 dark:text-red-400"
+                          role="alert"
+                        >
+                          {errors.amount}
+                        </p>
+                      )}
                     </div>
 
                     <div className="grid gap-4 sm:grid-cols-2">
@@ -805,17 +868,37 @@ export function DonatePage() {
                           placeholder="ABCDE1234F"
                           maxLength={10}
                           className="font-mono"
-                          aria-describedby={errors.pan ? "pan-error" : undefined}
+                          aria-describedby={errors.pan ? "pan-error" : "pan-hint"}
                         />
                         {errors.pan ? (
-                          <p id="pan-error" className="text-xs font-medium text-red-600 dark:text-red-400">
+                          <p id="pan-error" className="text-xs font-medium text-red-600 dark:text-red-400" role="alert">
                             {errors.pan}
                           </p>
-                        ) : null}
+                        ) : (
+                          <p id="pan-hint" className="text-xs text-muted-foreground">
+                            Required for 80G tax benefits. Format ABCDE1234F.
+                          </p>
+                        )}
                       </div>
                     </div>
 
                     {/* 80G explainer */}
+                    {cashOverLimit && (
+                      <div
+                        className="flex items-start gap-2.5 rounded-lg border border-amber-500/25 bg-amber-500/10 p-4"
+                        role="alert"
+                      >
+                        <AlertTriangle
+                          className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-400"
+                          aria-hidden
+                        />
+                        <p className="text-sm leading-relaxed text-amber-800 dark:text-amber-300">
+                          Cash donations above ₹2,000 are not eligible for 80G deduction
+                          (Income Tax Act). For a tax-deductible gift, choose UPI, bank
+                          transfer or cheque on the next step.
+                        </p>
+                      </div>
+                    )}
                     <div className="flex items-start gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
                       <Landmark
                         className="mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
@@ -880,6 +963,23 @@ export function DonatePage() {
                         {selected ? `to ${selected.title}` : "to the general fund"}.
                       </p>
                     </div>
+
+                    {/* Offline methods: pending-verification banner */}
+                    {isOfflineMethod && (
+                      <div
+                        className="flex items-start gap-2.5 rounded-lg border border-teal-500/25 bg-teal-500/10 p-3.5"
+                        role="status"
+                      >
+                        <Info
+                          className="mt-0.5 size-4 shrink-0 text-teal-600 dark:text-teal-400"
+                          aria-hidden
+                        />
+                        <p className="text-sm leading-relaxed text-foreground">
+                          Offline gifts are verified by our team within 2 working days —
+                          your 80G receipt is issued after verification.
+                        </p>
+                      </div>
+                    )}
 
                     {/* Method select */}
                     <div className="space-y-1.5">
@@ -1027,6 +1127,31 @@ export function DonatePage() {
                           numbered receipt book. You&rsquo;ll get a call within 48 hours to fix
                           a slot.
                         </p>
+                        {effectiveAmount > 2000 && (
+                          <p className="mt-3 flex items-start gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 p-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                            Cash donations above ₹2,000 are not eligible for 80G deduction
+                            (Income Tax Act). For a tax-deductible gift, use UPI, bank
+                            transfer or cheque.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {paymentMethod === "CHEQUE" && (
+                      <div className="rounded-xl border p-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="flex size-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                            <Receipt className="size-5" aria-hidden />
+                          </span>
+                          <p className="font-bold">Cheque / demand draft</p>
+                        </div>
+                        <p className="mt-3 text-muted-foreground">
+                          Draw the cheque in favour of <strong>United Angel Reach Trust</strong> —
+                          a volunteer collects it with a numbered acknowledgement, or courier it
+                          to our Bengaluru office. It&rsquo;s verified within 2 working days of
+                          receipt.
+                        </p>
                       </div>
                     )}
 
@@ -1132,9 +1257,13 @@ export function DonatePage() {
             {/* Trust badges */}
             <div className="grid grid-cols-3 gap-2 text-center">
               {[
-                { icon: Landmark, label: "80G eligible" },
+                paymentMethod === "CASH" && effectiveAmount > 2000
+                  ? { icon: AlertTriangle, label: "No 80G (cash rule)" }
+                  : { icon: Landmark, label: "80G eligible" },
                 { icon: ShieldCheck, label: "Secure" },
-                { icon: Zap, label: "Immediate impact" },
+                isOfflineMethod
+                  ? { icon: Receipt, label: "Verified in 2 days" }
+                  : { icon: Zap, label: "Immediate impact" },
               ].map((b) => (
                 <div
                   key={b.label}

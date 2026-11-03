@@ -1,0 +1,1232 @@
+     1→"use client";
+     2→
+     3→import * as React from "react";
+     4→import { useEffect, useMemo, useState } from "react";
+     5→import { Link, useRoute } from "@/lib/router";
+     6→import { get, post } from "@/lib/api-client";
+     7→import { cn } from "@/lib/utils";
+     8→import { formatINR } from "@/lib/format";
+     9→import { useAuth } from "@/hooks/use-auth";
+    10→import { toast } from "sonner";
+    11→import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+    12→import { Button } from "@/components/ui/button";
+    13→import { Card } from "@/components/ui/card";
+    14→import { Badge } from "@/components/ui/badge";
+    15→import { Input } from "@/components/ui/input";
+    16→import { Label } from "@/components/ui/label";
+    17→import { Textarea } from "@/components/ui/textarea";
+    18→import { Switch } from "@/components/ui/switch";
+    19→import { Skeleton } from "@/components/ui/skeleton";
+    20→import { Separator } from "@/components/ui/separator";
+    21→import { Slider } from "@/components/ui/slider";
+    22→import {
+    23→  Select,
+    24→  SelectContent,
+    25→  SelectItem,
+    26→  SelectTrigger,
+    27→  SelectValue,
+    28→} from "@/components/ui/select";
+    29→import { Section, EmptyState, CampaignIcon } from "@/components/public/shared";
+    30→import {
+    31→  CAMPAIGN_CONTENT,
+    32→  DONATION_TIERS,
+    33→  GENERIC_IMPACT_HINTS,
+    34→  ORG_DEFAULTS,
+    35→  accentSoft,
+    36→  type DonationTier,
+    37→} from "@/components/public/campaign-data";
+    38→import {
+    39→  ArrowLeft,
+    40→  ArrowRight,
+    41→  Banknote,
+    42→  Building2,
+    43→  Check,
+    44→  CheckCircle2,
+    45→  Copy,
+    46→  CreditCard,
+    47→  Download,
+    48→  Gift,
+    49→  HandCoins,
+    50→  Heart,
+    51→  Info,
+    52→  Landmark,
+    53→  Loader2,
+    54→  Lock,
+    55→  QrCode,
+    56→  ShieldCheck,
+    57→  Smartphone,
+    58→  Sparkles,
+    59→  User,
+    60→  Wallet,
+    61→  Zap,
+    62→} from "lucide-react";
+    63→
+    64→/* ------------------------------------------------------------------ */
+    65→/* Types & constants                                                   */
+    66→/* ------------------------------------------------------------------ */
+    67→
+    68→interface LiveCampaign {
+    69→  id: string;
+    70→  title: string;
+    71→  slug?: string | null;
+    72→  tagline?: string | null;
+    73→  targetAmount: number;
+    74→  raisedAmount: number;
+    75→  icon?: string | null;
+    76→  accent?: string | null;
+    77→  status?: string | null;
+    78→}
+    79→
+    80→interface RecentDonation {
+    81→  id: string;
+    82→  donorName: string;
+    83→  amount: number;
+    84→  isAnonymous?: boolean;
+    85→  type?: string;
+    86→  createdAt?: string;
+    87→  campaign?: { title?: string } | null;
+    88→}
+    89→
+    90→interface ReceiptInfo {
+    91→  receiptNumber: string;
+    92→  amount: number;
+    93→  type: string;
+    94→  campaignTitle?: string | null;
+    95→}
+    96→
+    97→interface OrgPublic {
+    98→  orgName?: string;
+    99→  upiId?: string;
+   100→  org80g?: string;
+   101→  orgEmail?: string;
+   102→}
+   103→
+   104→const PRESETS = [500, 1000, 2500, 5000, 10000];
+   105→const SLIDER_MIN = 100;
+   106→const SLIDER_MAX = 100000;
+   107→const SLIDER_STEP = 100;
+   108→
+   109→const CATEGORY_BY_SLUG: Record<string, string> = {
+   110→  "anti-drug": "AWARENESS",
+   111→  "cyber-crime": "SAFETY",
+   112→  "women-safety": "SAFETY",
+   113→  "child-safety": "SAFETY",
+   114→  "medicine-adoption": "MEDICAL",
+   115→  "animal-welfare": "ANIMAL",
+   116→  "green-corridor": "MOBILITY",
+   117→  "ration-kits": "FOOD_DISTRIBUTION",
+   118→  "sanitary-pads": "SANITARY_PADS",
+   119→};
+   120→
+   121→const PAYMENT_METHODS = [
+   122→  { value: "UPI", label: "UPI — GPay / PhonePe / Paytm", icon: Smartphone },
+   123→  { value: "RAZORPAY", label: "Card / Netbanking (gateway)", icon: CreditCard },
+   124→  { value: "BANK_TRANSFER", label: "Bank transfer (NEFT / IMPS)", icon: Building2 },
+   125→  { value: "CASH", label: "Cash via volunteer collection", icon: Banknote },
+   126→];
+   127→
+   128→const WIZARD_STEPS = [
+   129→  { n: 1, label: "Choose your gift", icon: Gift },
+   130→  { n: 2, label: "About you", icon: User },
+   131→  { n: 3, label: "Payment", icon: Wallet },
+   132→  { n: 4, label: "Thank you", icon: CheckCircle2 },
+   133→];
+   134→
+   135→const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+   136→const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+   137→
+   138→/* ------------------------------------------------------------------ */
+   139→/* Small helpers                                                       */
+   140→/* ------------------------------------------------------------------ */
+   141→
+   142→async function copyText(text: string, label = "Copied to clipboard") {
+   143→  try {
+   144→    await navigator.clipboard.writeText(text);
+   145→    toast.success(label);
+   146→  } catch {
+   147→    toast.error("Copy failed — select the text manually");
+   148→  }
+   149→}
+   150→
+   151→/** Impact hint for the current amount + campaign (from campaign-data tiers). */
+   152→function impactHint(amount: number, slug: string | null | undefined): string {
+   153→  const tiers: DonationTier[] = slug
+   154→    ? (DONATION_TIERS[slug] ?? GENERIC_IMPACT_HINTS)
+   155→    : GENERIC_IMPACT_HINTS;
+   156→  const sorted = [...tiers].sort((a, b) => b.amount - a.amount);
+   157→  const hit = sorted.find((t) => amount >= t.amount) ?? sorted[sorted.length - 1];
+   158→  return hit?.impact ?? "every rupee is QR-traced to a doorstep";
+   159→}
+   160→
+   161→/* ================================================================== */
+   162→/* DonatePage — guided 4-step wizard                                   */
+   163→/* ================================================================== */
+   164→
+   165→export function DonatePage() {
+   166→  const { query } = useRoute();
+   167→  const { user } = useAuth();
+   168→  const reduceMotion = useReducedMotion();
+   169→
+   170→  const [org, setOrg] = useState<OrgPublic | null>(null);
+   171→  const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
+   172→  const [recent, setRecent] = useState<RecentDonation[] | null>(null);
+   173→
+   174→  const [step, setStep] = useState(1);
+   175→  const [dir, setDir] = useState(1);
+   176→  const [errors, setErrors] = useState<Record<string, string>>({});
+   177→
+   178→  // Step 1
+   179→  const [giftType, setGiftType] = useState<"ONE_TIME" | "RECURRING">("ONE_TIME");
+   180→  const [amount, setAmount] = useState<number>(1000);
+   181→  const [customAmount, setCustomAmount] = useState<string>("");
+   182→
+   183→  // Step 2
+   184→  const [campaignId, setCampaignId] = useState<string>("general");
+   185→  const [name, setName] = useState("");
+   186→  const [email, setEmail] = useState("");
+   187→  const [phone, setPhone] = useState("");
+   188→  const [pan, setPan] = useState("");
+   189→  const [message, setMessage] = useState("");
+   190→  const [anonymous, setAnonymous] = useState(false);
+   191→
+   192→  // Step 3
+   193→  const [paymentMethod, setPaymentMethod] = useState("UPI");
+   194→
+   195→  const [busy, setBusy] = useState(false);
+   196→  const [receipt, setReceipt] = useState<ReceiptInfo | null>(null);
+   197→
+   198→  const slugFromUrl = query.get("campaign");
+   199→
+   200→  /* ---------------- data loads ---------------- */
+   201→  useEffect(() => {
+   202→    let alive = true;
+   203→    get<OrgPublic>("/api/settings/public")
+   204→      .then((d) => alive && setOrg(d ?? null))
+   205→      .catch(() => {});
+   206→    get<LiveCampaign[]>("/api/campaigns")
+   207→      .then((d) => alive && setCampaigns(Array.isArray(d) ? d : []))
+   208→      .catch(() => alive && setCampaigns([]));
+   209→    get<RecentDonation[]>("/api/donations?public=1")
+   210→      .then((d) => alive && setRecent(Array.isArray(d) ? d : []))
+   211→      .catch(() => alive && setRecent([]));
+   212→    return () => {
+   213→      alive = false;
+   214→    };
+   215→  }, []);
+   216→
+   217→  // Pre-select campaign from ?campaign=
+   218→  useEffect(() => {
+   219→    if (!slugFromUrl || !campaigns) return;
+   220→    const found = campaigns.find((c) => c.slug === slugFromUrl);
+   221→    if (found) setCampaignId(found.id);
+   222→  }, [slugFromUrl, campaigns]);
+   223→
+   224→  // Prefill donor details from session
+   225→  useEffect(() => {
+   226→    if (!user) return;
+   227→    setName((n) => n || user.name || "");
+   228→    setEmail((e) => e || user.email || "");
+   229→    setPhone((p) => p || user.phone || "");
+   230→  }, [user]);
+   231→
+   232→  const selected = useMemo(
+   233→    () => campaigns?.find((c) => c.id === campaignId) ?? null,
+   234→    [campaigns, campaignId]
+   235→  );
+   236→  const selectedSlug = selected?.slug ?? null;
+   237→
+   238→  const effectiveAmount = customAmount
+   239→    ? Number(customAmount) || 0
+   240→    : amount;
+   241→
+   242→  const upiId = org?.upiId || ORG_DEFAULTS.upiId;
+   243→  const upiLink = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
+   244→    "UnitedAngelReach"
+   245→  )}&am=${effectiveAmount}&cu=INR&tn=${encodeURIComponent("UAR Donation")}`;
+   246→
+   247→  /* ---------------- step validation ---------------- */
+   248→  const validateStep = (s: number): boolean => {
+   249→    const e: Record<string, string> = {};
+   250→    if (s === 1) {
+   251→      if (!Number.isFinite(effectiveAmount) || effectiveAmount < 10)
+   252→        e.amount = "Please choose at least ₹10 — the minimum we can process.";
+   253→      if (effectiveAmount > SLIDER_MAX)
+   254→        e.amount = `For gifts above ${formatINR(SLIDER_MAX)}, please contact care@unitedangelreach.org.`;
+   255→    }
+   256→    if (s === 2) {
+   257→      if (name.trim().length < 2) e.name = "Please enter your full name.";
+   258→      if (!EMAIL_RE.test(email.trim()))
+   259→        e.email = "A valid email is needed for your 80G receipt.";
+   260→      if (phone.trim() && phone.replace(/\D/g, "").length !== 10)
+   261→        e.phone = "Phone must be exactly 10 digits (or leave it blank).";
+   262→      if (pan.trim() && !PAN_RE.test(pan.trim().toUpperCase()))
+   263→        e.pan = "PAN looks invalid — format is ABCDE1234F.";
+   264→    }
+   265→    setErrors(e);
+   266→    return Object.keys(e).length === 0;
+   267→  };
+   268→
+   269→  const goTo = (next: number) => {
+   270→    setDir(next > step ? 1 : -1);
+   271→    setErrors({});
+   272→    setStep(next);
+   273→    window.scrollTo({ top: 0, behavior: "smooth" });
+   274→  };
+   275→
+   276→  const nextStep = () => {
+   277→    if (!validateStep(step)) return;
+   278→    if (step === 3) {
+   279→      void submit();
+   280→      return;
+   281→    }
+   282→    goTo(step + 1);
+   283→  };
+   284→
+   285→  /* ---------------- submit ---------------- */
+   286→  const submit = async () => {
+   287→    if (!validateStep(2)) {
+   288→      goTo(2);
+   289→      return;
+   290→    }
+   291→    setBusy(true);
+   292→    try {
+   293→      const res = await post<
+   294→        ReceiptInfo & { campaign?: { title?: string } | null }
+   295→      >("/api/donations", {
+   296→        donorName: name.trim(),
+   297→        donorEmail: email.trim(),
+   298→        donorPhone: phone.trim() || undefined,
+   299→        amount: effectiveAmount,
+   300→        type: giftType,
+   301→        category: selected
+   302→          ? (CATEGORY_BY_SLUG[selected.slug ?? ""] ?? "GENERAL")
+   303→          : "GENERAL",
+   304→        paymentMethod,
+   305→        campaignId: selected ? selected.id : undefined,
+   306→        message: message.trim() || undefined,
+   307→        isAnonymous: anonymous,
+   308→        pan: pan.trim() || undefined,
+   309→      });
+   310→      setReceipt({
+   311→        receiptNumber: res.receiptNumber,
+   312→        amount: res.amount,
+   313→        type: res.type,
+   314→        campaignTitle: res.campaign?.title ?? selected?.title ?? "General fund",
+   315→      });
+   316→      goTo(4);
+   317→      toast.success(`Thank you! Receipt ${res.receiptNumber} generated.`);
+   318→    } catch (err) {
+   319→      toast.error(
+   320→        err instanceof Error ? err.message : "Donation failed — please try again"
+   321→      );
+   322→    } finally {
+   323→      setBusy(false);
+   324→    }
+   325→  };
+   326→
+   327→  const resetAll = () => {
+   328→    setReceipt(null);
+   329→    setAmount(1000);
+   330→    setCustomAmount("");
+   331→    setGiftType("ONE_TIME");
+   332→    setMessage("");
+   333→    setAnonymous(false);
+   334→    setPaymentMethod("UPI");
+   335→    setErrors({});
+   336→    goTo(1);
+   337→  };
+   338→
+   339→  const firstName = name.trim().split(" ")[0] || "friend";
+   340→
+   341→  /* ================================================================= */
+   342→  /* THANK YOU (step 4 content, full-page)                             */
+   343→  /* ================================================================= */
+   344→  if (receipt) {
+   345→    return (
+   346→      <Section className="mx-auto max-w-2xl">
+   347→        <Card className="p-8 text-center sm:p-10">
+   348→          <motion.span
+   349→            initial={reduceMotion ? false : { scale: 0, rotate: -30 }}
+   350→            animate={reduceMotion ? {} : { scale: 1, rotate: 0 }}
+   351→            transition={{ type: "spring", stiffness: 260, damping: 16 }}
+   352→            className="mx-auto flex size-20 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-8 ring-emerald-500/10"
+   353→          >
+   354→            <CheckCircle2 className="size-11" aria-hidden />
+   355→          </motion.span>
+   356→          <h1 className="mt-5 text-2xl font-bold tracking-tight sm:text-3xl">
+   357→            Thank you, {firstName}!
+   358→          </h1>
+   359→          <p className="mt-1.5 text-sm text-muted-foreground sm:text-base">
+   360→            Your {receipt.type === "RECURRING" ? "monthly " : ""}
+   361→            gift of{" "}
+   362→            <span className="font-bold text-foreground">
+   363→              {formatINR(receipt.amount)}
+   364→            </span>{" "}
+   365→            is confirmed{receipt.campaignTitle ? ` for ${receipt.campaignTitle}` : ""}.
+   366→          </p>
+   367→
+   368→          <div className="mx-auto mt-6 max-w-sm rounded-xl border bg-muted/40 p-4 text-left text-sm">
+   369→            <div className="flex items-center justify-between gap-2">
+   370→              <span className="text-muted-foreground">Receipt no.</span>
+   371→              <span className="flex items-center gap-1.5">
+   372→                <Badge variant="outline" className="font-mono text-xs">
+   373→                  {receipt.receiptNumber}
+   374→                </Badge>
+   375→                <Button
+   376→                  variant="ghost"
+   377→                  size="icon"
+   378→                  className="size-7"
+   379→                  aria-label="Copy receipt number"
+   380→                  onClick={() => copyText(receipt.receiptNumber, "Receipt number copied")}
+   381→                >
+   382→                  <Copy className="size-3.5" aria-hidden />
+   383→                </Button>
+   384→              </span>
+   385→            </div>
+   386→            <Separator className="my-3" />
+   387→            <div className="flex items-center justify-between">
+   388→              <span className="text-muted-foreground">Amount</span>
+   389→              <span className="font-semibold">{formatINR(receipt.amount)}</span>
+   390→            </div>
+   391→            <div className="mt-2 flex items-center justify-between">
+   392→              <span className="text-muted-foreground">Type</span>
+   393→              <span className="font-semibold">
+   394→                {receipt.type === "RECURRING" ? "Monthly" : "One-time"}
+   395→              </span>
+   396→            </div>
+   397→            <div className="mt-2 flex items-center justify-between gap-2">
+   398→              <span className="text-muted-foreground">Fund</span>
+   399→              <span className="max-w-[55%] truncate text-right font-semibold">
+   400→                {receipt.campaignTitle}
+   401→              </span>
+   402→            </div>
+   403→          </div>
+   404→
+   405→          <div className="mt-6 flex flex-wrap justify-center gap-3">
+   406→            <Button
+   407→              className="bg-emerald-600 hover:bg-emerald-700"
+   408→              onClick={() =>
+   409→                window.open(
+   410→                  `/api/receipts/${encodeURIComponent(receipt.receiptNumber)}/html`,
+   411→                  "_blank",
+   412→                  "noopener"
+   413→                )
+   414→              }
+   415→            >
+   416→              <Download className="size-4" aria-hidden /> Download 80G receipt
+   417→            </Button>
+   418→            <Button variant="outline" onClick={resetAll}>
+   419→              <Heart className="size-4" aria-hidden /> Donate again
+   420→            </Button>
+   421→            <Button variant="ghost" asChild>
+   422→              <Link href="/campaigns">
+   423→                Explore campaigns <ArrowRight className="size-4" aria-hidden />
+   424→              </Link>
+   425→            </Button>
+   426→          </div>
+   427→
+   428→          <p className="mx-auto mt-6 max-w-md text-xs leading-relaxed text-muted-foreground">
+   429→            <ShieldCheck className="mr-1 inline size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   430→            Donations are eligible for deduction under Section 80G.{" "}
+   431→            {pan.trim()
+   432→              ? "Your PAN is on the receipt — it's tax-ready."
+   433→              : "Add PAN next time and the receipt is issued tax-ready."}{" "}
+   434→            A copy is on its way to {email.trim() || "your email"}.
+   435→          </p>
+   436→        </Card>
+   437→      </Section>
+   438→    );
+   439→  }
+   440→
+   441→  /* ================================================================= */
+   442→  /* WIZARD                                                            */
+   443→  /* ================================================================= */
+   444→  const motionProps = reduceMotion
+   445→    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
+   446→    : {
+   447→        initial: { opacity: 0, x: dir * 48 },
+   448→        animate: { opacity: 1, x: 0 },
+   449→        exit: { opacity: 0, x: dir * -48 },
+   450→      };
+   451→
+   452→  return (
+   453→    <Section
+   454→      title="Donate"
+   455→      subtitle="Four quick steps. ≥92% of every rupee reaches programmes, and every kit is QR-traced to a doorstep."
+   456→    >
+   457→      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+   458→        {/* ----------------- Left: wizard ----------------- */}
+   459→        <div className="min-w-0 overflow-hidden">
+   460→          {/* Stepper header */}
+   461→          <nav
+   462→            aria-label="Donation steps"
+   463→            className="mb-5 rounded-xl border bg-card p-3 sm:p-4"
+   464→          >
+   465→            {/* Mobile: compact progress */}
+   466→            <div className="sm:hidden">
+   467→              <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground">
+   468→                <span>
+   469→                  Step {step} of 4 — {WIZARD_STEPS[step - 1].label}
+   470→                </span>
+   471→                <span>{Math.round((step / 4) * 100)}%</span>
+   472→              </div>
+   473→              <div
+   474→                className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+   475→                role="progressbar"
+   476→                aria-valuemin={1}
+   477→                aria-valuemax={4}
+   478→                aria-valuenow={step}
+   479→                aria-label={`Step ${step} of 4`}
+   480→              >
+   481→                <motion.div
+   482→                  className="h-full rounded-full bg-emerald-500"
+   483→                  animate={{ width: `${(step / 4) * 100}%` }}
+   484→                  transition={{ duration: 0.35 }}
+   485→                />
+   486→              </div>
+   487→            </div>
+   488→            {/* Desktop: full stepper */}
+   489→            <ol className="hidden items-center gap-1 sm:flex">
+   490→              {WIZARD_STEPS.map((s, i) => {
+   491→                const done = step > s.n;
+   492→                const active = step === s.n;
+   493→                return (
+   494→                  <React.Fragment key={s.n}>
+   495→                    <li className="flex min-w-0 items-center">
+   496→                      <button
+   497→                        type="button"
+   498→                        disabled={!done}
+   499→                        onClick={() => done && goTo(s.n)}
+   500→                        aria-current={active ? "step" : undefined}
+   501→                        className={cn(
+   502→                          "flex min-h-[44px] items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition",
+   503→                          done && "cursor-pointer hover:bg-accent",
+   504→                          active ? "font-semibold" : "text-muted-foreground"
+   505→                        )}
+   506→                      >
+   507→                        <span
+   508→                          className={cn(
+   509→                            "flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold transition",
+   510→                            done
+   511→                              ? "bg-emerald-600 text-white"
+   512→                              : active
+   513→                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 ring-2 ring-emerald-500/40"
+   514→                                : "bg-muted text-muted-foreground"
+   515→                          )}
+   516→                        >
+   517→                          {done ? <Check className="size-4" aria-hidden /> : s.n}
+   518→                        </span>
+   519→                        <span className="truncate">{s.label}</span>
+   520→                      </button>
+   521→                    </li>
+   522→                    {i < WIZARD_STEPS.length - 1 && (
+   523→                      <li
+   524→                        aria-hidden
+   525→                        className={cn(
+   526→                          "h-0.5 w-6 shrink-0 rounded-full lg:w-10",
+   527→                          step > s.n ? "bg-emerald-500" : "bg-border"
+   528→                        )}
+   529→                      />
+   530→                    )}
+   531→                  </React.Fragment>
+   532→                );
+   533→              })}
+   534→            </ol>
+   535→          </nav>
+   536→
+   537→          {/* Step body */}
+   538→          <Card className="overflow-hidden p-5 sm:p-6">
+   539→            <AnimatePresence mode="wait" initial={false}>
+   540→              <motion.div
+   541→                key={step}
+   542→                {...motionProps}
+   543→                transition={{ duration: 0.35, ease: "easeOut" }}
+   544→              >
+   545→                {/* ============ STEP 1 — Choose your gift ============ */}
+   546→                {step === 1 && (
+   547→                  <div className="space-y-6">
+   548→                    <div>
+   549→                      <h2 className="flex items-center gap-2 text-lg font-bold">
+   550→                        <Gift className="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   551→                        Choose your gift
+   552→                      </h2>
+   553→                      <p className="mt-1 text-sm text-muted-foreground">
+   554→                        One-time help when it&rsquo;s needed — or a monthly commitment that
+   555→                        lets us plan a full year of care.
+   556→                      </p>
+   557→                    </div>
+   558→
+   559→                    {/* Segmented toggle */}
+   560→                    <div
+   561→                      role="radiogroup"
+   562→                      aria-label="Gift frequency"
+   563→                      className="grid grid-cols-2 gap-1.5 rounded-xl border bg-muted/50 p-1.5"
+   564→                    >
+   565→                      {(
+   566→                        [
+   567→                          { v: "ONE_TIME", label: "One-time", hint: "Give once, right now" },
+   568→                          { v: "RECURRING", label: "Monthly", hint: "Sustain a programme" },
+   569→                        ] as const
+   570→                      ).map((opt) => (
+   571→                        <button
+   572→                          key={opt.v}
+   573→                          type="button"
+   574→                          role="radio"
+   575→                          aria-checked={giftType === opt.v}
+   576→                          onClick={() => setGiftType(opt.v)}
+   577→                          className={cn(
+   578→                            "min-h-[52px] rounded-lg px-3 py-2 text-center transition",
+   579→                            giftType === opt.v
+   580→                              ? "bg-background shadow-sm ring-1 ring-emerald-500/40"
+   581→                              : "hover:bg-accent"
+   582→                          )}
+   583→                        >
+   584→                          <span
+   585→                            className={cn(
+   586→                              "block text-sm font-semibold",
+   587→                              giftType === opt.v &&
+   588→                                "text-emerald-600 dark:text-emerald-400"
+   589→                            )}
+   590→                          >
+   591→                            {opt.label}
+   592→                          </span>
+   593→                          <span className="block text-[11px] text-muted-foreground">
+   594→                            {opt.hint}
+   595→                          </span>
+   596→                        </button>
+   597→                      ))}
+   598→                    </div>
+   599→
+   600→                    {/* Preset amounts */}
+   601→                    <div>
+   602→                      <Label className="text-sm font-semibold">Pick an amount</Label>
+   603→                      <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+   604→                        {PRESETS.map((p) => {
+   605→                          const active = !customAmount && amount === p;
+   606→                          return (
+   607→                            <button
+   608→                              key={p}
+   609→                              type="button"
+   610→                              onClick={() => {
+   611→                                setAmount(p);
+   612→                                setCustomAmount("");
+   613→                                setErrors((e) => ({ ...e, amount: "" }));
+   614→                              }}
+   615→                              aria-pressed={active}
+   616→                              className={cn(
+   617→                                "min-h-[48px] rounded-lg border text-sm font-bold transition",
+   618→                                active
+   619→                                  ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-2 ring-emerald-500/30"
+   620→                                  : "bg-background hover:bg-accent"
+   621→                              )}
+   622→                            >
+   623→                              ₹{p.toLocaleString("en-IN")}
+   624→                            </button>
+   625→                          );
+   626→                        })}
+   627→                      </div>
+   628→                    </div>
+   629→
+   630→                    {/* Custom amount + slider */}
+   631→                    <div className="space-y-3">
+   632→                      <div className="flex items-center justify-between gap-3">
+   633→                        <Label htmlFor="custom-amount" className="text-sm font-semibold">
+   634→                          Or set a custom amount
+   635→                        </Label>
+   636→                        <div className="relative w-32">
+   637→                          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+   638→                            ₹
+   639→                          </span>
+   640→                          <Input
+   641→                            id="custom-amount"
+   642→                            type="number"
+   643→                            inputMode="numeric"
+   644→                            min={10}
+   645→                            step={100}
+   646→                            value={customAmount}
+   647→                            onChange={(e) => {
+   648→                              setCustomAmount(e.target.value);
+   649→                              const n = Number(e.target.value);
+   650→                              if (Number.isFinite(n) && n > 0) setAmount(n);
+   651→                            }}
+   652→                            placeholder={String(amount)}
+   653→                            className="pl-7 text-right font-semibold"
+   654→                            aria-describedby="amount-error"
+   655→                          />
+   656→                        </div>
+   657→                      </div>
+   658→                      <Slider
+   659→                        value={[
+   660→                          Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, amount || SLIDER_MIN)),
+   661→                        ]}
+   662→                        min={SLIDER_MIN}
+   663→                        max={SLIDER_MAX}
+   664→                        step={SLIDER_STEP}
+   665→                        onValueChange={(v) => {
+   666→                          setAmount(v[0] ?? SLIDER_MIN);
+   667→                          setCustomAmount("");
+   668→                        }}
+   669→                        aria-label={`Donation amount: ${formatINR(amount)}`}
+   670→                      />
+   671→                      <div className="flex justify-between text-[11px] text-muted-foreground">
+   672→                        <span>₹100</span>
+   673→                        <span>₹50,000</span>
+   674→                        <span>₹1,00,000</span>
+   675→                      </div>
+   676→                    </div>
+   677→
+   678→                    {/* Impact hint */}
+   679→                    <div
+   680→                      className="flex items-start gap-2.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3.5"
+   681→                      aria-live="polite"
+   682→                    >
+   683→                      <Sparkles
+   684→                        className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+   685→                        aria-hidden
+   686→                      />
+   687→                      <p className="text-sm leading-relaxed text-foreground">
+   688→                        <span className="font-bold">
+   689→                          {formatINR(effectiveAmount || 0)}{" "}
+   690→                          {giftType === "RECURRING" ? "a month " : ""}
+   691→                        </span>
+   692→                        {impactHint(effectiveAmount || 0, selectedSlug)}.
+   693→                      </p>
+   694→                    </div>
+   695→
+   696→                    {errors.amount && (
+   697→                      <p id="amount-error" className="text-sm font-medium text-red-600 dark:text-red-400">
+   698→                        {errors.amount}
+   699→                      </p>
+   700→                    )}
+   701→                  </div>
+   702→                )}
+   703→
+   704→                {/* ============ STEP 2 — About you ============ */}
+   705→                {step === 2 && (
+   706→                  <div className="space-y-5">
+   707→                    <div>
+   708→                      <h2 className="flex items-center gap-2 text-lg font-bold">
+   709→                        <User className="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   710→                        About you
+   711→                      </h2>
+   712→                      <p className="mt-1 text-sm text-muted-foreground">
+   713→                        We need this for the receipt — nothing else. You can give
+   714→                        anonymously on public lists.
+   715→                      </p>
+   716→                    </div>
+   717→
+   718→                    {/* Campaign select */}
+   719→                    <div className="space-y-1.5">
+   720→                      <Label htmlFor="d-campaign">Direct my gift to</Label>
+   721→                      {campaigns === null ? (
+   722→                        <Skeleton className="h-11 w-full" />
+   723→                      ) : (
+   724→                        <Select
+   725→                          value={campaignId}
+   726→                          onValueChange={setCampaignId}
+   727→                        >
+   728→                          <SelectTrigger id="d-campaign" className="h-11">
+   729→                            <SelectValue placeholder="Choose a fund" />
+   730→                          </SelectTrigger>
+   731→                          <SelectContent>
+   732→                            <SelectItem value="general">
+   733→                              Where it&rsquo;s needed most — general fund
+   734→                            </SelectItem>
+   735→                            {campaigns
+   736→                              .filter((c) => c.status !== "CANCELLED")
+   737→                              .map((c) => (
+   738→                                <SelectItem key={c.id} value={c.id}>
+   739→                                  {c.title}
+   740→                                </SelectItem>
+   741→                              ))}
+   742→                          </SelectContent>
+   743→                        </Select>
+   744→                      )}
+   745→                      <p className="text-xs text-muted-foreground">
+   746→                        Not sure? The general fund is routed weekly to the
+   747→                        highest-need programme — you&rsquo;ll see exactly where it went.
+   748→                      </p>
+   749→                    </div>
+   750→
+   751→                    <div className="grid gap-4 sm:grid-cols-2">
+   752→                      <div className="space-y-1.5">
+   753→                        <Label htmlFor="d-name">Full name *</Label>
+   754→                        <Input
+   755→                          id="d-name"
+   756→                          value={name}
+   757→                          onChange={(e) => setName(e.target.value)}
+   758→                          placeholder="Your name"
+   759→                          aria-describedby={errors.name ? "name-error" : undefined}
+   760→                        />
+   761→                        {errors.name && (
+   762→                          <p id="name-error" className="text-xs font-medium text-red-600 dark:text-red-400">
+   763→                            {errors.name}
+   764→                          </p>
+   765→                        )}
+   766→                      </div>
+   767→                      <div className="space-y-1.5">
+   768→                        <Label htmlFor="d-email">Email *</Label>
+   769→                        <Input
+   770→                          id="d-email"
+   771→                          type="email"
+   772→                          value={email}
+   773→                          onChange={(e) => setEmail(e.target.value)}
+   774→                          placeholder="you@example.com"
+   775→                          aria-describedby={errors.email ? "email-error" : undefined}
+   776→                        />
+   777→                        {errors.email && (
+   778→                          <p id="email-error" className="text-xs font-medium text-red-600 dark:text-red-400">
+   779→                            {errors.email}
+   780→                          </p>
+   781→                        )}
+   782→                      </div>
+   783→                      <div className="space-y-1.5">
+   784→                        <Label htmlFor="d-phone">Phone</Label>
+   785→                        <Input
+   786→                          id="d-phone"
+   787→                          inputMode="numeric"
+   788→                          value={phone}
+   789→                          onChange={(e) => setPhone(e.target.value)}
+   790→                          placeholder="10-digit mobile (optional)"
+   791→                          aria-describedby={errors.phone ? "phone-error" : undefined}
+   792→                        />
+   793→                        {errors.phone && (
+   794→                          <p id="phone-error" className="text-xs font-medium text-red-600 dark:text-red-400">
+   795→                            {errors.phone}
+   796→                          </p>
+   797→                        )}
+   798→                      </div>
+   799→                      <div className="space-y-1.5">
+   800→                        <Label htmlFor="d-pan">PAN (optional)</Label>
+   801→                        <Input
+   802→                          id="d-pan"
+   803→                          value={pan}
+   804→                          onChange={(e) => setPan(e.target.value.toUpperCase())}
+   805→                          placeholder="ABCDE1234F"
+   806→                          maxLength={10}
+   807→                          className="font-mono"
+   808→                          aria-describedby={errors.pan ? "pan-error" : undefined}
+   809→                        />
+   810→                        {errors.pan ? (
+   811→                          <p id="pan-error" className="text-xs font-medium text-red-600 dark:text-red-400">
+   812→                            {errors.pan}
+   813→                          </p>
+   814→                        ) : null}
+   815→                      </div>
+   816→                    </div>
+   817→
+   818→                    {/* 80G explainer */}
+   819→                    <div className="flex items-start gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
+   820→                      <Landmark
+   821→                        className="mt-0.5 size-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+   822→                        aria-hidden
+   823→                      />
+   824→                      <div className="text-sm leading-relaxed">
+   825→                        <p className="font-semibold">
+   826→                          80G: donors get a 50% tax deduction
+   827→                        </p>
+   828→                        <p className="mt-0.5 text-muted-foreground">
+   829→                          Add your PAN and we email a tax-ready receipt with it printed
+   830→                          on — one less April scramble.
+   831→                        </p>
+   832→                      </div>
+   833→                    </div>
+   834→
+   835→                    {/* Anonymous + message */}
+   836→                    <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
+   837→                      <div>
+   838→                        <Label htmlFor="d-anon" className="text-sm font-semibold">
+   839→                          Give anonymously
+   840→                        </Label>
+   841→                        <p className="mt-0.5 text-xs text-muted-foreground">
+   842→                          Your name won&rsquo;t appear on public supporter lists.
+   843→                        </p>
+   844→                      </div>
+   845→                      <Switch
+   846→                        id="d-anon"
+   847→                        checked={anonymous}
+   848→                        onCheckedChange={setAnonymous}
+   849→                        aria-label="Give anonymously"
+   850→                      />
+   851→                    </div>
+   852→
+   853→                    <div className="space-y-1.5">
+   854→                      <Label htmlFor="d-msg">Message (optional)</Label>
+   855→                      <Textarea
+   856→                        id="d-msg"
+   857→                        rows={2}
+   858→                        value={message}
+   859→                        onChange={(e) => setMessage(e.target.value)}
+   860→                        placeholder="A word for the team or the family you're helping…"
+   861→                      />
+   862→                    </div>
+   863→                  </div>
+   864→                )}
+   865→
+   866→                {/* ============ STEP 3 — Payment ============ */}
+   867→                {step === 3 && (
+   868→                  <div className="space-y-5">
+   869→                    <div>
+   870→                      <h2 className="flex items-center gap-2 text-lg font-bold">
+   871→                        <Wallet className="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+   872→                        Payment
+   873→                      </h2>
+   874→                      <p className="mt-1 text-sm text-muted-foreground">
+   875→                        You&rsquo;re giving{" "}
+   876→                        <span className="font-semibold text-foreground">
+   877→                          {formatINR(effectiveAmount)}
+   878→                          {giftType === "RECURRING" ? " / month" : ""}
+   879→                        </span>{" "}
+   880→                        {selected ? `to ${selected.title}` : "to the general fund"}.
+   881→                      </p>
+   882→                    </div>
+   883→
+   884→                    {/* Method select */}
+   885→                    <div className="space-y-1.5">
+   886→                      <Label htmlFor="d-method">Payment method</Label>
+   887→                      <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+   888→                        <SelectTrigger id="d-method" className="h-11">
+   889→                          <SelectValue />
+   890→                        </SelectTrigger>
+   891→                        <SelectContent>
+   892→                          {PAYMENT_METHODS.map((m) => (
+   893→                            <SelectItem key={m.value} value={m.value}>
+   894→                              {m.label}
+   895→                            </SelectItem>
+   896→                          ))}
+   897→                        </SelectContent>
+   898→                      </Select>
+   899→                    </div>
+   900→
+   901→                    {/* UPI block */}
+   902→                    {paymentMethod === "UPI" && (
+   903→                      <div className="rounded-xl border p-4">
+   904→                        <div className="flex items-center gap-2">
+   905→                          <span className="flex size-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+   906→                            <QrCode className="size-5" aria-hidden />
+   907→                          </span>
+   908→                          <div>
+   909→                            <p className="text-sm font-bold">Pay by UPI</p>
+   910→                            <p className="text-xs text-muted-foreground">
+   911→                              Scan in any UPI app, or tap the button on mobile.
+   912→                            </p>
+   913→                          </div>
+   914→                        </div>
+   915→                        <Separator className="my-3.5" />
+   916→                        <div className="flex flex-wrap items-center justify-between gap-2">
+   917→                          <div>
+   918→                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+   919→                              UPI ID
+   920→                            </p>
+   921→                            <code className="text-sm font-bold select-all">{upiId}</code>
+   922→                          </div>
+   923→                          <Button
+   924→                            variant="outline"
+   925→                            size="sm"
+   926→                            onClick={() => copyText(upiId, "UPI ID copied")}
+   927→                            aria-label="Copy UPI ID"
+   928→                          >
+   929→                            <Copy className="size-3.5" aria-hidden /> Copy
+   930→                          </Button>
+   931→                        </div>
+   932→                        <Separator className="my-3.5" />
+   933→                        <div className="flex flex-wrap items-center justify-between gap-2">
+   934→                          <div>
+   935→                            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+   936→                              Amount
+   937→                            </p>
+   938→                            <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">
+   939→                              {formatINR(effectiveAmount)}
+   940→                            </p>
+   941→                          </div>
+   942→                          <Button
+   943→                            className="bg-emerald-600 hover:bg-emerald-700"
+   944→                            onClick={() =>
+   945→                              window.open(upiLink, "_blank", "noopener")
+   946→                            }
+   947→                            aria-label="Open your UPI app to pay"
+   948→                          >
+   949→                            <Smartphone className="size-4" aria-hidden /> Open UPI app
+   950→                          </Button>
+   951→                        </div>
+   952→                        <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+   953→                          <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   954→                          After paying, press <strong>Confirm gift</strong> below — we record
+   955→                          the pledge instantly and reconcile the payment reference.
+   956→                        </p>
+   957→                      </div>
+   958→                    )}
+   959→
+   960→                    {/* Mock gateway block */}
+   961→                    {paymentMethod === "RAZORPAY" && (
+   962→                      <div className="rounded-xl border p-4">
+   963→                        <div className="flex items-center gap-2">
+   964→                          <span className="flex size-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
+   965→                            <CreditCard className="size-5" aria-hidden />
+   966→                          </span>
+   967→                          <div>
+   968→                            <p className="text-sm font-bold">Card / Netbanking</p>
+   969→                            <Badge variant="outline" className="mt-0.5 text-[10px]">
+   970→                              Gateway demo
+   971→                            </Badge>
+   972→                          </div>
+   973→                        </div>
+   974→                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+   975→                          <div className="space-y-1.5 sm:col-span-2">
+   976→                            <Label htmlFor="cc-num">Card number</Label>
+   977→                            <Input
+   978→                              id="cc-num"
+   979→                              disabled
+   980→                              placeholder="4111 1111 1111 1111"
+   981→                              className="font-mono"
+   982→                            />
+   983→                          </div>
+   984→                          <div className="space-y-1.5">
+   985→                            <Label htmlFor="cc-exp">Expiry</Label>
+   986→                            <Input id="cc-exp" disabled placeholder="MM / YY" />
+   987→                          </div>
+   988→                          <div className="space-y-1.5">
+   989→                            <Label htmlFor="cc-cvv">CVV</Label>
+   990→                            <Input id="cc-cvv" disabled placeholder="•••" type="password" />
+   991→                          </div>
+   992→                        </div>
+   993→                        <p className="mt-3 flex items-start gap-1.5 rounded-md bg-amber-500/10 p-2.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+   994→                          <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+   995→                          Gateway demo — Razorpay/Stripe keys are configured by admins in
+   996→                          Settings. Confirming records your gift and generates the receipt.
+   997→                        </p>
+   998→                      </div>
+   999→                    )}
+  1000→
+  1001→                    {paymentMethod === "BANK_TRANSFER" && (
+  1002→                      <div className="rounded-xl border p-4 text-sm">
+  1003→                        <div className="flex items-center gap-2">
+  1004→                          <span className="flex size-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+  1005→                            <Building2 className="size-5" aria-hidden />
+  1006→                          </span>
+  1007→                          <p className="font-bold">Bank transfer</p>
+  1008→                        </div>
+  1009→                        <p className="mt-3 text-muted-foreground">
+  1010→                          Transfer to <strong>United Angel Reach Trust</strong> and reply to
+  1011→                          the receipt email with the UTR number — we reconcile within one
+  1012→                          working day.
+  1013→                        </p>
+  1014→                      </div>
+  1015→                    )}
+  1016→
+  1017→                    {paymentMethod === "CASH" && (
+  1018→                      <div className="rounded-xl border p-4 text-sm">
+  1019→                        <div className="flex items-center gap-2">
+  1020→                          <span className="flex size-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+  1021→                            <Banknote className="size-5" aria-hidden />
+  1022→                          </span>
+  1023→                          <p className="font-bold">Cash via volunteer</p>
+  1024→                        </div>
+  1025→                        <p className="mt-3 text-muted-foreground">
+  1026→                          A background-verified volunteer collects with an ID card and a
+  1027→                          numbered receipt book. You&rsquo;ll get a call within 48 hours to fix
+  1028→                          a slot.
+  1029→                        </p>
+  1030→                      </div>
+  1031→                    )}
+  1032→
+  1033→                    <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
+  1034→                      <Lock className="size-3.5" aria-hidden /> 80G eligible · audited
+  1035→                      accounts · QR-traced impact
+  1036→                    </p>
+  1037→                  </div>
+  1038→                )}
+  1039→              </motion.div>
+  1040→            </AnimatePresence>
+  1041→
+  1042→            {/* Wizard footer */}
+  1043→            <div className="mt-6 flex items-center justify-between gap-3 border-t pt-4">
+  1044→              {step > 1 ? (
+  1045→                <Button variant="outline" onClick={() => goTo(step - 1)} disabled={busy}>
+  1046→                  <ArrowLeft className="size-4" aria-hidden /> Back
+  1047→                </Button>
+  1048→              ) : (
+  1049→                <span />
+  1050→              )}
+  1051→              <Button
+  1052→                size="lg"
+  1053→                className="min-w-[220px] bg-emerald-600 text-base hover:bg-emerald-700"
+  1054→                onClick={nextStep}
+  1055→                disabled={busy}
+  1056→              >
+  1057→                {busy ? (
+  1058→                  <>
+  1059→                    <Loader2 className="size-5 animate-spin" aria-hidden /> Processing…
+  1060→                  </>
+  1061→                ) : step === 3 ? (
+  1062→                  <>
+  1063→                    <Heart className="size-5" aria-hidden /> Confirm gift{" "}
+  1064→                    {formatINR(effectiveAmount)}
+  1065→                  </>
+  1066→                ) : (
+  1067→                  <>
+  1068→                    Continue <ArrowRight className="size-4" aria-hidden />
+  1069→                  </>
+  1070→                )}
+  1071→              </Button>
+  1072→            </div>
+  1073→          </Card>
+  1074→        </div>
+  1075→
+  1076→        {/* ----------------- Right: summary sidebar ----------------- */}
+  1077→        <div className="min-w-0 overflow-hidden space-y-4 lg:sticky lg:top-20 lg:self-start">
+  1078→          {/* Running summary */}
+  1079→          <Card className="p-5">
+  1080→            <h3 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
+  1081→              Your gift
+  1082→            </h3>
+  1083→            <div className="mt-3 flex items-baseline gap-2">
+  1084→              <span className="text-3xl font-extrabold tracking-tight text-emerald-600 dark:text-emerald-400">
+  1085→                {formatINR(effectiveAmount || 0)}
+  1086→              </span>
+  1087→              {giftType === "RECURRING" && (
+  1088→                <span className="text-sm font-semibold text-muted-foreground">/ month</span>
+  1089→              )}
+  1090→            </div>
+  1091→            <Separator className="my-4" />
+  1092→            <ul className="space-y-2.5 text-sm">
+  1093→              <li className="flex items-center justify-between gap-2">
+  1094→                <span className="text-muted-foreground">Type</span>
+  1095→                <span className="font-semibold">
+  1096→                  {giftType === "RECURRING" ? "Monthly" : "One-time"}
+  1097→                </span>
+  1098→              </li>
+  1099→              <li className="flex items-center justify-between gap-2">
+  1100→                <span className="text-muted-foreground">Fund</span>
+  1101→                <span className="max-w-[60%] truncate text-right font-semibold">
+  1102→                  {selected?.title ?? "Where it's needed most"}
+  1103→                </span>
+  1104→              </li>
+  1105→              <li className="flex items-center justify-between gap-2">
+  1106→                <span className="text-muted-foreground">Payment</span>
+  1107→                <span className="font-semibold">
+  1108→                  {PAYMENT_METHODS.find((m) => m.value === paymentMethod)?.value ?? "UPI"}
+  1109→                </span>
+  1110→              </li>
+  1111→              {selected && selectedSlug && (
+  1112→                <li className="flex items-center gap-2 pt-1">
+  1113→                  <span
+  1114→                    className={cn(
+  1115→                      "flex size-8 shrink-0 items-center justify-center rounded-lg",
+  1116→                      accentSoft(selected.accent).chip,
+  1117→                      accentSoft(selected.accent).text
+  1118→                    )}
+  1119→                  >
+  1120→                    <CampaignIcon
+  1121→                      icon={selected.icon ?? CAMPAIGN_CONTENT[selectedSlug]?.icon ?? "heart"}
+  1122→                      className="size-4"
+  1123→                    />
+  1124→                  </span>
+  1125→                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+  1126→                    {selected.tagline ?? CAMPAIGN_CONTENT[selectedSlug]?.heroTag}
+  1127→                  </span>
+  1128→                </li>
+  1129→              )}
+  1130→            </ul>
+  1131→            <Separator className="my-4" />
+  1132→            {/* Trust badges */}
+  1133→            <div className="grid grid-cols-3 gap-2 text-center">
+  1134→              {[
+  1135→                { icon: Landmark, label: "80G eligible" },
+  1136→                { icon: ShieldCheck, label: "Secure" },
+  1137→                { icon: Zap, label: "Immediate impact" },
+  1138→              ].map((b) => (
+  1139→                <div
+  1140→                  key={b.label}
+  1141→                  className="rounded-lg border bg-muted/40 px-1.5 py-2.5"
+  1142→                  title={b.label}
+  1143→                >
+  1144→                  <b.icon
+  1145→                    className="mx-auto size-4 text-emerald-600 dark:text-emerald-400"
+  1146→                    aria-hidden
+  1147→                  />
+  1148→                  <p className="mt-1 text-[10px] font-semibold leading-tight">
+  1149→                    {b.label}
+  1150→                  </p>
+  1151→                </div>
+  1152→              ))}
+  1153→            </div>
+  1154→          </Card>
+  1155→
+  1156→          {/* Where money goes */}
+  1157→          <Card className="p-5">
+  1158→            <h3 className="flex items-center gap-2 font-semibold">
+  1159→              <HandCoins className="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />{" "}
+  1160→              Where it goes
+  1161→            </h3>
+  1162→            <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
+  1163→              <li>
+  1164→                <span className="font-bold text-foreground">₹500</span> — one family&rsquo;s
+  1165→                ration kit, QR-traced to their door
+  1166→              </li>
+  1167→              <li>
+  1168→                <span className="font-bold text-foreground">₹1,000</span> — a school
+  1169→                cyber-safety session for 50 seniors or students
+  1170→              </li>
+  1171→              <li>
+  1172→                <span className="font-bold text-foreground">₹10,000</span> — a year of
+  1173→                monthly follow-ups for one person in recovery
+  1174→              </li>
+  1175→            </ul>
+  1176→          </Card>
+  1177→
+  1178→          {/* Recent donations */}
+  1179→          <Card className="p-5">
+  1180→            <h3 className="flex items-center gap-2 font-semibold">
+  1181→              <Heart className="size-5 text-emerald-600 dark:text-emerald-400" aria-hidden />{" "}
+  1182→              Recent gifts
+  1183→            </h3>
+  1184→            {recent === null ? (
+  1185→              <div className="mt-3 space-y-2">
+  1186→                {Array.from({ length: 4 }).map((_, i) => (
+  1187→                  <Skeleton key={i} className="h-10 rounded-lg" />
+  1188→                ))}
+  1189→              </div>
+  1190→            ) : recent.length === 0 ? (
+  1191→              <EmptyState
+  1192→                icon={Sparkles}
+  1193→                title="Be the first today"
+  1194→                hint="Recent gifts will appear here — anonymously if you prefer."
+  1195→                className="mt-3 border-0 bg-transparent p-2"
+  1196→              />
+  1197→            ) : (
+  1198→              <ul className="mt-3 max-h-56 space-y-2.5 overflow-y-auto pr-1 scrollbar-thin">
+  1199→                {recent.slice(0, 12).map((d) => (
+  1200→                  <li key={d.id} className="flex items-center gap-2.5 text-sm">
+  1201→                    <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+  1202→                      {(d.isAnonymous ? "A" : d.donorName?.[0] ?? "?").toUpperCase()}
+  1203→                    </span>
+  1204→                    <span className="min-w-0 flex-1">
+  1205→                      <span className="block truncate font-medium">
+  1206→                        {d.isAnonymous ? "Anonymous" : d.donorName}
+  1207→                        {d.type === "RECURRING" && (
+  1208→                          <Badge variant="outline" className="ml-1.5 px-1 py-0 text-[9px]">
+  1209→                            monthly
+  1210→                          </Badge>
+  1211→                        )}
+  1212→                      </span>
+  1213→                      {d.campaign?.title && (
+  1214→                        <span className="block truncate text-[11px] text-muted-foreground">
+  1215→                          {d.campaign.title}
+  1216→                        </span>
+  1217→                      )}
+  1218→                    </span>
+  1219→                    <span className="shrink-0 font-bold text-emerald-600 dark:text-emerald-400">
+  1220→                      {formatINR(d.amount)}
+  1221→                    </span>
+  1222→                  </li>
+  1223→                ))}
+  1224→              </ul>
+  1225→            )}
+  1226→          </Card>
+  1227→        </div>
+  1228→      </div>
+  1229→    </Section>
+  1230→  );
+  1231→}
+  1232→

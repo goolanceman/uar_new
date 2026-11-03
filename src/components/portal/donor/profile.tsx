@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   BadgeCheck,
+  Bell,
   KeyRound,
+  Landmark,
   Languages,
+  Loader2,
   LogOut,
   Mail,
   Save,
@@ -15,24 +18,29 @@ import { toast } from "sonner";
 import { useAuth, type SessionUser } from "@/hooks/use-auth";
 import { get, patch } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
-import { formatDate } from "@/lib/format";
+import { formatDate, titleCase } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { DataField } from "@/components/shared/data-field";
+import { SwitchField } from "@/components/shared/form-fields";
+import { panRule, phoneRule, fieldError } from "@/lib/validators";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-interface MeResponse {
-  user?: {
-    pan?: string | null;
-    about?: string | null;
-    createdAt?: string;
-  } | null;
+interface MeUser {
+  pan?: string | null;
+  about?: string | null;
+  createdAt?: string;
+  emailOptIn?: boolean;
+  smsOptIn?: boolean;
+  whatsappOptIn?: boolean;
 }
+
+type Prefs = { email: boolean; sms: boolean; whatsapp: boolean };
 
 export default function DonorProfile({ user }: { user: SessionUser }) {
   const { refresh, logout } = useAuth();
@@ -48,13 +56,25 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
   const [city, setCity] = useState(user.city ?? "");
   const [panInput, setPanInput] = useState("");
   const [about, setAbout] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [panError, setPanError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Communication preferences (Donor CRM prefs where the API supports them)
+  const [prefs, setPrefs] = useState<Prefs>({ email: true, sms: true, whatsapp: true });
+  const [savingPrefs, setSavingPrefs] = useState(false);
+
+  // Password form
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNext, setPwNext] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [savingPw, setSavingPw] = useState(false);
 
   const loadMe = useCallback(async () => {
     setLoadingMe(true);
     try {
       const [me, pub] = await Promise.all([
-        get<MeResponse>("/api/auth/me").catch(() => null),
+        get<{ user?: MeUser | null }>("/api/auth/me").catch(() => null),
         get<{ defaultLanguage?: string }>("/api/settings/public").catch(() => null),
       ]);
       const u = me?.user ?? null;
@@ -63,6 +83,11 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
       setAbout(u?.about ?? "");
       setJoinedAt(u?.createdAt ?? null);
       setLanguage(pub?.defaultLanguage ?? null);
+      setPrefs({
+        email: u?.emailOptIn ?? true,
+        sms: u?.smsOptIn ?? true,
+        whatsapp: u?.whatsappOptIn ?? true,
+      });
     } finally {
       setLoadingMe(false);
     }
@@ -73,13 +98,13 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
   }, [loadMe]);
 
   const save = async () => {
+    const pErr = fieldError(phone, [phoneRule(true)]);
+    const panErr = fieldError(panInput, [panRule(true)]);
+    setPhoneError(pErr);
+    setPanError(panErr);
+    if (pErr || panErr) return;
     if (!name.trim()) {
       toast.error("Name is required");
-      return;
-    }
-    const v = panInput.trim().toUpperCase();
-    if (v && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v)) {
-      toast.error("PAN looks invalid — format: ABCDE1234F");
       return;
     }
     setSaving(true);
@@ -88,18 +113,83 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
         name: name.trim(),
         phone: phone.trim() || null,
         city: city.trim() || null,
-        pan: v || null,
+        pan: panInput.trim().toUpperCase() || null,
         about: about.trim() || null,
       });
       await refresh();
-      setPan(v || null);
+      setPan(panInput.trim().toUpperCase() || null);
       toast.success(
-        v && !pan ? "Profile saved — 80G receipts will now carry your PAN" : "Profile saved"
+        panInput.trim() && !pan
+          ? "Profile saved — 80G receipts will now carry your PAN"
+          : "Profile saved"
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not update profile");
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * Communication preferences — PATCH /api/auth/profile persists only the
+   * fields it knows (name/phone/city/pan/about/password today). We verify the
+   * echo and tell the user honestly when a channel pref was not persisted.
+   */
+  const savePrefs = async (next: Prefs) => {
+    const prev = prefs;
+    setPrefs(next);
+    setSavingPrefs(true);
+    try {
+      const res = await patch<{ user?: MeUser }>("/api/auth/profile", {
+        emailOptIn: next.email,
+        smsOptIn: next.sms,
+        whatsappOptIn: next.whatsapp,
+      });
+      const persisted =
+        res?.user &&
+        (res.user.emailOptIn !== undefined ||
+          res.user.smsOptIn !== undefined ||
+          res.user.whatsappOptIn !== undefined);
+      if (!persisted) {
+        setPrefs(prev);
+        toast.info(
+          "Channel preferences are managed by the trust office for now — write to reach@unitedangelreach.org to update them."
+        );
+      } else {
+        toast.success("Communication preferences saved");
+      }
+    } catch (e) {
+      setPrefs(prev);
+      toast.error(e instanceof Error ? e.message : "Could not save preferences");
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
+
+  const changePassword = async () => {
+    if (!pwCurrent) {
+      toast.error("Enter your current password");
+      return;
+    }
+    if (pwNext.length < 6) {
+      toast.error("New password must be at least 6 characters");
+      return;
+    }
+    if (pwNext !== pwConfirm) {
+      toast.error("New passwords don't match");
+      return;
+    }
+    setSavingPw(true);
+    try {
+      await patch("/api/auth/profile", { password: { current: pwCurrent, next: pwNext } });
+      toast.success("Password updated — use it on your next sign-in");
+      setPwCurrent("");
+      setPwNext("");
+      setPwConfirm("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not change password");
+    } finally {
+      setSavingPw(false);
     }
   };
 
@@ -143,16 +233,26 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
             </span>
             <div className="grid flex-1 gap-3 sm:grid-cols-2">
               <DataField label="Email" value={user.email} icon={<Mail className="size-3.5" />} copy />
-              <DataField label="Role" value={titleSafe(user.role)} />
-              <DataField
-                label="Member since"
-                value={joinedAt ? formatDate(joinedAt) : "—"}
-              />
-              <DataField
-                label="Account status"
-                value={titleSafe(user.status)}
-              />
+              <DataField label="Role" value={titleCase(user.role)} />
+              <DataField label="Member since" value={joinedAt ? formatDate(joinedAt) : "—"} />
+              <DataField label="Account status" value={titleCase(user.status)} />
             </div>
+          </div>
+        )}
+        {/* 80G-ready badge */}
+        {!loadingMe && (
+          <div className="mt-4">
+            {pan ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+                80G-ready · PAN {pan} prints on every receipt
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                <Landmark className="size-3.5" aria-hidden="true" />
+                Add PAN below for 80G-ready receipts
+              </span>
+            )}
           </div>
         )}
         {user.status === "ACTIVE" && (
@@ -188,8 +288,14 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
               placeholder="+91 98765 43210"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
+              aria-invalid={!!phoneError}
               autoComplete="tel"
             />
+            {phoneError ? (
+              <p className="text-xs font-medium text-destructive" role="alert">
+                {phoneError}
+              </p>
+            ) : null}
           </div>
           <div className="space-y-2">
             <Label htmlFor="p-city">City</Label>
@@ -215,14 +321,19 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
                 maxLength={10}
                 value={panInput}
                 onChange={(e) => setPanInput(e.target.value.toUpperCase())}
+                aria-invalid={!!panError}
                 aria-describedby="p-pan-hint"
               />
             </div>
-            <p id="p-pan-hint" className="text-xs text-muted-foreground">
-              {pan
-                ? `Saved — prints on receipts as ${pan}.`
-                : "Add your PAN so 80G receipts are ITR-ready."}
-            </p>
+            {panError ? (
+              <p className="text-xs font-medium text-destructive" role="alert">
+                {panError}
+              </p>
+            ) : (
+              <p id="p-pan-hint" className="text-xs text-muted-foreground">
+                {pan ? `Saved — prints on receipts as ${pan}.` : "Add your PAN so 80G receipts are ITR-ready."}
+              </p>
+            )}
           </div>
           <div className="space-y-2 sm:col-span-2">
             <Label htmlFor="p-about">About you (optional)</Label>
@@ -244,30 +355,89 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
       </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Password note */}
+        {/* Password */}
         <SectionCard
           title="Password & security"
-          description="How to keep your donor account safe."
+          description="Rotate your password any time — it applies on your next sign-in."
           icon={<KeyRound className="size-5" />}
         >
-          <p className="text-sm text-muted-foreground">
-            For your protection, password changes for donor accounts are handled by
-            our support desk — write to{" "}
-            <span className="font-medium text-foreground">
-              reach@unitedangelreach.org
-            </span>{" "}
-            from your registered email and we&apos;ll rotate it within a working
-            day. Always sign out on shared devices.
-          </p>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="p-pw-current">Current password</Label>
+              <Input
+                id="p-pw-current"
+                type="password"
+                autoComplete="current-password"
+                value={pwCurrent}
+                onChange={(e) => setPwCurrent(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="p-pw-next">New password</Label>
+                <Input
+                  id="p-pw-next"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwNext}
+                  onChange={(e) => setPwNext(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="p-pw-confirm">Confirm new password</Label>
+                <Input
+                  id="p-pw-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwConfirm}
+                  onChange={(e) => setPwConfirm(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Minimum 6 characters. Lost access instead? Write to
+              reach@unitedangelreach.org from your registered email.
+            </p>
+            <Button
+              variant="outline"
+              className="min-h-11 gap-1.5"
+              onClick={changePassword}
+              disabled={savingPw}
+            >
+              {savingPw ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+              {savingPw ? "Updating…" : "Update password"}
+            </Button>
+          </div>
         </SectionCard>
 
         {/* Preferences + sign out */}
         <SectionCard
-          title="Preferences"
-          description="Language and session"
-          icon={<Languages className="size-5" />}
+          title="Donor preferences"
+          description="How we reach you — 80G receipts always arrive by email."
+          icon={<Bell className="size-5" />}
         >
-          <div className="space-y-4">
+          <div className="space-y-3">
+            <SwitchField
+              label="Email updates"
+              hint="Receipts, certificate issuances and monthly impact digests"
+              checked={prefs.email}
+              onChange={(v) => void savePrefs({ ...prefs, email: v })}
+              disabled={savingPrefs}
+            />
+            <SwitchField
+              label="SMS updates"
+              hint="Urgent drives and donation confirmations"
+              checked={prefs.sms}
+              onChange={(v) => void savePrefs({ ...prefs, sms: v })}
+              disabled={savingPrefs}
+            />
+            <SwitchField
+              label="WhatsApp updates"
+              hint="Short field stories from the ground team"
+              checked={prefs.whatsapp}
+              onChange={(v) => void savePrefs({ ...prefs, whatsapp: v })}
+              disabled={savingPrefs}
+            />
             <p className="flex items-start gap-2 text-sm text-muted-foreground">
               <Languages className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
               <span>
@@ -276,10 +446,10 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
                   {loadingMe ? "…" : (language ?? "English")}
                 </span>{" "}
                 — set by the organisation by default. Regional languages (ಕನ್ನಡ,
-                हिन्दी) are rolling out; your preference will follow this setting.
+                हिन्दी) are rolling out.
               </span>
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 pt-1">
               <Button
                 variant="outline"
                 className="min-h-11 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
@@ -294,9 +464,4 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
       </div>
     </div>
   );
-}
-
-/** titleCase guard for short codes like roles/statuses. */
-function titleSafe(s: string): string {
-  return s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
 }

@@ -6,6 +6,7 @@ import { Link } from "@/lib/router";
 import { get } from "@/lib/api-client";
 import { cn, formatNumber, titleCase } from "@/lib/utils";
 import { formatINRCompact, formatDate } from "@/lib/format";
+import { ViewSwitcher, useViewPref } from "@/components/shared/view-switcher";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +22,19 @@ import {
 } from "@/components/ui/select";
 import { Section, EmptyState, CampaignIcon } from "@/components/public/shared";
 import { CAMPAIGN_CONTENT, accentSoft } from "@/components/public/campaign-data";
-import { CalendarDays, HandHeart, Phone, Search, SearchX, Users } from "lucide-react";
+import {
+  CalendarDays,
+  HandHeart,
+  Info,
+  Landmark,
+  List,
+  LayoutGrid,
+  Phone,
+  Search,
+  SearchX,
+  Siren,
+  Users,
+} from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -44,9 +57,22 @@ interface LiveCampaign {
   featured?: boolean;
   status?: string | null;
   startDate?: string | null;
+  endDate?: string | null;
+  urgent?: boolean | null;
+  taxEligible?: boolean | null;
+  minDonation?: number | null;
 }
 
-type SortKey = "raised" | "goal" | "newest";
+type StatusFilter = "all" | "active" | "urgent" | "ending";
+type SortKey = "featured" | "raised" | "ending" | "newest";
+
+/** Days left until endDate (ceil); null when unknown. Negative = ended. */
+function daysLeftOf(endDate?: string | null): number | null {
+  if (!endDate) return null;
+  const d = new Date(endDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+}
 
 function daysActive(startDate?: string | null): number | null {
   if (!startDate) return null;
@@ -61,6 +87,56 @@ function pctOf(c: LiveCampaign): number {
     : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Badge cluster shared by grid + list views                           */
+/* ------------------------------------------------------------------ */
+
+function DaysLeftBadge({ left }: { left: number | null }) {
+  if (left === null) return null;
+  if (left < 0) {
+    return (
+      <Badge variant="outline" className="shrink-0 border-border text-[10px] text-muted-foreground">
+        Ended
+      </Badge>
+    );
+  }
+  if (left === 0) {
+    return (
+      <Badge className="shrink-0 border-0 bg-red-500/15 text-[10px] text-red-600 dark:text-red-400">
+        Ends today
+      </Badge>
+    );
+  }
+  if (left <= 7) {
+    return (
+      <Badge className="shrink-0 border-0 bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-400">
+        {left}d left · ending soon
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="shrink-0 text-[10px] text-muted-foreground">
+      {left}d left
+    </Badge>
+  );
+}
+
+function UrgentChip() {
+  return (
+    <Badge className="shrink-0 border-0 bg-red-500/15 text-[10px] font-bold text-red-600 dark:text-red-400">
+      <Siren className="mr-1 size-3" aria-hidden /> Urgent
+    </Badge>
+  );
+}
+
+function TaxEligibleChip() {
+  return (
+    <Badge className="shrink-0 border-0 bg-emerald-500/15 text-[10px] text-emerald-600 dark:text-emerald-400">
+      <Landmark className="mr-1 size-3" aria-hidden /> 80G eligible
+    </Badge>
+  );
+}
+
 /* ================================================================== */
 /* CampaignsPage                                                       */
 /* ================================================================== */
@@ -69,7 +145,9 @@ export function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("ALL");
-  const [sort, setSort] = useState<SortKey>("raised");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sort, setSort] = useState<SortKey>("featured");
+  const [view, setView] = useViewPref("public-campaigns", "grid");
 
   useEffect(() => {
     let alive = true;
@@ -90,6 +168,7 @@ export function CampaignsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = [...(campaigns ?? [])];
+
     if (category !== "ALL") list = list.filter((c) => c.category === category);
     if (q) {
       list = list.filter((c) =>
@@ -98,16 +177,43 @@ export function CampaignsPage() {
           .some((s) => String(s).toLowerCase().includes(q))
       );
     }
+
+    switch (status) {
+      case "active":
+        list = list.filter((c) => (c.status ?? "ACTIVE") === "ACTIVE");
+        break;
+      case "urgent":
+        list = list.filter((c) => c.urgent === true);
+        break;
+      case "ending": {
+        list = list.filter((c) => {
+          const left = daysLeftOf(c.endDate);
+          return left !== null && left >= 0 && left <= 7;
+        });
+        break;
+      }
+    }
+
     switch (sort) {
-      case "raised":
+      case "featured":
         list.sort(
           (a, b) =>
             Number(b.featured ?? false) - Number(a.featured ?? false) ||
             b.raisedAmount - a.raisedAmount
         );
         break;
-      case "goal":
-        list.sort((a, b) => pctOf(b) - pctOf(a));
+      case "raised":
+        list.sort((a, b) => b.raisedAmount - a.raisedAmount);
+        break;
+      case "ending":
+        list.sort((a, b) => {
+          const la = daysLeftOf(a.endDate);
+          const lb = daysLeftOf(b.endDate);
+          if (la === null && lb === null) return 0;
+          if (la === null) return 1;
+          if (lb === null) return -1;
+          return la - lb;
+        });
         break;
       case "newest":
         list.sort(
@@ -118,7 +224,9 @@ export function CampaignsPage() {
         break;
     }
     return list;
-  }, [campaigns, search, category, sort]);
+  }, [campaigns, search, category, status, sort]);
+
+  const filtersDirty = search !== "" || category !== "ALL" || status !== "all";
 
   return (
     <Section
@@ -147,19 +255,59 @@ export function CampaignsPage() {
             </span>
             <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
               <SelectTrigger
-                className="h-11 w-full sm:w-[190px]"
+                className="h-11 w-full sm:w-[180px]"
                 aria-label="Sort programmes"
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="raised">Most raised</SelectItem>
-                <SelectItem value="goal">Closest to goal</SelectItem>
+                <SelectItem value="featured">Featured</SelectItem>
+                <SelectItem value="raised">Most funded</SelectItem>
+                <SelectItem value="ending">Ending soon</SelectItem>
                 <SelectItem value="newest">Newest</SelectItem>
               </SelectContent>
             </Select>
+            <div className="hidden md:block">
+              <ViewSwitcher
+                value={view}
+                onChange={setView}
+                options={["grid", "list"]}
+                aria-label="Switch between grid and list view"
+              />
+            </div>
           </div>
         </div>
+
+        {/* Status filter chips */}
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by status">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            Status
+          </span>
+          {(
+            [
+              { v: "all", label: "All" },
+              { v: "active", label: "Active" },
+              { v: "urgent", label: "Urgent" },
+              { v: "ending", label: "Ending soon" },
+            ] as const
+          ).map((s) => (
+            <button
+              key={s.v}
+              onClick={() => setStatus(s.v)}
+              aria-pressed={status === s.v}
+              className={cn(
+                "min-h-[36px] rounded-full px-3.5 py-1.5 text-sm font-medium transition",
+                status === s.v
+                  ? "bg-emerald-600 text-white"
+                  : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Category chips */}
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by category">
           <button
             onClick={() => setCategory("ALL")}
@@ -171,7 +319,7 @@ export function CampaignsPage() {
                 : "bg-muted text-muted-foreground hover:bg-accent hover:text-foreground"
             )}
           >
-            All
+            All causes
           </button>
           {categories.map((cat) => (
             <button
@@ -188,6 +336,10 @@ export function CampaignsPage() {
               {titleCase(cat)}
             </button>
           ))}
+          {/* Mobile view switcher */}
+          <div className="ml-auto md:hidden">
+            <ViewSwitcher value={view} onChange={setView} options={["grid", "list"]} />
+          </div>
         </div>
       </div>
 
@@ -205,34 +357,114 @@ export function CampaignsPage() {
         </p>
       )}
 
-      {/* Cards */}
+      {/* ---------------- Content ---------------- */}
       {campaigns === null ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-72 rounded-xl" />
-          ))}
-        </div>
+        view === "grid" ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-72 rounded-xl" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 rounded-xl" />
+            ))}
+          </div>
+        )
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={SearchX}
           title="No programmes match"
           hint={
-            search
-              ? `Nothing found for “${search}”. Try a different word, or clear the filters.`
-              : "No campaigns in this category yet — check back soon."
+            filtersDirty
+              ? "Nothing matches this combination of filters. Try a different word, or clear them."
+              : "No campaigns here yet — check back soon."
           }
           action={
-            <Button
-              variant="outline"
-              onClick={() => {
-                setSearch("");
-                setCategory("ALL");
-              }}
-            >
-              Clear filters
-            </Button>
+            filtersDirty ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSearch("");
+                  setCategory("ALL");
+                  setStatus("all");
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : undefined
           }
         />
+      ) : view === "list" ? (
+        <Card className="overflow-hidden p-0">
+          <ul className="divide-y" aria-label="Programmes list">
+            {filtered.map((c) => {
+              const content = CAMPAIGN_CONTENT[c.slug ?? ""];
+              const a = accentSoft(c.accent ?? content?.accent);
+              const pct = pctOf(c);
+              const left = daysLeftOf(c.endDate);
+              return (
+                <li
+                  key={c.id}
+                  className="flex items-center gap-3 p-4 transition-colors hover:bg-muted/40"
+                >
+                  <span
+                    className={cn(
+                      "flex size-10 shrink-0 items-center justify-center rounded-xl sm:size-11",
+                      a.chip,
+                      a.text
+                    )}
+                    aria-hidden
+                  >
+                    <CampaignIcon icon={c.icon ?? content?.icon ?? "heart"} className="size-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <Link
+                        href={`/campaigns/${c.slug}`}
+                        className="truncate font-semibold hover:underline"
+                      >
+                        {c.title}
+                      </Link>
+                      {c.featured && (
+                        <Badge className="shrink-0 border-0 bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-400">
+                          Featured
+                        </Badge>
+                      )}
+                      {c.urgent && <UrgentChip />}
+                      {c.taxEligible && <TaxEligibleChip />}
+                      <DaysLeftBadge left={left} />
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {titleCase(c.category)} ·{" "}
+                      <span className="font-semibold text-foreground">
+                        {formatINRCompact(c.raisedAmount)}
+                      </span>{" "}
+                      of {formatINRCompact(c.targetAmount)} ({pct}%)
+                      {c.endDate ? ` · ends ${formatDate(c.endDate)}` : ""}
+                    </p>
+                  </div>
+                  <div className="hidden text-right sm:block">
+                    <Progress value={pct} className="h-1.5 w-28" aria-label={`${pct}% raised`} />
+                    {c.minDonation && c.minDonation > 0 && (
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Min gift {formatINRCompact(c.minDonation)}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    className={cn("shrink-0 text-white", a.solid)}
+                    asChild
+                  >
+                    <Link href={`/donate?campaign=${c.slug}`}>Donate</Link>
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((c) => {
@@ -240,6 +472,7 @@ export function CampaignsPage() {
             const a = accentSoft(c.accent ?? content?.accent);
             const pct = pctOf(c);
             const active = daysActive(c.startDate);
+            const left = daysLeftOf(c.endDate);
             return (
               <Card
                 key={c.id}
@@ -282,6 +515,15 @@ export function CampaignsPage() {
                       </p>
                     </div>
                   </div>
+
+                  {/* Status badge row */}
+                  {(c.urgent || c.taxEligible || left !== null) && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {c.urgent && <UrgentChip />}
+                      {c.taxEligible && <TaxEligibleChip />}
+                      <DaysLeftBadge left={left} />
+                    </div>
+                  )}
 
                   <p className="line-clamp-3 text-sm text-muted-foreground">
                     {c.tagline ?? content?.heroTag ?? c.description}
@@ -326,9 +568,19 @@ export function CampaignsPage() {
                     </div>
                   </div>
 
+                  {c.minDonation && c.minDonation > 0 && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                      <Info className="size-3 shrink-0" aria-hidden />
+                      Minimum online gift {formatINRCompact(c.minDonation)}
+                    </p>
+                  )}
+
                   {c.startDate && (
                     <p className="text-[11px] text-muted-foreground">
                       Running since {formatDate(c.startDate)}
+                      {c.endDate && left !== null && left >= 0
+                        ? ` · closes ${formatDate(c.endDate)}`
+                        : ""}
                     </p>
                   )}
 
@@ -353,3 +605,7 @@ export function CampaignsPage() {
     </Section>
   );
 }
+
+/* Keep icons referenced for readability of the toolbar row */
+void List;
+void LayoutGrid;

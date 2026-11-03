@@ -84,6 +84,14 @@ const TRANSPARENCY_LINKS = [
   { label: "Volunteer with us", href: "/volunteer", icon: Heart },
 ];
 
+const LEGAL_LINKS = [
+  { label: "Privacy policy", href: "/privacy" },
+  { label: "Terms of use", href: "/terms" },
+  { label: "Refunds", href: "/refunds" },
+  { label: "Tax exemption (80G)", href: "/tax-exemption" },
+  { label: "FAQ", href: "/faq" },
+];
+
 function isActive(path: string, href: string): boolean {
   if (href === "/") return path === "/";
   return path === href || path.startsWith(href + "/");
@@ -570,9 +578,28 @@ export function PublicLayout({
         </div>
 
         <div className="border-t border-white/10">
-          <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between gap-1 px-4 py-4 text-xs sm:flex-row sm:px-6">
-            <p>© {year} United Angel Reach Trust · All rights reserved</p>
-            <p className="text-emerald-300/70">Made in Bengaluru, for all of India</p>
+          <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-4 text-xs sm:px-6">
+            <nav
+              aria-label="Trust and Legal"
+              className="flex flex-wrap items-center gap-x-4 gap-y-1.5"
+            >
+              <span className="font-bold uppercase tracking-wider text-emerald-200">
+                Trust &amp; Legal
+              </span>
+              {LEGAL_LINKS.map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="transition hover:text-white hover:underline"
+                >
+                  {l.label}
+                </Link>
+              ))}
+            </nav>
+            <div className="flex flex-col items-center justify-between gap-1 sm:flex-row">
+              <p>© {year} United Angel Reach Trust · All rights reserved</p>
+              <p className="text-emerald-300/70">Made in Bengaluru, for all of India</p>
+            </div>
           </div>
         </div>
       </footer>

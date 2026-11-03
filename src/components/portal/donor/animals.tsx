@@ -6,7 +6,6 @@ import {
   Bird,
   Cat,
   Dog,
-  HeartHandshake,
   Home,
   Mail,
   MapPin,
@@ -14,28 +13,30 @@ import {
   ShieldCheck,
   Syringe,
   Utensils,
+  Wallet,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import { get, post } from "@/lib/api-client";
 import { formatINR, titleCase } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { StatCard } from "@/components/shared/stat-card";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  FieldGrid,
+  FormSection,
+  SelectField,
+  TextField,
+} from "@/components/shared/form-fields";
+import { amountRule, fieldError, required } from "@/lib/validators";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { asArray } from "./portal-utils";
 
 interface Animal {
   id: string;
@@ -45,6 +46,7 @@ interface Animal {
   ageMonths: number;
   gender: string;
   story: string;
+  healthStatus?: string | null;
   vaccinated: boolean;
   sterilized: boolean;
   location: string;
@@ -70,14 +72,23 @@ interface Certificate {
   meta?: string | null;
 }
 
-function asArray<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === "object" && Array.isArray((data as { data?: unknown }).data))
-    return (data as { data: T[] }).data;
-  if (data && typeof data === "object" && Array.isArray((data as { certificates?: unknown }).certificates))
-    return (data as { certificates: T[] }).certificates;
-  return [];
+interface SponsorForm {
+  amount: string;
+  kind: string;
+  frequency: string;
 }
+
+const KIND_OPTIONS = [
+  { value: "FOOD", label: "Food & feed" },
+  { value: "MEDICAL", label: "Medical care" },
+  { value: "VACCINATION", label: "Vaccination" },
+  { value: "SHELTER", label: "Shelter upkeep" },
+];
+
+const FREQUENCY_OPTIONS = [
+  { value: "MONTHLY", label: "Monthly" },
+  { value: "ONE_TIME", label: "One time" },
+];
 
 const SPECIES_ICONS: Record<string, LucideIcon> = {
   DOG: Dog,
@@ -93,38 +104,19 @@ function ageLabel(months: number): string {
   return `${yrs} yr${yrs >= 2 ? "s" : ""}`;
 }
 
-function AnimalStatusBadge({ status }: { status: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-full text-[10px]",
-        status === "AVAILABLE" &&
-          "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
-        status === "FOSTERED" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-        status === "ADOPTED" &&
-          "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-        status === "CRITICAL" &&
-          "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
-      )}
-    >
-      {titleCase(status)}
-    </Badge>
-  );
-}
-
 export default function DonorAnimals({ user }: { user: SessionUser }) {
   const [animals, setAnimals] = useState<Animal[]>([]);
   const [pledges, setPledges] = useState<AnimalPledge[]>([]);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Sponsor-food dialog
-  const [foodAnimal, setFoodAnimal] = useState<Animal | null>(null);
+  // Sponsor FormSheet
+  const [sponsorAnimal, setSponsorAnimal] = useState<Animal | null>(null);
+  const [form, setForm] = useState<SponsorForm>({ amount: "500", kind: "FOOD", frequency: "MONTHLY" });
+  const [errors, setErrors] = useState<Partial<Record<keyof SponsorForm, string | null>>>({});
   const [sponsoring, setSponsoring] = useState(false);
 
-  // Adopt-interest dialog
+  // Adopt-interest FormSheet
   const [adoptAnimal, setAdoptAnimal] = useState<Animal | null>(null);
   const [registering, setRegistering] = useState(false);
 
@@ -150,20 +142,41 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
     load();
   }, [load]);
 
-  const submitFoodSponsorship = async () => {
-    if (!foodAnimal) return;
+  const openSponsor = (a: Animal) => {
+    setSponsorAnimal(a);
+    setErrors({});
+    setForm({
+      amount: String(Math.max(1, Math.round(a.monthlyFood || 500))),
+      kind: "FOOD",
+      frequency: "MONTHLY",
+    });
+  };
+
+  const submitSponsorship = async () => {
+    if (!sponsorAnimal) return;
+    const errs = {
+      amount: fieldError(form.amount, [
+        required("Sponsorship amount"),
+        amountRule({ min: 1, max: 1_000_000, label: "Sponsorship amount" }),
+      ]),
+      kind: fieldError(form.kind, [required("Support kind")]),
+      frequency: fieldError(form.frequency, [required("Frequency")]),
+    };
+    setErrors(errs);
+    if (errs.amount || errs.kind || errs.frequency) return;
+
     setSponsoring(true);
     try {
       await post("/api/animals/pledges", {
-        animalId: foodAnimal.id,
-        kind: "FOOD",
-        amount: Math.max(1, Math.round(foodAnimal.monthlyFood || 500)),
-        frequency: "MONTHLY",
+        animalId: sponsorAnimal.id,
+        kind: form.kind,
+        amount: Number(form.amount),
+        frequency: form.frequency,
       });
       toast.success(
-        `Thank you! You're covering ${foodAnimal.name}'s food at ${formatINR(foodAnimal.monthlyFood)}/month.`
+        `Thank you! You're covering ${sponsorAnimal.name}'s ${form.kind.toLowerCase()} at ${formatINR(Number(form.amount))}${form.frequency === "MONTHLY" ? "/month" : " one time"}.`
       );
-      setFoodAnimal(null);
+      setSponsorAnimal(null);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not record sponsorship");
@@ -198,8 +211,12 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
     window.open(`/api/certificates/${encodeURIComponent(code)}/html`, "_blank", "noopener");
   };
 
-  const browsable = animals.filter((a) => a.status !== "ADOPTED");
-  const myAdoptions = animals.filter((a) => a.adoptedByName === user.name);
+  const browsable = useMemo(() => animals.filter((a) => a.status !== "ADOPTED"), [animals]);
+  const myAdoptions = useMemo(() => animals.filter((a) => a.adoptedByName === user.name), [animals, user.name]);
+  const activeSponsorships = useMemo(() => pledges.filter((p) => p.status === "ACTIVE"), [pledges]);
+  const monthlyTotal = activeSponsorships
+    .filter((p) => p.frequency === "MONTHLY")
+    .reduce((s, p) => s + (p.amount || 0), 0);
 
   /** Certificate matching an adopted animal by name mention in title/meta. */
   const certForAnimal = useCallback(
@@ -212,18 +229,41 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
     [certificates]
   );
 
-  const activeSponsorships = useMemo(
-    () => pledges.filter((p) => p.status === "ACTIVE"),
-    [pledges]
-  );
-
   return (
     <div className="space-y-6">
       <PageHeader
         title="Animal sponsorship"
-        description="Feed, heal and shelter rescued animals at the UAR shelter — sponsor food in one tap, or register to adopt."
+        description="Feed, heal and shelter rescued animals at the UAR shelter — sponsor in one tap, or register to adopt."
         icon={<PawPrint className="size-5" />}
       />
+
+      {/* ---------- My sponsorships summary strip ---------- */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Active sponsorships"
+          value={loading ? "" : String(activeSponsorships.length)}
+          hint="Food, medical, vaccination & shelter"
+          icon={<PawPrint className="size-5" />}
+          accent="lime"
+          loading={loading}
+        />
+        <StatCard
+          label="Monthly commitment"
+          value={loading ? "" : `${formatINR(monthlyTotal)}/mo`}
+          hint={monthlyTotal > 0 ? "Keeps bowls full at the shelter" : "Sponsor a friend below"}
+          icon={<Wallet className="size-5" />}
+          accent="emerald"
+          loading={loading}
+        />
+        <StatCard
+          label="Shelter friends"
+          value={loading ? "" : String(browsable.length)}
+          hint="Waiting for a sponsor or home"
+          icon={<Home className="size-5" />}
+          accent="teal"
+          loading={loading}
+        />
+      </div>
 
       {/* ---------- Meet the animals ---------- */}
       <section aria-label="Meet the animals">
@@ -251,6 +291,13 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
               const sponsoredKinds = activeSponsorships
                 .filter((p) => p.animal?.name === a.name)
                 .map((p) => p.kind);
+              const myMonthly = activeSponsorships
+                .filter((p) => p.animal?.name === a.name && p.frequency === "MONTHLY")
+                .reduce((s, p) => s + (p.amount || 0), 0);
+              const foodPct =
+                a.monthlyFood > 0
+                  ? Math.min(100, Math.round((myMonthly / a.monthlyFood) * 100))
+                  : 0;
               return (
                 <div key={a.id} className="flex flex-col rounded-xl border bg-card p-5 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
@@ -266,7 +313,7 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
                         </p>
                       </div>
                     </div>
-                    <AnimalStatusBadge status={a.status} />
+                    <StatusBadge status={a.status} />
                   </div>
 
                   <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{a.story}</p>
@@ -288,27 +335,48 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
                         <Syringe className="size-3" aria-hidden="true" /> Sterilized
                       </Badge>
                     )}
-                    {sponsoredKinds.includes("FOOD") && (
+                    {myMonthly > 0 && (
                       <Badge
                         variant="outline"
                         className="gap-1 rounded-full border-primary/30 bg-primary/10 text-[10px] text-primary"
                       >
-                        <Utensils className="size-3" aria-hidden="true" /> You feed {a.name}
+                        <Utensils className="size-3" aria-hidden="true" /> You give {formatINR(myMonthly)}/mo
                       </Badge>
                     )}
                   </div>
 
-                  <div className="mt-4 flex items-center justify-between gap-2">
-                    <div className="min-w-0">
+                  {/* Sponsorship progress — how much of this friend's monthly
+                      food cost your active support already covers */}
+                  <div className="mt-4">
+                    <div className="flex items-baseline justify-between gap-2">
                       <p className="text-sm">
                         <span className="font-bold text-primary">{formatINR(a.monthlyFood)}</span>
                         <span className="text-muted-foreground">/mo food</span>
                       </p>
-                      <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <MapPin className="size-3" aria-hidden="true" />
-                        <span className="truncate">{a.location}</span>
+                      <p className="text-xs text-muted-foreground">
+                        {foodPct > 0 ? `${foodPct}% covered by you` : "Not covered yet"}
                       </p>
                     </div>
+                    <div
+                      role="progressbar"
+                      aria-valuenow={foodPct}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`${a.name} monthly food coverage`}
+                      className="mt-2 h-2 overflow-hidden rounded-full bg-muted"
+                    >
+                      <div
+                        className="h-full rounded-full bg-lime-500 transition-all"
+                        style={{ width: `${foodPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <MapPin className="size-3" aria-hidden="true" />
+                      <span className="truncate">{a.location}</span>
+                    </p>
                     <div className="flex gap-2">
                       <Button
                         variant="outline"
@@ -321,11 +389,11 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
                       </Button>
                       <Button
                         className="min-h-11 gap-1.5 sm:min-h-9"
-                        onClick={() => setFoodAnimal(a)}
-                        aria-label={`Sponsor food for ${a.name}`}
+                        onClick={() => openSponsor(a)}
+                        aria-label={`Sponsor ${a.name}`}
                       >
                         <Utensils className="size-4" aria-hidden="true" />
-                        Sponsor food
+                        Sponsor
                       </Button>
                     </div>
                   </div>
@@ -335,8 +403,6 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
           </div>
         )}
       </section>
-
-      <Separator />
 
       {/* ---------- Adoption confirmations ---------- */}
       {myAdoptions.length > 0 && (
@@ -393,7 +459,7 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
         {loading ? (
           <Skeleton className="h-28 w-full rounded-xl" />
         ) : pledges.length === 0 ? (
-          <SectionCard title="Sponsorships" icon={<HeartHandshake className="size-5" />}>
+          <SectionCard title="Sponsorships" icon={<PawPrint className="size-5" />}>
             <EmptyState
               icon={<PawPrint className="size-5" />}
               title="No sponsorships yet"
@@ -401,157 +467,123 @@ export default function DonorAnimals({ user }: { user: SessionUser }) {
             />
           </SectionCard>
         ) : (
-          <div className="grid gap-3">
-            {pledges.map((p) => {
-              const KindIcon =
-                p.kind === "FOOD"
-                  ? Utensils
-                  : p.kind === "MEDICAL"
-                    ? HeartHandshake
-                    : p.kind === "VACCINATION"
-                      ? Syringe
-                      : Home;
-              return (
-                <div key={p.id} className="rounded-xl border bg-card p-4 shadow-sm sm:p-5">
-                  <div className="flex flex-wrap items-start gap-3">
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <KindIcon className="size-4" aria-hidden="true" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-semibold">
-                          {p.animal?.name ?? "Shelter fund"}
-                          {p.animal?.species ? ` · ${titleCase(p.animal.species)}` : ""}
-                        </p>
-                        <Badge
-                          variant="outline"
-                          className="rounded-full text-[10px] text-muted-foreground"
-                        >
-                          {titleCase(p.kind)}
-                        </Badge>
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "rounded-full text-[10px]",
-                            p.status === "ACTIVE" &&
-                              "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-                            p.status === "COMPLETED" &&
-                              "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-                            p.status === "CANCELLED" &&
-                              "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-                          )}
-                        >
-                          {titleCase(p.status)}
-                        </Badge>
-                      </div>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {formatINR(p.amount)} · {titleCase(p.frequency)}
-                      </p>
-                    </div>
+          <ul className="max-h-96 space-y-0 divide-y overflow-y-auto pr-1 scrollbar-thin">
+            {pledges.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Utensils className="size-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-semibold">
+                      {p.animal?.name ?? "Shelter fund"}
+                      {p.animal?.species ? ` · ${titleCase(p.animal.species)}` : ""}
+                    </p>
+                    <Badge variant="outline" className="rounded-full text-[10px] text-muted-foreground">
+                      {titleCase(p.kind)}
+                    </Badge>
+                    <StatusBadge status={p.status} />
                   </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {formatINR(p.amount)} · {titleCase(p.frequency)}
+                  </p>
                 </div>
-              );
-            })}
-            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              </li>
+            ))}
+            <li className="flex items-start gap-1.5 py-3 text-xs text-muted-foreground">
               <Mail className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               To pause or change a sponsorship, mail the shelter team at
               shelter@unitedangelreach.org — they action requests the same day.
-            </p>
-          </div>
+            </li>
+          </ul>
         )}
       </section>
 
-      {/* ---------- Sponsor food dialog ---------- */}
-      <Dialog
-        open={foodAnimal !== null}
-        onOpenChange={(openDlg) => !openDlg && setFoodAnimal(null)}
+      {/* ---------- Sponsor FormSheet ---------- */}
+      <FormSheet
+        open={sponsorAnimal !== null}
+        onOpenChange={(o) => !o && setSponsorAnimal(null)}
+        title={sponsorAnimal ? `Sponsor ${sponsorAnimal.name}` : "Sponsor a shelter friend"}
+        description={
+          sponsorAnimal
+            ? `${titleCase(sponsorAnimal.species)} · ${sponsorAnimal.location} · food cost ${formatINR(sponsorAnimal.monthlyFood)}/month`
+            : undefined
+        }
+        submitLabel="Confirm sponsorship"
+        loading={sponsoring}
+        dirty={Boolean(sponsorAnimal)}
+        size="sm"
+        onSubmit={submitSponsorship}
+        footerExtra={<span className="hidden sm:inline">Managed by the shelter team</span>}
       >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Sponsor {foodAnimal?.name}&apos;s food</DialogTitle>
-            <DialogDescription>
-              {foodAnimal &&
-                `${titleCase(foodAnimal.species)} at ${foodAnimal.location} · ${formatINR(foodAnimal.monthlyFood)}/month food cost`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Your monthly sponsorship of{" "}
-              <span className="font-semibold text-foreground">
-                {formatINR(foodAnimal?.monthlyFood ?? 0)}
-              </span>{" "}
-              covers this friend&apos;s meals for a month — bowls, feed and the
-              occasional birthday egg.
-            </p>
-            <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs">
-              Frequency: <strong className="text-foreground">MONTHLY</strong> · Kind:{" "}
-              <strong className="text-foreground">FOOD</strong> — managed by the
-              shelter team; you&apos;ll see it under &quot;My sponsorships&quot;.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setFoodAnimal(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="min-h-11"
-              onClick={submitFoodSponsorship}
-              disabled={sponsoring}
-            >
-              {sponsoring ? "Recording…" : "Confirm monthly food"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        {sponsorAnimal && (
+          <FormSection
+            title="Sponsorship details"
+            description="Bowls, feed and the occasional birthday egg — every rupee is tracked to the animal."
+          >
+            <FieldGrid>
+              <TextField
+                label="Amount"
+                required
+                prefix="₹"
+                inputMode="numeric"
+                value={form.amount}
+                onChange={(v) => setForm((f) => ({ ...f, amount: v.replace(/[^\d]/g, "") }))}
+                error={errors.amount}
+                hint={`Full monthly food cost is ${formatINR(sponsorAnimal.monthlyFood)}`}
+              />
+              <SelectField
+                label="Support kind"
+                required
+                value={form.kind}
+                onChange={(v) => setForm((f) => ({ ...f, kind: v }))}
+                options={KIND_OPTIONS}
+              />
+            </FieldGrid>
+            <SelectField
+              label="Frequency"
+              required
+              value={form.frequency}
+              onChange={(v) => setForm((f) => ({ ...f, frequency: v }))}
+              options={FREQUENCY_OPTIONS}
+            />
+          </FormSection>
+        )}
+      </FormSheet>
 
-      {/* ---------- Adopt interest dialog ---------- */}
-      <Dialog
+      {/* ---------- Adopt interest FormSheet (confirmation only) ---------- */}
+      <FormSheet
         open={adoptAnimal !== null}
-        onOpenChange={(openDlg) => !openDlg && setAdoptAnimal(null)}
+        onOpenChange={(o) => !o && setAdoptAnimal(null)}
+        title={adoptAnimal ? `Adopt ${adoptAnimal.name}` : "Adopt"}
+        description={
+          adoptAnimal
+            ? `${titleCase(adoptAnimal.species)} · ${ageLabel(adoptAnimal.ageMonths)} · ${adoptAnimal.location}`
+            : undefined
+        }
+        submitLabel="Register interest"
+        loading={registering}
+        size="sm"
+        onSubmit={registerAdoptionInterest}
+        footerExtra={<span className="hidden sm:inline">Shelter follow-up visit required</span>}
       >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Adopt {adoptAnimal?.name}</DialogTitle>
-            <DialogDescription>
-              {adoptAnimal &&
-                `${titleCase(adoptAnimal.species)} · ${ageLabel(adoptAnimal.ageMonths)} · ${adoptAnimal.location}`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Adoption is confirmed through a <strong>shelter follow-up visit</strong>{" "}
-              — our team checks the home match, shares care notes and completes the
-              handover. Registering your interest reserves {adoptAnimal?.name} while
-              the visit is arranged.
+        {adoptAnimal && (
+          <FormSection
+            title="How adoption works"
+            description="Adoption is confirmed through a shelter follow-up visit — our team checks the home match, shares care notes and completes the handover."
+          >
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Registering your interest reserves <strong className="text-foreground">{adoptAnimal.name}</strong>{" "}
+              while the visit is arranged. Registering uses your account contact —
+              no payment is taken at this step.
             </p>
-            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
               We&apos;ll use <strong>{user.email}</strong>
-              {user.phone ? ` and ${user.phone}` : ""} to reach you within 2 working
-              days.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setAdoptAnimal(null)}
-            >
-              Not now
-            </Button>
-            <Button
-              className="min-h-11"
-              onClick={registerAdoptionInterest}
-              disabled={registering}
-            >
-              {registering ? "Registering…" : "Register interest"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {user.phone ? ` and ${user.phone}` : ""} to reach you within 2 working days.
+            </div>
+          </FormSection>
+        )}
+      </FormSheet>
     </div>
   );
 }

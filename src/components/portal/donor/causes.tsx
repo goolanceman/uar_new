@@ -1,38 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { CalendarClock, HeartHandshake, Info, MapPin, Pill } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CalendarClock, HeartHandshake, Info, MapPin, Pill, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import { useMasters, labelOf } from "@/hooks/use-masters";
 import { get, patch, post } from "@/lib/api-client";
-import { formatINR, formatDate, initials, titleCase } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { formatINR, formatDate, initials } from "@/lib/format";
+import { StatCard } from "@/components/shared/stat-card";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { FormSheet } from "@/components/shared/form-sheet";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
+  Field,
+  FieldGrid,
+  FormSection,
+  SelectField,
+  TextField,
+} from "@/components/shared/form-fields";
+import { amountRule, fieldError, minLen, required } from "@/lib/validators";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { asArray } from "./portal-utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Slider } from "@/components/ui/slider";
 
 interface Cause {
   id: string;
@@ -57,37 +50,16 @@ interface Pledge {
   cause?: { code: string; patientName: string } | null;
 }
 
-function asArray<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === "object" && Array.isArray((data as { data?: unknown }).data))
-    return (data as { data: T[] }).data;
-  return [];
-}
+const MONTH_OPTIONS = [
+  { value: "3", label: "3 months" },
+  { value: "6", label: "6 months" },
+  { value: "12", label: "12 months" },
+];
 
-function CauseStatusBadge({ status }: { status: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-full text-[10px]",
-        status === "SEEKING" &&
-          "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-        status === "PARTIAL" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-        status === "ADOPTED" &&
-          "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-        status === "PAUSED" && "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-      )}
-    >
-      {status === "SEEKING"
-        ? "Seeking donor"
-        : status === "PARTIAL"
-          ? "Partially adopted"
-          : status === "ADOPTED"
-            ? "Fully adopted"
-            : "Paused"}
-    </Badge>
-  );
+interface PledgeForm {
+  amountPerMonth: string;
+  months: string;
+  startDate: string;
 }
 
 export default function DonorCauses(_props: { user: SessionUser }) {
@@ -96,10 +68,10 @@ export default function DonorCauses(_props: { user: SessionUser }) {
   const [pledges, setPledges] = useState<Pledge[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Adopt wizard
+  // Pledge FormSheet
   const [adoptCause, setAdoptCause] = useState<Cause | null>(null);
-  const [amount, setAmount] = useState(100);
-  const [months, setMonths] = useState("6");
+  const [form, setForm] = useState<PledgeForm>({ amountPerMonth: "100", months: "6", startDate: "" });
+  const [errors, setErrors] = useState<Partial<Record<keyof PledgeForm, string | null>>>({});
   const [submitting, setSubmitting] = useState(false);
 
   // Cancel pledge
@@ -128,30 +100,36 @@ export default function DonorCauses(_props: { user: SessionUser }) {
 
   const openAdopt = (cause: Cause) => {
     setAdoptCause(cause);
-    setAmount(Math.max(100, Math.round(cause.monthlyCost)));
-    setMonths("6");
+    setErrors({});
+    setForm({
+      amountPerMonth: String(Math.max(100, Math.round(cause.monthlyCost))),
+      months: "6",
+      startDate: new Date().toISOString().slice(0, 10),
+    });
   };
-
-  const sliderMax = Math.max(100, Math.round(adoptCause?.monthlyCost ?? 100));
 
   const submitAdopt = async () => {
     if (!adoptCause) return;
-    if (amount < 100) {
-      toast.error("Minimum pledge is ₹100 per month");
-      return;
-    }
-    if (amount > adoptCause.monthlyCost) {
-      toast.error(`Monthly cost for this patient is ${formatINR(adoptCause.monthlyCost)}`);
-      return;
-    }
+    const errs = {
+      amountPerMonth: fieldError(form.amountPerMonth, [
+        required("Monthly amount"),
+        amountRule({ min: 100, max: adoptCause.monthlyCost, label: "Monthly amount" }),
+      ]),
+      months: fieldError(form.months, [required("Duration")]),
+      startDate: fieldError(form.startDate, [minLen(8, "Start date")]),
+    };
+    setErrors(errs);
+    if (errs.amountPerMonth || errs.months || errs.startDate) return;
+
     setSubmitting(true);
     try {
       await post(`/api/causes/${adoptCause.id}/pledges`, {
-        amountPerMonth: amount,
-        months: Number(months),
+        amountPerMonth: Number(form.amountPerMonth),
+        months: Number(form.months),
+        startDate: form.startDate || undefined,
       });
       toast.success(
-        `Thank you! You're adopting ${initials(adoptCause.patientName)}'s medicines at ${formatINR(amount)}/mo for ${months} months. A medicine-sponsor certificate lands in your Receipts → Certificates once issued.`
+        `Thank you! You're adopting ${initials(adoptCause.patientName)}'s medicines at ${formatINR(Number(form.amountPerMonth))}/mo for ${form.months} months. A medicine-sponsor certificate lands in your Tax Centre once issued.`
       );
       setAdoptCause(null);
       await load();
@@ -177,9 +155,13 @@ export default function DonorCauses(_props: { user: SessionUser }) {
     }
   };
 
-  const open = causes.filter((c) => c.status === "SEEKING" || c.status === "PARTIAL");
-  const activePledges = pledges.filter((p) => p.status === "ACTIVE");
+  const open = useMemo(
+    () => causes.filter((c) => c.status === "SEEKING" || c.status === "PARTIAL"),
+    [causes]
+  );
+  const activePledges = useMemo(() => pledges.filter((p) => p.status === "ACTIVE"), [pledges]);
   const monthlyCommitment = activePledges.reduce((s, p) => s + (p.amountPerMonth || 0), 0);
+  const totalPledgedMonths = activePledges.reduce((s, p) => s + (p.months || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -188,6 +170,34 @@ export default function DonorCauses(_props: { user: SessionUser }) {
         description="Adopt a patient's monthly medicines — partial pledges welcome, pause anytime."
         icon={<Pill className="size-5" />}
       />
+
+      {/* ---------- My pledges summary strip ---------- */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Active pledges"
+          value={loading ? "" : String(activePledges.length)}
+          hint="Monthly medicine mandates"
+          icon={<HeartHandshake className="size-5" />}
+          accent="amber"
+          loading={loading}
+        />
+        <StatCard
+          label="Monthly commitment"
+          value={loading ? "" : `${formatINR(monthlyCommitment)}/mo`}
+          hint={monthlyCommitment > 0 ? "Auto-debit via the finance desk" : "Start from ₹100/month"}
+          icon={<Wallet className="size-5" />}
+          accent="teal"
+          loading={loading}
+        />
+        <StatCard
+          label="Months pledged"
+          value={loading ? "" : String(totalPledgedMonths)}
+          hint="Across all active pledges"
+          icon={<CalendarClock className="size-5" />}
+          accent="emerald"
+          loading={loading}
+        />
+      </div>
 
       {/* ---------- Adopt a patient ---------- */}
       <section aria-label="Adopt a patient">
@@ -212,10 +222,7 @@ export default function DonorCauses(_props: { user: SessionUser }) {
           <div className="grid gap-4 md:grid-cols-2">
             {open.map((c) => {
               const totalNeeded = c.monthlyCost * (c.durationMonths || 12);
-              const pct =
-                totalNeeded > 0
-                  ? Math.min(100, Math.round((c.raised / totalNeeded) * 100))
-                  : 0;
+              const pct = totalNeeded > 0 ? Math.min(100, Math.round((c.raised / totalNeeded) * 100)) : 0;
               return (
                 <div key={c.id} className="flex flex-col rounded-xl border bg-card p-5 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
@@ -235,7 +242,7 @@ export default function DonorCauses(_props: { user: SessionUser }) {
                         <span>{labelOf(conditionOptions, c.condition)}</span>
                       </p>
                     </div>
-                    <CauseStatusBadge status={c.status} />
+                    <StatusBadge status={c.status} />
                   </div>
 
                   <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{c.story}</p>
@@ -273,23 +280,11 @@ export default function DonorCauses(_props: { user: SessionUser }) {
         )}
       </section>
 
-      <Separator />
-
       {/* ---------- My pledges ---------- */}
       <section aria-label="My medicine pledges">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            My pledges
-          </h2>
-          {!loading && activePledges.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              Active commitment:{" "}
-              <span className="font-semibold text-foreground">
-                {formatINR(monthlyCommitment)}/mo
-              </span>
-            </p>
-          )}
-        </div>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          My pledges
+        </h2>
         {loading ? (
           <Skeleton className="h-32 w-full rounded-xl" />
         ) : pledges.length === 0 ? (
@@ -310,20 +305,7 @@ export default function DonorCauses(_props: { user: SessionUser }) {
                       <p className="font-mono text-xs text-muted-foreground">
                         {p.cause?.code ?? "UAR-MED"}
                       </p>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "rounded-full text-[10px]",
-                          p.status === "ACTIVE" &&
-                            "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-                          p.status === "COMPLETED" &&
-                            "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-                          p.status === "CANCELLED" &&
-                            "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-                        )}
-                      >
-                        {titleCase(p.status)}
-                      </Badge>
+                      <StatusBadge status={p.status} />
                     </div>
                     <p className="mt-0.5 truncate text-sm font-semibold">
                       {p.cause?.patientName ?? "Patient"} — {formatINR(p.amountPerMonth)}/mo
@@ -355,111 +337,85 @@ export default function DonorCauses(_props: { user: SessionUser }) {
         )}
       </section>
 
-      {/* ---------- Adopt wizard dialog ---------- */}
-      <Dialog
+      {/* ---------- Pledge FormSheet ---------- */}
+      <FormSheet
         open={adoptCause !== null}
-        onOpenChange={(openDlg) => !openDlg && setAdoptCause(null)}
+        onOpenChange={(o) => !o && setAdoptCause(null)}
+        title={adoptCause ? `Adopt ${initials(adoptCause.patientName)}'s medicines` : "Adopt medicines"}
+        description={
+          adoptCause
+            ? `${adoptCause.code} · ${labelOf(conditionOptions, adoptCause.condition)} · ${formatINR(adoptCause.monthlyCost)}/mo for ${adoptCause.durationMonths} months`
+            : undefined
+        }
+        submitLabel="Confirm adoption"
+        loading={submitting}
+        dirty={Boolean(adoptCause)}
+        size="sm"
+        onSubmit={submitAdopt}
+        footerExtra={
+          <span className="hidden sm:inline">Monthly auto-debit mandate · pause anytime</span>
+        }
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              Adopt {adoptCause ? `${initials(adoptCause.patientName)}'s` : "the patient's"} medicines
-            </DialogTitle>
-            <DialogDescription>
-              {adoptCause &&
-                `${adoptCause.code} · ${labelOf(conditionOptions, adoptCause.condition)} · ${formatINR(adoptCause.monthlyCost)}/mo for ${adoptCause.durationMonths} months`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div className="space-y-3">
-              <div className="flex items-baseline justify-between">
-                <Label htmlFor="pledge-amount">Amount per month</Label>
-                <span className="text-lg font-bold text-primary">{formatINR(amount)}</span>
-              </div>
-              <Slider
-                id="pledge-amount"
-                min={100}
-                max={sliderMax}
-                step={50}
-                value={[Math.min(amount, sliderMax)]}
-                onValueChange={(v) => setAmount(Array.isArray(v) ? v[0] : v)}
-                aria-label="Monthly pledge amount in rupees"
+        {adoptCause && (
+          <FormSection title="Pledge details" description="Partial pledges are welcome — the balance is matched by other donors.">
+            <FieldGrid>
+              <TextField
+                label="Amount per month"
+                required
+                prefix="₹"
+                inputMode="numeric"
+                value={form.amountPerMonth}
+                onChange={(v) => setForm((f) => ({ ...f, amountPerMonth: v.replace(/[^\d]/g, "") }))}
+                error={errors.amountPerMonth}
+                hint={`₹100 partial → full cost ${formatINR(adoptCause.monthlyCost)}`}
               />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>₹100 partial</span>
-                <span>Full cost {formatINR(sliderMax)}</span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="pledge-months">Duration</Label>
-              <Select value={months} onValueChange={setMonths}>
-                <SelectTrigger id="pledge-months" className="w-full">
-                  <SelectValue placeholder="Select months" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="3">3 months</SelectItem>
-                  <SelectItem value="6">6 months</SelectItem>
-                  <SelectItem value="12">12 months</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+              <SelectField
+                label="Duration"
+                required
+                value={form.months}
+                onChange={(v) => setForm((f) => ({ ...f, months: v }))}
+                options={MONTH_OPTIONS}
+                placeholder="Select months"
+              />
+            </FieldGrid>
+            <Field label="Start date" hint="Mandates start on the 1st of the chosen month or immediately.">
+              <input
+                type="date"
+                value={form.startDate}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+                aria-label="Pledge start date"
+                className="h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </Field>
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
               <Info className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
               <p>
                 This sets up a <strong>monthly auto-debit mandate</strong> of{" "}
-                {formatINR(amount)} for {months} months. Pause it any time from
-                &quot;My pledges&quot;. Your medicine-sponsor certificate will appear
-                in Receipts → Certificates once issued by our team.
+                {formatINR(Number(form.amountPerMonth) || 0)} for {form.months} months. Pause it
+                any time from &quot;My pledges&quot;. Your medicine-sponsor certificate will
+                appear in the Tax Centre once issued by our team.
               </p>
             </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setAdoptCause(null)}
-            >
-              Cancel
-            </Button>
-            <Button className="min-h-11" onClick={submitAdopt} disabled={submitting}>
-              {submitting ? "Setting up…" : "Confirm adoption"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </FormSection>
+        )}
+      </FormSheet>
 
-      {/* ---------- Pause pledge dialog ---------- */}
-      <Dialog
+      {/* ---------- Pause pledge ConfirmDialog ---------- */}
+      <ConfirmDialog
         open={cancelPledge !== null}
-        onOpenChange={(openDlg) => !openDlg && setCancelPledge(null)}
-      >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Pause this pledge?</DialogTitle>
-            <DialogDescription>
-              {cancelPledge &&
-                `The monthly mandate of ${formatINR(cancelPledge.amountPerMonth)} for ${cancelPledge.cause?.patientName ?? "the patient"} will stop. The patient may lose medicine coverage unless another donor adopts them.`}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setCancelPledge(null)}
-            >
-              Keep pledge
-            </Button>
-            <Button
-              variant="destructive"
-              className="min-h-11"
-              onClick={submitCancel}
-              disabled={cancelling}
-            >
-              {cancelling ? "Pausing…" : "Yes, pause pledge"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(o) => !o && setCancelPledge(null)}
+        title="Pause this pledge?"
+        recordName={
+          cancelPledge
+            ? `${cancelPledge.cause?.patientName ?? "Patient"} · ${formatINR(cancelPledge.amountPerMonth)}/mo · ${cancelPledge.months} months`
+            : null
+        }
+        description="The monthly mandate stops immediately. The patient may lose medicine coverage unless another donor adopts them."
+        confirmLabel="Yes, pause pledge"
+        loading={cancelling}
+        onConfirm={submitCancel}
+      />
     </div>
   );
 }

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
-  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   ClipboardList,
+  Clock3,
   MapPin,
   Play,
   RefreshCw,
-  XCircle,
+  StickyNote,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
@@ -18,21 +20,15 @@ import { formatDateTime, titleCase } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { FormSheet } from "@/components/shared/form-sheet";
+import { TextareaField } from "@/components/shared/form-fields";
+import { fieldError, minLen } from "@/lib/validators";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 
 interface VolunteerTask {
   id: string;
@@ -54,46 +50,13 @@ function asArray<T>(data: unknown): T[] {
   return [];
 }
 
-function PriorityBadge({ priority }: { priority: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-full text-[10px]",
-        priority === "HIGH" &&
-          "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
-        priority === "MEDIUM" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-        priority === "LOW" && "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-      )}
-    >
-      {titleCase(priority)} priority
-    </Badge>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "rounded-full text-[10px]",
-        status === "ASSIGNED" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-        status === "IN_PROGRESS" &&
-          "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-        status === "COMPLETED" &&
-          "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-        status === "CANCELLED" &&
-          "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-      )}
-    >
-      {titleCase(status)}
-    </Badge>
-  );
-}
-
 type TabKey = "ASSIGNED" | "IN_PROGRESS" | "COMPLETED";
+
+function priorityTone(priority: string): "danger" | "warning" | "neutral" {
+  if (priority === "HIGH") return "danger";
+  if (priority === "MEDIUM") return "warning";
+  return "neutral";
+}
 
 export default function VolunteerTasks(_props: {
   user: SessionUser;
@@ -103,15 +66,18 @@ export default function VolunteerTasks(_props: {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("ASSIGNED");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Completion dialog
+  // Completion FormSheet (note required)
   const [completeTask, setCompleteTask] = useState<VolunteerTask | null>(null);
   const [completeNotes, setCompleteNotes] = useState("");
+  const [completeError, setCompleteError] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
 
-  // Cancel dialog
+  // Cancel FormSheet (reason required)
   const [cancelTask, setCancelTask] = useState<VolunteerTask | null>(null);
   const [cancelNotes, setCancelNotes] = useState("");
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
   const load = useCallback(async () => {
@@ -119,10 +85,7 @@ export default function VolunteerTasks(_props: {
     try {
       const data = await get<unknown>("/api/volunteer-tasks?mine=1");
       const list = asArray<VolunteerTask>(data);
-      list.sort(
-        (a, b) =>
-          new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime()
-      );
+      list.sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
       setTasks(list);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not load tasks");
@@ -150,10 +113,9 @@ export default function VolunteerTasks(_props: {
 
   const submitComplete = async () => {
     if (!completeTask) return;
-    if (completeNotes.trim().length < 5) {
-      toast.error("Add a short completion note (min 5 characters) for the coordinator");
-      return;
-    }
+    const err = fieldError(completeNotes, [minLen(5, "Completion note")]);
+    setCompleteError(err);
+    if (err) return;
     setCompleting(true);
     try {
       await patch(`/api/volunteer-tasks/${completeTask.id}`, {
@@ -173,10 +135,9 @@ export default function VolunteerTasks(_props: {
 
   const submitCancel = async () => {
     if (!cancelTask) return;
-    if (cancelNotes.trim().length < 5) {
-      toast.error("Tell the coordinator why you can't make it (min 5 characters)");
-      return;
-    }
+    const err = fieldError(cancelNotes, [minLen(5, "Reason")]);
+    setCancelError(err);
+    if (err) return;
     setCancelling(true);
     try {
       await patch(`/api/volunteer-tasks/${cancelTask.id}`, {
@@ -229,6 +190,7 @@ export default function VolunteerTasks(_props: {
         }
       />
 
+      {/* Status pipeline tabs */}
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as TabKey)}
@@ -253,210 +215,206 @@ export default function VolunteerTasks(_props: {
           ))}
         </div>
       ) : visible.length === 0 ? (
-        <Card>
-          <CardContent className="p-2">
-            <EmptyState
-              icon={<ClipboardList className="size-5" />}
-              title={
-                tab === "ASSIGNED"
-                  ? "No assigned tasks right now"
-                  : tab === "IN_PROGRESS"
-                    ? "Nothing in progress"
-                    : "No completed tasks yet"
-              }
-              hint={
-                tab === "ASSIGNED"
-                  ? "When the coordinator assigns you a drive, rescue or inventory duty, it appears here."
-                  : tab === "IN_PROGRESS"
-                    ? "Accept a task from the Assigned tab to get started."
-                    : "Completed tasks land here with your notes — great work is coming."
-              }
-            />
-          </CardContent>
+        <Card className="p-2">
+          <EmptyState
+            icon={<ClipboardList className="size-5" />}
+            title={
+              tab === "ASSIGNED"
+                ? "No assigned tasks right now"
+                : tab === "IN_PROGRESS"
+                  ? "Nothing in progress"
+                  : "No completed tasks yet"
+            }
+            hint={
+              tab === "ASSIGNED"
+                ? "When the coordinator assigns you a drive, rescue or inventory duty, it appears here."
+                : tab === "IN_PROGRESS"
+                  ? "Start a task from the Assigned tab to get moving."
+                  : "Completed tasks land here with your notes — great work is coming."
+            }
+          />
         </Card>
       ) : (
         <div className="grid gap-3">
-          {visible.map((t) => (
-            <Card key={t.id} className="p-4 sm:p-5">
-              <div className="flex flex-wrap items-start gap-3">
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold">{t.title}</p>
-                    <Badge
-                      variant="outline"
-                      className="rounded-full text-[10px] text-muted-foreground"
-                    >
-                      {titleCase(t.type)}
-                    </Badge>
-                    <PriorityBadge priority={t.priority} />
-                    <StatusBadge status={t.status} />
-                  </div>
-                  {t.description && (
-                    <p className="text-sm text-muted-foreground">{t.description}</p>
-                  )}
-                  <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1">
-                      <CalendarDays className="size-3" aria-hidden="true" />
-                      {formatDateTime(t.scheduledDate)}
-                    </span>
-                    {t.location && (
+          {visible.map((t) => {
+            const expanded = expandedId === t.id;
+            return (
+              <Card key={t.id} className="p-4 sm:p-5">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold">{t.title}</p>
+                      <Badge variant="outline" className="rounded-full text-[10px] text-muted-foreground">
+                        {titleCase(t.type)}
+                      </Badge>
+                      <StatusBadge status={t.priority} tone={priorityTone(t.priority)}>
+                        {titleCase(t.priority)} priority
+                      </StatusBadge>
+                      <StatusBadge status={t.status} />
+                    </div>
+                    <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
                       <span className="inline-flex items-center gap-1">
-                        <MapPin className="size-3" aria-hidden="true" />
-                        {t.location}
+                        <CalendarDays className="size-3" aria-hidden="true" />
+                        {formatDateTime(t.scheduledDate)}
                       </span>
-                    )}
-                  </p>
-                  {t.notes && (
-                    <p className="mt-1 border-l-2 border-primary/30 pl-2 text-xs italic text-muted-foreground">
-                      Note: {t.notes}
+                      {t.location && (
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="size-3" aria-hidden="true" />
+                          {t.location}
+                        </span>
+                      )}
                     </p>
-                  )}
+                  </div>
+
+                  <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                    {t.status === "ASSIGNED" && (
+                      <>
+                        <Button
+                          className="min-h-11 flex-1 gap-1.5 sm:min-h-9 sm:flex-none"
+                          disabled={busyId === t.id}
+                          onClick={() => start(t)}
+                          aria-label={`Start task ${t.title}`}
+                        >
+                          <Play className="size-4" aria-hidden="true" />
+                          {busyId === t.id ? "Starting…" : "Start"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="min-h-11 flex-1 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9 sm:flex-none"
+                          onClick={() => {
+                            setCancelTask(t);
+                            setCancelNotes("");
+                            setCancelError(null);
+                          }}
+                          aria-label={`Can't make task ${t.title}`}
+                        >
+                          Can&apos;t make it
+                        </Button>
+                      </>
+                    )}
+                    {t.status === "IN_PROGRESS" && (
+                      <>
+                        <Button
+                          className="min-h-11 flex-1 gap-1.5 sm:min-h-9 sm:flex-none"
+                          onClick={() => {
+                            setCompleteTask(t);
+                            setCompleteNotes("");
+                            setCompleteError(null);
+                          }}
+                          aria-label={`Complete task ${t.title}`}
+                        >
+                          Complete
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="min-h-11 flex-1 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9 sm:flex-none"
+                          onClick={() => {
+                            setCancelTask(t);
+                            setCancelNotes("");
+                            setCancelError(null);
+                          }}
+                          aria-label={`Cancel task ${t.title}`}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="min-h-11 gap-1 sm:min-h-9"
+                      onClick={() => setExpandedId((prev) => (prev === t.id ? null : t.id))}
+                      aria-expanded={expanded}
+                      aria-label={`${expanded ? "Hide" : "Show"} details for ${t.title}`}
+                    >
+                      {expanded ? <ChevronDown className="size-4" aria-hidden="true" /> : <ChevronRight className="size-4" aria-hidden="true" />}
+                      Details
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                  {t.status === "ASSIGNED" && (
-                    <>
-                      <Button
-                        className="min-h-11 flex-1 gap-1.5 sm:min-h-9 sm:flex-none"
-                        disabled={busyId === t.id}
-                        onClick={() => start(t)}
-                        aria-label={`Start task ${t.title}`}
-                      >
-                        <Play className="size-4" aria-hidden="true" />
-                        {busyId === t.id ? "Starting…" : "Start"}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="min-h-11 flex-1 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9 sm:flex-none"
-                        onClick={() => {
-                          setCancelTask(t);
-                          setCancelNotes("");
-                        }}
-                        aria-label={`Cancel task ${t.title}`}
-                      >
-                        <XCircle className="size-4" aria-hidden="true" />
-                        Can&apos;t make it
-                      </Button>
-                    </>
-                  )}
-                  {t.status === "IN_PROGRESS" && (
-                    <>
-                      <Button
-                        className="min-h-11 flex-1 gap-1.5 sm:min-h-9 sm:flex-none"
-                        onClick={() => {
-                          setCompleteTask(t);
-                          setCompleteNotes("");
-                        }}
-                        aria-label={`Complete task ${t.title}`}
-                      >
-                        <CheckCircle2 className="size-4" aria-hidden="true" />
-                        Complete
-                      </Button>
-                      <Button
-                        variant="outline"
-                        className="min-h-11 flex-1 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9 sm:flex-none"
-                        onClick={() => {
-                          setCancelTask(t);
-                          setCancelNotes("");
-                        }}
-                        aria-label={`Cancel task ${t.title}`}
-                      >
-                        <XCircle className="size-4" aria-hidden="true" />
-                        Cancel
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-            </Card>
-          ))}
+
+                {/* Detail expansion */}
+                {expanded && (
+                  <div className="mt-3 space-y-2 rounded-lg bg-muted/40 p-4 text-sm">
+                    <p className="flex items-start gap-2">
+                      <StickyNote className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                      <span className="text-muted-foreground">
+                        {t.description ?? "No briefing added — ask your coordinator on ground."}
+                      </span>
+                    </p>
+                    {t.notes && (
+                      <p className="flex items-start gap-2">
+                        <Clock3 className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                        <span className="text-muted-foreground">
+                          Latest note: {t.notes}
+                        </span>
+                      </p>
+                    )}
+                    {t.completedAt && (
+                      <p className="text-xs text-muted-foreground">
+                        Completed {formatDateTime(t.completedAt)}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
 
-      {/* ---------- Complete dialog (notes required) ---------- */}
-      <Dialog
+      {/* ---------- Complete FormSheet (notes required) ---------- */}
+      <FormSheet
         open={completeTask !== null}
-        onOpenChange={(open) => !open && setCompleteTask(null)}
+        onOpenChange={(o) => !o && setCompleteTask(null)}
+        title={completeTask ? `Complete “${completeTask.title}”` : "Complete task"}
+        description="Add a short field note — beneficiary count, what was handed over, or anything the coordinator should know."
+        submitLabel="Mark complete"
+        loading={completing}
+        dirty={completeNotes.trim().length > 0}
+        size="sm"
+        onSubmit={submitComplete}
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Complete “{completeTask?.title}”</DialogTitle>
-            <DialogDescription>
-              Add a short field note — beneficiary count, what was handed over, or
-              anything the coordinator should know.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="task-complete-notes">Completion note (required)</Label>
-            <Textarea
-              id="task-complete-notes"
-              rows={4}
-              placeholder="e.g. 32 ration kits handed over at Ejipura drive, 4 volunteers assisted…"
-              value={completeNotes}
-              onChange={(e) => setCompleteNotes(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              {completeNotes.trim().length}/5 characters minimum
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setCompleteTask(null)}
-            >
-              Keep working
-            </Button>
-            <Button className="min-h-11" onClick={submitComplete} disabled={completing}>
-              {completing ? "Saving…" : "Mark complete"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        <TextareaField
+          label="Completion note (required)"
+          required
+          rows={4}
+          placeholder="e.g. 32 ration kits handed over at Ejipura drive, 4 volunteers assisted…"
+          value={completeNotes}
+          onChange={setCompleteNotes}
+          error={completeError}
+        />
+        <p className="text-xs text-muted-foreground">
+          {completeNotes.trim().length}/5 characters minimum — goes straight to the coordinator.
+        </p>
+      </FormSheet>
 
-      {/* ---------- Cancel dialog (note required) ---------- */}
-      <Dialog
+      {/* ---------- Cancel FormSheet (reason required) ---------- */}
+      <FormSheet
         open={cancelTask !== null}
-        onOpenChange={(open) => !open && setCancelTask(null)}
+        onOpenChange={(o) => !o && setCancelTask(null)}
+        title={cancelTask ? `Can't make “${cancelTask.title}”?` : "Cancel task"}
+        description="No problem — leave a note so the coordinator can reassign quickly."
+        submitLabel="Cancel task"
+        cancelLabel="I'll manage it"
+        loading={cancelling}
+        dirty={cancelNotes.trim().length > 0}
+        size="sm"
+        onSubmit={submitCancel}
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Can&apos;t make “{cancelTask?.title}”?</DialogTitle>
-            <DialogDescription>
-              No problem — leave a note so the coordinator can reassign quickly.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="task-cancel-notes">Reason (required)</Label>
-            <Textarea
-              id="task-cancel-notes"
-              rows={3}
-              placeholder="e.g. Out of town this weekend, can take the next drive…"
-              value={cancelNotes}
-              onChange={(e) => setCancelNotes(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              {cancelNotes.trim().length}/5 characters minimum
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="min-h-11 sm:min-h-9"
-              onClick={() => setCancelTask(null)}
-            >
-              I&apos;ll manage it
-            </Button>
-            <Button
-              variant="destructive"
-              className="min-h-11"
-              onClick={submitCancel}
-              disabled={cancelling}
-            >
-              {cancelling ? "Cancelling…" : "Cancel task"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        <TextareaField
+          label="Reason (required)"
+          required
+          rows={3}
+          placeholder="e.g. Out of town this weekend, can take the next drive…"
+          value={cancelNotes}
+          onChange={setCancelNotes}
+          error={cancelError}
+        />
+        <p className="text-xs text-muted-foreground">
+          {cancelNotes.trim().length}/5 characters minimum.
+        </p>
+      </FormSheet>
     </div>
   );
 }

@@ -16,12 +16,23 @@ import { ImpactPage } from "@/components/public/impact";
 import { ContactPage } from "@/components/public/contact";
 import { LoginPage, RegisterPage } from "@/components/public/auth-pages";
 import { ProfilePage } from "@/components/public/profile-page";
+import { PolicyPage } from "@/components/public/policies";
 import { Compass } from "lucide-react";
+
+/** Trust & Legal policy routes rendered by the single PolicyPage component. */
+const POLICY_ROUTES: Record<string, string> = {
+  "/privacy": "privacy",
+  "/terms": "terms",
+  "/refunds": "refunds",
+  "/tax-exemption": "tax-exemption",
+  "/faq": "faq",
+};
 
 /**
  * PublicSite — the single hash-routed public website.
  * Routes: / · /about · /campaigns · /campaigns/:slug · /green-corridor
- *         /donate · /volunteer · /contact · /impact · /login · /register · /profile
+ *         /donate · /volunteer · /contact · /impact · /login · /register
+ *         /profile · /privacy · /terms · /refunds · /tax-exemption · /faq
  */
 export function PublicSite() {
   const route = useRoute();
@@ -72,7 +83,12 @@ export function PublicSite() {
       case "/profile":
         page = <ProfilePage key={route.key} />;
         break;
-      default:
+      default: {
+        const policySlug = POLICY_ROUTES[path];
+        if (policySlug) {
+          page = <PolicyPage key={policySlug} slug={policySlug} />;
+          break;
+        }
         page = (
           <EmptyState
             icon={Compass}
@@ -86,6 +102,7 @@ export function PublicSite() {
           />
         );
         break;
+      }
     }
   }
 

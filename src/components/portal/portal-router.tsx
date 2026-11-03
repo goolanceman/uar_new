@@ -43,6 +43,8 @@ export interface VolunteerProfile {
   skills?: string | null; // JSON string
   availability?: string | null; // JSON string
   assignedArea?: string | null;
+  emergencyContact?: string | null;
+  idProof?: string | null;
   status: string; // PENDING | ACTIVE | INACTIVE | SUSPENDED
   joinedAt?: string;
 }
