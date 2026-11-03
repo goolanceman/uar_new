@@ -10,17 +10,24 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Section, StepFlow } from "@/components/public/shared";
 import { ORG_DEFAULTS, orgWithFallbacks, type OrgFallbacks } from "@/components/public/campaign-data";
+import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
+  BadgeCheck,
   BadgeIndianRupee,
   Eye,
+  FileCheck2,
   FileText,
   HandHeart,
   Heart,
+  Hourglass,
+  IdCard,
   Landmark,
   MapPinned,
   QrCode,
+  ScrollText,
   ShieldCheck,
+  Stamp,
   Target,
   Zap,
 } from "lucide-react";
@@ -84,6 +91,14 @@ const WHERE_WE_WORK = [
 
 /* ================================================================== */
 
+interface LegalCard {
+  label: string;
+  value: string;
+  hint: string;
+  icon: LucideIcon;
+  mono?: boolean;
+}
+
 export function AboutPage() {
   const [org, setOrg] = useState<OrgFallbacks | null>(null);
 
@@ -104,6 +119,35 @@ export function AboutPage() {
     { label: "PAN", value: o.orgPan, mono: true },
     { label: "12A registration", value: o.orgReg12a },
     { label: "NGO Darpan ID", value: o.orgDarpan, mono: true },
+  ];
+
+  const legalCards: LegalCard[] = [
+    {
+      label: "PAN",
+      value: o.orgPan,
+      hint: "Income Tax Department",
+      icon: IdCard,
+      mono: true,
+    },
+    {
+      label: "80G approval",
+      value: o.org80g,
+      hint: "Donations qualify for tax deduction",
+      icon: Stamp,
+    },
+    {
+      label: "12A registration",
+      value: o.orgReg12a,
+      hint: "Charitable trust registration",
+      icon: ScrollText,
+    },
+    {
+      label: "NGO Darpan ID",
+      value: o.orgDarpan,
+      hint: "NITI Aayog registry",
+      icon: Landmark,
+      mono: true,
+    },
   ];
 
   return (
@@ -273,6 +317,113 @@ export function AboutPage() {
             </div>
           </Card>
         </div>
+      </Section>
+
+      {/* Legal & Financial transparency */}
+      <Section
+        title="Legal & Financial transparency"
+        subtitle="Every number below is public record — look us up, verify us, then trust us with your rupee."
+      >
+        {/* Registration cards */}
+        {org === null ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Loading registrations">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-32 rounded-xl" />
+            ))}
+          </div>
+        ) : (
+          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Statutory registrations">
+            {legalCards.map((c) => (
+              <li key={c.label}>
+                <Card className="flex h-full flex-col gap-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <span
+                      aria-hidden
+                      className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                    >
+                      <c.icon className="size-4" />
+                    </span>
+                    {c.value ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
+                        <BadgeCheck className="size-3" aria-hidden /> Verified
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-dashed px-2 py-0.5 text-[10px] font-semibold text-muted-foreground/80">
+                        On request
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                      {c.label}
+                    </p>
+                    <p
+                      className={cnValue(c.mono) + " mt-0.5 break-words"}
+                      aria-label={c.value ? `${c.label}: ${c.value}` : `${c.label} available on request`}
+                    >
+                      {c.value || (
+                        <span className="font-normal text-muted-foreground/70">
+                          Available on request
+                        </span>
+                      )}
+                    </p>
+                    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{c.hint}</p>
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* Annual reports & audited financials — placeholder row */}
+        <Card className="mt-6 p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex gap-3">
+              <span
+                aria-hidden
+                className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+              >
+                <FileText className="size-5" />
+              </span>
+              <div>
+                <h3 className="font-semibold leading-snug">Annual reports &amp; audited financials</h3>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                  Financial-year reports and auditor-certified statements will be published here as
+                  downloadable files the moment they are signed — the same documents we file with
+                  the Income Tax Department.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2" aria-label="Documents coming soon">
+              {["Annual report", "Audited financials", "Form 10B"].map((doc) => (
+                <span
+                  key={doc}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-dashed bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground"
+                >
+                  <Hourglass className="size-3" aria-hidden />
+                  {doc} · coming soon
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="mt-5 flex flex-col gap-3 border-t pt-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <p>
+              Quarterly fund utilisation is reported publicly on the{" "}
+              <Link
+                href="/impact"
+                className="font-semibold text-emerald-600 hover:underline dark:text-emerald-400"
+              >
+                Impact page
+              </Link>
+              .
+            </p>
+            <Button variant="outline" size="sm" className="shrink-0" asChild>
+              <Link href="/tax-exemption">
+                <FileCheck2 className="size-4" aria-hidden /> How your 80G tax exemption works
+              </Link>
+            </Button>
+          </div>
+        </Card>
       </Section>
 
       {/* Where we work */}

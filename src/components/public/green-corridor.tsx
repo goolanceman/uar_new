@@ -28,6 +28,7 @@ import {
   Car,
   Gauge,
   Heart,
+  LogIn,
   Play,
   Phone,
   Radio,
@@ -458,18 +459,45 @@ interface CorridorStats {
   byMethod?: { method: string; count: number; savedSec: number }[];
 }
 
+/** Corridor counters available in the public /api/stats payload. */
+interface PublicCorridorTotals {
+  missions: number;
+  vehiclesAlerted: number;
+  timeSavedMin: number;
+}
+
 function CorridorLiveStats() {
   const [stats, setStats] = useState<CorridorStats | null>(null);
   const [failed, setFailed] = useState(false);
+  const [publicTotals, setPublicTotals] = useState<PublicCorridorTotals | null>(null);
 
   useEffect(() => {
     let alive = true;
     get<CorridorStats>("/api/corridor-stats")
-      .then((d) => alive && setStats(d ?? null))
+      .then((d) => {
+        if (!alive) return;
+        if (d) setStats(d);
+        else setFailed(true);
+      })
       .catch(() => {
-        if (alive) {
-          setFailed(true);
-        }
+        // Signed out (403) or network error — fall back to the public impact feed
+        if (!alive) return;
+        setFailed(true);
+        get<{ totals?: { missions?: number; vehiclesAlerted?: number; timeSavedMin?: number } }>(
+          "/api/stats"
+        )
+          .then((s) => {
+            if (!alive) return;
+            const t = s?.totals;
+            if (t && typeof t.missions === "number") {
+              setPublicTotals({
+                missions: t.missions ?? 0,
+                vehiclesAlerted: t.vehiclesAlerted ?? 0,
+                timeSavedMin: t.timeSavedMin ?? 0,
+              });
+            }
+          })
+          .catch(() => {});
       });
     return () => {
       alive = false;
@@ -478,13 +506,68 @@ function CorridorLiveStats() {
 
   if (failed) {
     return (
-      <Card className="p-5">
-        <p className="flex items-start gap-2 text-sm text-muted-foreground">
-          <Radio className="mt-0.5 size-4 shrink-0 text-red-600 dark:text-red-400" aria-hidden />
-          Live ops-desk counters are visible to signed-in volunteers and admins. The pilot
-          benchmarks below and the simulation above tell the story meanwhile — every corridor
-          event is timestamped per segment and fully auditable.
-        </p>
+      <Card className="overflow-hidden p-0">
+        <div className={publicTotals ? "grid lg:grid-cols-[1.25fr_1fr]" : ""}>
+          <div className="flex flex-col gap-3 p-5 sm:p-6">
+            <div className="flex items-center gap-3">
+              <span
+                aria-hidden
+                className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-600 dark:text-red-400"
+              >
+                <Radio className="size-5" />
+              </span>
+              <h3 className="text-base font-semibold leading-snug sm:text-lg">
+                Live ops board — staff sign-in
+              </h3>
+            </div>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Per-mission timelines, the alert-by-layer breakdown and the segment ledger are visible
+              to signed-in volunteers and admins. The pilot benchmarks below and the simulation
+              above tell the story meanwhile — every corridor event is timestamped per segment and
+              fully auditable.
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <Button className="bg-red-600 hover:bg-red-700" asChild>
+                <Link href="/login">
+                  <LogIn className="size-4" aria-hidden /> Staff sign-in
+                </Link>
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Demo · volunteer@demo.org / Volun@123
+              </span>
+            </div>
+          </div>
+          {publicTotals && (
+            <div className="border-t bg-muted/40 p-5 sm:p-6 lg:border-l lg:border-t-0">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Programme totals · public impact feed
+              </p>
+              <div className="mt-3 grid grid-cols-3 gap-3">
+                {[
+                  { k: publicTotals.missions, label: "corridor missions" },
+                  { k: publicTotals.vehiclesAlerted, label: "vehicles alerted" },
+                  { k: publicTotals.timeSavedMin, label: "minutes saved" },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-lg border bg-card p-3 text-center">
+                    <p
+                      className="text-lg font-extrabold text-red-600 dark:text-red-400 sm:text-xl"
+                      aria-label={`${s.label}: ${s.k.toLocaleString("en-IN")}`}
+                    >
+                      {s.k.toLocaleString("en-IN")}
+                    </p>
+                    <p className="mt-0.5 text-[11px] font-medium leading-tight text-muted-foreground">
+                      {s.label}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+                Updated as missions complete — the live board adds per-mission drill-down on top of
+                these totals.
+              </p>
+            </div>
+          )}
+        </div>
       </Card>
     );
   }

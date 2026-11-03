@@ -1,0 +1,1820 @@
+# Z.ai Master Prompt — Complete Trust Management & Donation Platform Transformation
+
+## Project: MassStudio Trust Management Platform
+
+You are an elite full-stack software architect, senior UI/UX designer, product strategist, database architect, and application security engineer.
+
+Your task is to completely review, redesign, enhance, and implement my existing Trust Management and Donation Platform.
+
+This is NOT a simple UI redesign. I want a complete, modern, innovative, production-ready trust management application with advanced features, a premium user experience, comprehensive admin functionality, donor and volunteer portals, public donation pages, reports, integrations, and automated 80G tax receipt generation.
+
+The existing application is available in the current repository.
+
+**Your first responsibility is to understand the existing codebase, identify the root causes of the problems, research established trust and nonprofit platforms, and then systematically improve every page and module.**
+
+Do not blindly replace the existing application. Preserve the functionality and UI patterns that were previously working well.
+
+---
+
+# PHASE 1 — APPLICATION AUDIT AND AUTHENTICATION FIX
+
+## 1. Fix the Admin Authentication Issue First
+
+Currently, when I log in to the admin pages:
+
+- The application says "Please sign in."
+- Admin data is not displayed.
+- The session appears to be lost or not recognized.
+- Some admin pages may redirect to the login page even after successful authentication.
+
+Investigate and fix this issue before beginning the major redesign.
+
+Review:
+
+- Authentication implementation.
+- Login API and response structure.
+- Session management.
+- JWT generation and validation.
+- Access token and refresh token handling.
+- Cookie configuration.
+- Cookie domain, path, SameSite, Secure, and HttpOnly settings.
+- CORS configuration.
+- API interceptors.
+- Authentication middleware.
+- Protected routes.
+- Admin authorization and role permissions.
+- User context and authentication state.
+- Server-side rendering authentication.
+- Client-side hydration.
+- API request headers.
+- Data fetching and caching.
+- Logout and session expiration.
+- Refresh token rotation.
+- API response handling.
+- Backend authorization.
+- Frontend route guards.
+
+Identify the exact root cause.
+
+Do not simply hide the "Please sign in" message or bypass authentication.
+
+Implement a secure and reliable authentication flow.
+
+### Expected authentication behavior
+
+1. Admin logs in successfully.
+2. Authentication state is established correctly.
+3. The admin dashboard loads without asking the user to sign in again.
+4. Admin data is fetched and displayed.
+5. Refreshing the browser does not unexpectedly log out the user.
+6. Protected routes remain protected.
+7. Expired sessions are handled gracefully.
+8. Unauthorized users cannot access admin APIs.
+9. Login, logout, session restoration, and token refresh work correctly.
+10. No infinite redirects or repeated login prompts.
+
+Add proper loading states, error states, session-expired dialogs, and retry behavior.
+
+Create automated tests for authentication and protected routes.
+
+---
+
+# PHASE 2 — RESEARCH EXISTING TRUST AND NGO PLATFORMS
+
+Before redesigning the application, research established nonprofit and donation platforms.
+
+Study the public-facing experience, admin workflows, donor journeys, reporting capabilities, and design patterns of platforms such as:
+
+- Give.do
+- GiveIndia
+- Ketto
+- Milaap
+- Donorbox
+- Givebutter
+- Classy
+- Salesforce Nonprofit Cloud
+- Raiser's Edge NXT
+- Charity: water
+
+Research relevant official websites, product documentation, public screenshots, and available feature documentation.
+
+Do not blindly copy another website.
+
+Identify the best practices and apply them to our application.
+
+Research:
+
+- Modern nonprofit dashboards.
+- Campaign management.
+- Donation forms.
+- Donor management.
+- Volunteer management.
+- Trust and NGO administration.
+- Donation receipts.
+- Indian 80G tax exemption receipts.
+- Fundraising analytics.
+- Recurring donations.
+- Payment gateway integration.
+- Donor communication.
+- Public campaign pages.
+- Mobile-first donation flows.
+- Accessibility.
+- Data management.
+- Reporting and compliance.
+
+Build a feature inventory and page-by-page implementation plan before making major changes.
+
+---
+
+# PHASE 3 — COMPLETE DESIGN SYSTEM
+
+Create a reusable, premium design system.
+
+The entire application must have a consistent visual identity.
+
+## Design direction
+
+Create a modern, elegant, innovative, premium SaaS-style interface inspired by high-quality fintech, nonprofit, and enterprise administration platforms.
+
+The design should feel:
+
+- Modern.
+- Trustworthy.
+- Premium.
+- Minimal but feature-rich.
+- Innovative.
+- Professional.
+- Responsive.
+- Easy to understand.
+- Visually engaging.
+- Accessible.
+- Consistent across all modules.
+
+Avoid generic dashboard designs.
+
+Do not use excessive gradients, oversized cards, unnecessary shadows, random colors, or crowded layouts.
+
+Use meaningful visual hierarchy, spacing, typography, icons, illustrations, and interactive elements.
+
+## Design system requirements
+
+Create reusable tokens for:
+
+- Primary colors.
+- Secondary colors.
+- Accent colors.
+- Background colors.
+- Surface colors.
+- Border colors.
+- Text colors.
+- Success colors.
+- Warning colors.
+- Error colors.
+- Information colors.
+- Typography.
+- Font sizes.
+- Font weights.
+- Line heights.
+- Spacing.
+- Border radii.
+- Shadows.
+- Elevation.
+- Responsive breakpoints.
+- Animation duration.
+- Focus states.
+- Disabled states.
+- Hover states.
+- Loading states.
+
+Use modern typography such as Inter, Geist, Plus Jakarta Sans, or another suitable font.
+
+Use a consistent modern icon library such as Lucide.
+
+Avoid emojis as primary UI icons.
+
+## Dark theme
+
+Implement a complete dark theme.
+
+The dark theme must not simply invert colors.
+
+Design dedicated dark theme tokens for:
+
+- Backgrounds.
+- Cards.
+- Tables.
+- Sidebars.
+- Forms.
+- Dialogs.
+- Drawers.
+- Charts.
+- Inputs.
+- Tooltips.
+- Dropdowns.
+- Navigation.
+- Notifications.
+
+Provide a theme switcher with:
+
+- Light.
+- Dark.
+- System.
+
+Persist the selected theme.
+
+Ensure every page and component works correctly in all themes.
+
+---
+
+# PHASE 4 — REUSABLE COMPONENT ARCHITECTURE
+
+Use reusable code throughout the application.
+
+Do not implement the same UI repeatedly in different pages.
+
+Create a component library that includes:
+
+### Layout components
+
+- Application shell.
+- Admin sidebar.
+- Top navigation.
+- Breadcrumbs.
+- Page headers.
+- Page descriptions.
+- Responsive navigation.
+- Mobile navigation drawer.
+- Content containers.
+- Dashboard sections.
+- Split panels.
+- Detail page layouts.
+
+### Data components
+
+- Advanced data table.
+- Grid view.
+- List view.
+- Kanban view where appropriate.
+- Pagination.
+- Search.
+- Sorting.
+- Filters.
+- Column selector.
+- Bulk actions.
+- Export controls.
+- Empty states.
+- Error states.
+- Loading skeletons.
+
+### Form components
+
+- Text inputs.
+- Number inputs.
+- Currency inputs.
+- Phone inputs.
+- Email inputs.
+- Date pickers.
+- Date ranges.
+- Select dropdowns.
+- Multi-select.
+- Searchable select.
+- Radio groups.
+- Checkboxes.
+- Toggle switches.
+- File uploads.
+- Image uploads.
+- Rich text editor.
+- Address fields.
+- Repeatable field groups.
+- Conditional fields.
+- Form sections.
+- Validation messages.
+
+### Interactive components
+
+- Slide-over panels.
+- Confirmation dialogs.
+- Toast notifications.
+- Tooltips.
+- Popovers.
+- Dropdown menus.
+- Command palette.
+- Stepper.
+- Progress indicators.
+- Tabs.
+- Accordions.
+- Timeline.
+- Activity feed.
+- Status badges.
+- Charts.
+- Notifications.
+
+All reusable components must support light and dark themes.
+
+---
+
+# PHASE 5 — ADD AND EDIT EXPERIENCE
+
+This is a critical requirement.
+
+For ALL admin modules, use a modern slide-over drawer instead of traditional modal popups for adding and editing records.
+
+Do not use modal dialogs for large forms.
+
+## Slide-over requirements
+
+Create a reusable slide-over component with:
+
+- Smooth animation.
+- Responsive width.
+- Full-screen mobile behavior.
+- Sticky header.
+- Sticky footer.
+- Scrollable content.
+- Close button.
+- Unsaved changes warning.
+- Form validation.
+- Loading state.
+- Save and cancel actions.
+- Save and continue where appropriate.
+- Multi-step form support.
+- Inline field help.
+- Section navigation.
+- Error summary.
+- Keyboard accessibility.
+
+Use different widths depending on the complexity of the form.
+
+For large forms, use a full-height drawer with an organized multi-section layout.
+
+For mobile, use a full-screen form experience.
+
+Do not place every field in a single long, unstructured form.
+
+Organize fields into logical sections with clear headings, descriptions, and guided steps.
+
+Example:
+
+Donor Details
+- Personal Information
+- Contact Information
+- Address
+- Tax Information
+- Communication Preferences
+- Donation History
+- Documents
+- Additional Information
+
+Use conditional fields where appropriate.
+
+Validate required fields, email addresses, phone numbers, amounts, dates, and file formats.
+
+Prevent duplicate submissions.
+
+Show meaningful success and error messages.
+
+---
+
+# PHASE 6 — EVERY LIST PAGE MUST BE ADVANCED
+
+Review every listing page in the admin panel.
+
+Every list page must have multiple display layouts.
+
+## Supported layouts
+
+1. Table view.
+2. Grid/card view.
+3. Compact list view.
+4. Kanban view for appropriate modules.
+
+Users must be able to switch between layouts.
+
+Persist their preferred layout.
+
+## Advanced listing features
+
+Implement:
+
+- Global search.
+- Module-specific search.
+- Advanced filters.
+- Date range filters.
+- Status filters.
+- Multi-field filters.
+- Saved filters.
+- Sorting.
+- Pagination.
+- Page size selection.
+- Column visibility.
+- Column reordering.
+- Column resizing.
+- Row selection.
+- Bulk actions.
+- Export CSV.
+- Export Excel.
+- Export PDF where appropriate.
+- Print.
+- Refresh.
+- Clear filters.
+- Search suggestions.
+- Filter chips.
+- Record counts.
+- Empty states.
+- Loading skeletons.
+- Error states.
+
+The table columns must be based on the actual data model and business requirements.
+
+Do not display random or unnecessary columns.
+
+Each module should have meaningful default columns and customizable columns.
+
+On mobile, automatically adapt tables to a card/list experience without losing essential actions or information.
+
+---
+
+# PHASE 7 — COMPLETE ADMIN MODULE REDESIGN
+
+Review the existing admin application and redesign every existing page and module.
+
+Do not skip any existing module.
+
+For every module, implement:
+
+- List page.
+- Add page or drawer.
+- Edit page or drawer.
+- Detail page.
+- View history.
+- Delete confirmation.
+- Validation.
+- Permissions.
+- Loading states.
+- Empty states.
+- Error states.
+- Search.
+- Filters.
+- Sorting.
+- Export.
+- Responsive design.
+- Relevant reports.
+- Activity tracking.
+
+## 1. Admin Dashboard
+
+Create a high-end dashboard with:
+
+- Total donations.
+- Total donors.
+- Total campaigns.
+- Active campaigns.
+- Total volunteers.
+- Pending donations.
+- Successful donations.
+- Failed donations.
+- Refunds.
+- Recurring donations.
+- Total funds collected.
+- Funds utilized.
+- Available funds.
+- Campaign progress.
+- Donation trends.
+- Donation sources.
+- Recent transactions.
+- Recent donors.
+- Recent volunteers.
+- Pending tasks.
+- Pending approvals.
+- Upcoming events.
+- Recent activities.
+- Notifications.
+
+Include date filters and comparison periods.
+
+Add interactive charts and meaningful drill-down navigation.
+
+Allow users to customize dashboard widgets.
+
+---
+
+## 2. Trust Profile and Organization Management
+
+Create a comprehensive organization profile module.
+
+Fields should include:
+
+- Trust name.
+- Registered name.
+- Trust registration number.
+- Registration date.
+- PAN.
+- TAN, if applicable.
+- 12A registration information.
+- 80G registration information.
+- 80G approval reference.
+- Approval validity.
+- Darpan ID, if applicable.
+- CSR-1 registration, if applicable.
+- FCRA registration, if applicable.
+- Registered address.
+- Communication address.
+- Contact email.
+- Contact phone.
+- Website.
+- Logo.
+- Organization description.
+- Mission.
+- Vision.
+- Objectives.
+- Trustees.
+- Board members.
+- Bank account details.
+- Documents.
+- Compliance records.
+
+Use conditional fields based on applicable registrations.
+
+Do not assume every trust has every registration.
+
+Add document expiry reminders and compliance tracking.
+
+---
+
+## 3. Donor Management
+
+Create a complete donor CRM.
+
+### Donor profile fields
+
+Personal information:
+- Donor type: Individual, Company, Organization.
+- Full name.
+- First name.
+- Middle name.
+- Last name.
+- Organization name.
+- Gender, if relevant and legally appropriate.
+- Date of birth, if required.
+- Profile image.
+
+Contact information:
+- Email.
+- Mobile number.
+- Alternate phone.
+- Country.
+- State.
+- City.
+- Address line 1.
+- Address line 2.
+- PIN code.
+
+Tax information:
+- PAN.
+- Tax receipt preference.
+- Donor type.
+- Applicable tax details.
+- Tax declaration.
+- Communication consent.
+
+Additional information:
+- Donor category.
+- Source.
+- Tags.
+- Assigned relationship manager.
+- Notes.
+- Attachments.
+- Status.
+- Created date.
+- Last donation date.
+
+### Donor detail page
+
+Create a complete donor profile with tabs:
+
+- Overview.
+- Donation history.
+- Receipts.
+- Recurring donations.
+- Campaigns supported.
+- Communication history.
+- Documents.
+- Notes.
+- Activity timeline.
+
+Display lifetime donations, average donation, last donation, and donor engagement.
+
+Add donor segmentation and bulk communication features.
+
+---
+
+## 4. Campaign Management
+
+Create a comprehensive campaign module.
+
+### Campaign fields
+
+- Campaign name.
+- Slug.
+- Campaign code.
+- Category.
+- Campaign type.
+- Short description.
+- Detailed description.
+- Campaign image.
+- Gallery.
+- Video.
+- Beneficiary information.
+- Location.
+- Start date.
+- End date.
+- Fundraising goal.
+- Minimum donation.
+- Suggested donation amounts.
+- Maximum donation, if applicable.
+- Currency.
+- Campaign status.
+- Public visibility.
+- Featured campaign.
+- Urgency indicator.
+- Donation frequency.
+- Recurring donation support.
+- Anonymous donation support.
+- Tax receipt eligibility.
+- Campaign manager.
+- Expense budget.
+- Fund utilization details.
+- Documents.
+- SEO title.
+- SEO description.
+- Social sharing image.
+
+### Campaign detail page
+
+Include:
+
+- Campaign overview.
+- Total collected.
+- Target amount.
+- Progress percentage.
+- Donor count.
+- Donation history.
+- Recent donors.
+- Anonymous donations.
+- Expenses.
+- Fund utilization.
+- Updates.
+- Beneficiary details.
+- Documents.
+- Gallery.
+- Timeline.
+- Campaign activity.
+- Reports.
+
+Allow campaign-specific customization of the public donation page.
+
+---
+
+## 5. Donation Management
+
+Build a complete donation transaction system.
+
+### Donation fields
+
+- Donation ID.
+- Donor.
+- Campaign.
+- Amount.
+- Currency.
+- Donation type.
+- One-time donation.
+- Recurring donation.
+- Payment method.
+- Payment gateway.
+- Transaction ID.
+- Payment status.
+- Donation date.
+- Payment date.
+- Anonymous donation.
+- Donor message.
+- Donor address.
+- Tax receipt eligibility.
+- Receipt status.
+- Refund status.
+- Gateway fees.
+- Net amount.
+- Fund allocation.
+- Internal notes.
+- Source.
+- Created by.
+
+### Donation detail page
+
+Include:
+
+- Donation summary.
+- Donor information.
+- Campaign information.
+- Payment details.
+- Gateway response.
+- Transaction timeline.
+- Receipt details.
+- Refund details.
+- Communication history.
+- Audit history.
+
+Implement proper payment status handling.
+
+Do not mark donations as successful based only on frontend payment callbacks.
+
+Verify payment gateway webhooks securely.
+
+Prevent duplicate transactions and duplicate receipts.
+
+---
+
+# PHASE 8 — PUBLIC DONATION WEBSITE
+
+Create a premium public-facing donation website.
+
+The website should be modern, emotionally engaging, trustworthy, and conversion-focused.
+
+Research successful nonprofit websites and apply their best practices.
+
+## Public pages
+
+- Home.
+- About the Trust.
+- Our Mission.
+- Our Impact.
+- Campaigns.
+- Campaign Details.
+- Donate.
+- Donation Success.
+- Donation Failure.
+- Donation Pending.
+- Donation Receipt.
+- Volunteers.
+- Become a Volunteer.
+- Events.
+- Gallery.
+- Stories.
+- Testimonials.
+- Reports and Transparency.
+- Contact.
+- FAQ.
+- Privacy Policy.
+- Terms and Conditions.
+- Refund Policy.
+- Tax Exemption Information.
+
+## Public homepage
+
+Include:
+
+- Premium hero section.
+- Mission statement.
+- Featured campaigns.
+- Donation call to action.
+- Impact statistics.
+- Beneficiary stories.
+- Trust and compliance information.
+- Campaign progress.
+- Transparency reports.
+- Testimonials.
+- Volunteer opportunities.
+- Newsletter subscription.
+- Footer with contact details and policies.
+
+## Campaign browsing
+
+Allow users to:
+
+- Browse campaigns.
+- Search campaigns.
+- Filter by category.
+- Filter by location.
+- Filter by status.
+- Sort campaigns.
+- View campaign progress.
+- View campaign details.
+- Share campaigns.
+- Donate to campaigns.
+- View updates.
+- View impact stories.
+
+Create beautiful campaign cards with meaningful visual hierarchy.
+
+Do not overload the page with information.
+
+## Donation checkout
+
+Create a guided, mobile-first donation experience.
+
+Steps:
+
+1. Select donation amount.
+2. Select donation frequency.
+3. Choose campaign.
+4. Enter donor details.
+5. Enter billing/tax details where required.
+6. Choose anonymous donation if allowed.
+7. Select payment method.
+8. Review donation.
+9. Complete payment.
+10. Display confirmation.
+
+Support:
+
+- One-time donations.
+- Monthly donations.
+- Quarterly donations.
+- Annual donations.
+- Custom amounts.
+- Suggested amounts.
+- Anonymous donations.
+- Donor messages.
+- Secure payments.
+- Donation receipts.
+
+Make the checkout simple, trustworthy, accessible, and fast.
+
+---
+
+# PHASE 9 — 80G TAX RECEIPT GENERATION
+
+Implement a comprehensive 80G donation receipt system suitable for Indian trusts.
+
+Research the current Indian 80G receipt requirements and applicable official guidance.
+
+Do not invent legal requirements.
+
+Support the applicable requirements and distinguish between a donation receipt and an official tax deduction certificate or filing.
+
+## Receipt information
+
+Include applicable fields such as:
+
+- Trust name.
+- Trust registered address.
+- Trust registration details.
+- PAN.
+- 80G approval/reference details.
+- Approval validity, where relevant.
+- Receipt number.
+- Receipt date.
+- Donor name.
+- Donor address.
+- Donor PAN, where applicable.
+- Donation amount.
+- Donation amount in words.
+- Donation date.
+- Payment mode.
+- Transaction reference.
+- Campaign or donation purpose.
+- Authorized signatory.
+- Digital signature or signature image.
+- Trust logo.
+- Receipt footer.
+- Applicable tax declaration.
+
+Support multiple receipt templates.
+
+### Receipt features
+
+- PDF generation.
+- Download receipt.
+- Email receipt.
+- Resend receipt.
+- Receipt preview.
+- Print receipt.
+- Bulk receipt generation.
+- Receipt cancellation.
+- Receipt correction.
+- Receipt version history.
+- Receipt verification.
+- Unique receipt numbering.
+- Receipt audit logs.
+
+Receipt numbering must be unique and transaction-safe.
+
+Prevent duplicate receipts.
+
+Allow administrators to configure receipt templates.
+
+Support multiple languages.
+
+Make receipt layouts professional and print-ready.
+
+Include a QR code or verification URL where appropriate.
+
+Do not claim a receipt guarantees a tax deduction.
+
+---
+
+# PHASE 10 — VOLUNTEER MANAGEMENT AND PORTAL
+
+Create a complete volunteer management system.
+
+## Volunteer profile
+
+- Full name.
+- Email.
+- Mobile.
+- Address.
+- Profile image.
+- Skills.
+- Interests.
+- Availability.
+- Preferred location.
+- Emergency contact.
+- Experience.
+- Languages.
+- Documents.
+- Verification status.
+- Background verification status where applicable.
+- Volunteer status.
+- Registration date.
+
+## Volunteer features
+
+- Volunteer registration.
+- Application review.
+- Approval/rejection.
+- Volunteer onboarding.
+- Event participation.
+- Task assignment.
+- Attendance.
+- Work hours.
+- Volunteer certificates.
+- Activity history.
+- Communication.
+- Document management.
+
+## Volunteer portal
+
+Provide:
+
+- Personal dashboard.
+- Profile management.
+- Available opportunities.
+- Applications.
+- Assigned tasks.
+- Events.
+- Attendance.
+- Work hours.
+- Certificates.
+- Notifications.
+- Documents.
+- Communication preferences.
+
+Create an intuitive volunteer experience with clear next actions.
+
+---
+
+# PHASE 11 — DONOR PORTAL
+
+Create a dedicated donor portal.
+
+Donors must be able to:
+
+- Register.
+- Log in.
+- Reset password.
+- Manage profile.
+- Update contact details.
+- Manage tax information.
+- View donation history.
+- View campaign contributions.
+- Download receipts.
+- View recurring donations.
+- Manage recurring payment methods.
+- Cancel recurring donations.
+- Update communication preferences.
+- View transaction status.
+- Submit support requests.
+- View notifications.
+
+Do not expose one donor's information to another donor.
+
+Implement strict server-side authorization.
+
+---
+
+# PHASE 12 — COMPLETE APPLICATION SETTINGS
+
+Create a comprehensive Settings section.
+
+Every integration must have a proper configuration page.
+
+Do not hardcode API keys, credentials, URLs, or provider settings.
+
+## 1. General Settings
+
+- Application name.
+- Organization name.
+- Logo.
+- Favicon.
+- Application URL.
+- Support email.
+- Support phone.
+- Default currency.
+- Default language.
+- Timezone.
+- Date format.
+- Number format.
+- Theme defaults.
+- Maintenance mode.
+- Public registration.
+- Default pagination.
+- Branding.
+
+## 2. Logging Settings
+
+Create an advanced logging configuration module.
+
+Fields:
+
+- Log level.
+- Debug mode.
+- Application logs.
+- Audit logs.
+- API logs.
+- Error logs.
+- Payment logs.
+- Authentication logs.
+- Retention period.
+- Log rotation.
+- Maximum log size.
+- External logging provider.
+- Log export.
+- Sensitive-data masking.
+- Log search.
+- Log filtering.
+- Log download.
+
+Support appropriate integrations such as:
+
+- Winston/Pino.
+- ELK/Elasticsearch.
+- OpenSearch.
+- Grafana Loki.
+- External log services where supported.
+
+Do not expose sensitive data in logs.
+
+Never log passwords, secret keys, access tokens, or complete payment credentials.
+
+## 3. Language Settings
+
+- Default language.
+- Supported languages.
+- Translation management.
+- Locale.
+- Date format.
+- Currency format.
+- RTL support where required.
+- Language switcher.
+- Translation completeness.
+
+Support multilingual public pages and donor receipts.
+
+## 4. Payment Settings
+
+Create a payment integration management module.
+
+Support provider-specific configurations for:
+
+- Razorpay.
+- Cashfree.
+- PayU.
+- Stripe.
+- PayPal.
+- Other providers through a reusable payment adapter.
+
+For each provider:
+
+- Enable/disable.
+- Test mode.
+- Live mode.
+- Public key.
+- Secret key.
+- Webhook secret.
+- Currency support.
+- Payment methods.
+- Minimum amount.
+- Maximum amount.
+- Transaction fee settings.
+- Recurring payments.
+- Refund support.
+- Webhook configuration.
+- Connection test.
+- Payment logs.
+
+Store credentials securely on the backend.
+
+Mask sensitive credentials in the UI.
+
+Never expose secret keys to the frontend.
+
+Implement secure webhook signature verification.
+
+## 5. SMS Settings
+
+Support configurable SMS providers.
+
+Examples:
+
+- MSG91.
+- Twilio.
+- AWS SNS.
+- Other configurable providers.
+
+Include:
+
+- Provider.
+- API key.
+- Sender ID.
+- Template ID.
+- OTP configuration.
+- SMS templates.
+- Delivery status.
+- Retry settings.
+- Test message.
+- Provider logs.
+- Enable/disable.
+
+## 6. Email Settings
+
+Support:
+
+- SMTP.
+- Amazon SES.
+- SendGrid.
+- Mailgun.
+- Other configurable providers.
+
+Include:
+
+- Host.
+- Port.
+- Username.
+- Password.
+- Encryption.
+- Sender name.
+- Sender email.
+- Reply-to email.
+- Email templates.
+- Test email.
+- Retry settings.
+- Delivery logs.
+- Bounce handling.
+- Notification preferences.
+
+## 7. Other Integrations
+
+Create settings for:
+
+- WhatsApp Business.
+- Google Analytics.
+- Google Tag Manager.
+- Google reCAPTCHA.
+- Cloud storage.
+- S3-compatible storage.
+- CDN.
+- Webhooks.
+- External CRM.
+- Accounting software.
+- PDF generation.
+- Maps.
+- Search.
+- Backup.
+- Monitoring.
+- Error tracking.
+
+Each integration must have:
+
+- Provider selection.
+- Enable/disable.
+- Configuration.
+- Credentials.
+- Connection testing.
+- Health status.
+- Logs.
+- Error handling.
+
+Only implement integrations that have a real backend integration. Do not create fake connection statuses.
+
+---
+
+# PHASE 13 — REPORTS AND ANALYTICS
+
+Create a powerful reporting system.
+
+Research nonprofit reporting requirements and build comprehensive reports.
+
+## Financial reports
+
+- Donation summary.
+- Daily donations.
+- Monthly donations.
+- Annual donations.
+- Campaign-wise donations.
+- Donor-wise donations.
+- Payment method-wise donations.
+- Gateway-wise donations.
+- Successful transactions.
+- Failed transactions.
+- Refunds.
+- Recurring donations.
+- Payment gateway fees.
+- Net donations.
+- Fund allocation.
+- Fund utilization.
+- Campaign expenses.
+- Budget versus actual.
+- Available balance.
+
+## Donor reports
+
+- Donor directory.
+- New donors.
+- Repeat donors.
+- Donor retention.
+- Donor lifetime value.
+- Donor segmentation.
+- Donor engagement.
+- Inactive donors.
+- Anonymous donations.
+- Donor communication.
+
+## Campaign reports
+
+- Campaign performance.
+- Campaign progress.
+- Target versus collected.
+- Campaign-wise donors.
+- Campaign-wise expenses.
+- Fund utilization.
+- Campaign conversion.
+- Campaign source attribution.
+
+## Tax and receipt reports
+
+- 80G receipt register.
+- Receipt generation status.
+- Receipt cancellation.
+- Receipt correction.
+- Donor tax details.
+- Donation summary by financial year.
+- Donation receipt export.
+- Reconciliation reports.
+
+## Volunteer reports
+
+- Volunteer directory.
+- Volunteer applications.
+- Volunteer participation.
+- Volunteer hours.
+- Event attendance.
+- Task completion.
+- Volunteer certificates.
+
+## Reporting UI
+
+Every report should support:
+
+- Date filters.
+- Financial year filters.
+- Campaign filters.
+- Donor filters.
+- Status filters.
+- Search.
+- Sorting.
+- Summary metrics.
+- Charts.
+- Tables.
+- Drill-down.
+- Export CSV.
+- Export Excel.
+- PDF export.
+- Print.
+- Saved reports.
+- Scheduled reports where supported.
+
+Reports must be generated from real data.
+
+Do not use hardcoded dashboard values.
+
+---
+
+# PHASE 14 — ADVANCED FEATURES
+
+Implement additional useful features:
+
+- Role-based access control.
+- Fine-grained permissions.
+- Multiple admin roles.
+- Audit logs.
+- Activity tracking.
+- Approval workflows.
+- Campaign approval.
+- Refund approval.
+- Donation correction approval.
+- Notification center.
+- Email notifications.
+- SMS notifications.
+- WhatsApp notifications where configured.
+- In-app notifications.
+- Scheduled tasks.
+- Recurring donation reminders.
+- Donor segmentation.
+- Bulk imports.
+- Bulk exports.
+- CSV import validation.
+- Duplicate donor detection.
+- Duplicate donation detection.
+- Data reconciliation.
+- Document management.
+- File storage.
+- Backup management.
+- Data retention.
+- Consent management.
+- Accessibility.
+- SEO.
+- Public API.
+- Webhooks.
+- API documentation.
+
+Build the features in a maintainable and extensible way.
+
+---
+
+# PHASE 15 — DETAILS PAGE DESIGN
+
+Every major module must have a comprehensive detail page.
+
+Do not make detail pages simple displays of labels and values.
+
+Create a meaningful detail page layout with:
+
+- Header.
+- Primary identifier.
+- Status.
+- Main actions.
+- Summary cards.
+- Tabs.
+- Overview.
+- Related records.
+- Timeline.
+- Activity.
+- Documents.
+- Notes.
+- History.
+- Audit log.
+- Relevant analytics.
+- Contextual actions.
+
+For example, a donor detail page should show donor information, donations, receipts, communication history, campaign participation, and activity.
+
+A campaign detail page should show campaign progress, donations, donors, expenses, fund utilization, updates, and reports.
+
+A donation detail page should show payment information, transaction history, donor information, receipt information, refunds, and audit logs.
+
+Use responsive tab navigation and meaningful empty states.
+
+---
+
+# PHASE 16 — DELETE AND DESTRUCTIVE ACTIONS
+
+Every delete action must have a proper confirmation dialog.
+
+Do not use browser-native confirm() dialogs.
+
+The confirmation should show:
+
+- Record name.
+- Record type.
+- Consequences.
+- Whether deletion is permanent.
+- Related records that may be affected.
+- Cancel action.
+- Confirm action.
+
+For critical records, require typing the record name or an additional confirmation.
+
+Prefer archival or soft deletion where appropriate.
+
+Never allow deletion of financial transactions in a way that destroys audit history.
+
+Use cancellation, correction, or reversal workflows for financial records.
+
+---
+
+# PHASE 17 — MOBILE, TABLET, LAPTOP AND LARGE SCREEN SUPPORT
+
+The entire application must work on all screen sizes.
+
+Target:
+
+- Small mobile devices.
+- Large mobile devices.
+- Tablets.
+- Laptops.
+- Desktop monitors.
+- Large displays.
+
+Use responsive design principles.
+
+Do not simply shrink the desktop UI.
+
+Design appropriate experiences for each screen size.
+
+### Mobile
+
+- Mobile-first navigation.
+- Bottom navigation where appropriate.
+- Responsive cards.
+- Full-screen forms.
+- Touch-friendly controls.
+- Proper spacing.
+- No horizontal overflow.
+- Readable typography.
+- Responsive charts.
+- Responsive tables.
+- Optimized donation checkout.
+
+### Tablet
+
+- Adaptive sidebar.
+- Responsive grid layouts.
+- Two-column forms where suitable.
+- Adaptive table layouts.
+
+### Desktop
+
+- Expandable sidebar.
+- Full data tables.
+- Advanced filtering.
+- Multi-column forms.
+- Detailed analytics.
+- Efficient workflows.
+
+Test all pages at multiple viewport sizes.
+
+---
+
+# PHASE 18 — INTERACTION AND USER EXPERIENCE
+
+Every page must be carefully designed.
+
+Before implementing each page, think through:
+
+1. What is the user's goal?
+2. What information does the user need?
+3. What are the primary actions?
+4. What are the secondary actions?
+5. Is the page easy to understand?
+6. Is the layout visually balanced?
+7. Are the fields organized logically?
+8. Are validations clear?
+9. Are loading states handled?
+10. Are empty states helpful?
+11. Does the page work on mobile?
+12. Is the dark theme correct?
+13. Are all interactions functional?
+14. Can the user recover from errors?
+15. Is the page consistent with the design system?
+
+Do not build pages blindly.
+
+Every page must feel like a carefully designed product experience.
+
+Use:
+
+- Smooth transitions.
+- Subtle animations.
+- Interactive charts.
+- Tooltips.
+- Guided workflows.
+- Inline validation.
+- Progress indicators.
+- Helpful empty states.
+- Contextual help.
+- Meaningful micro-interactions.
+- Clear success feedback.
+
+Do not introduce unnecessary animations or interactions that reduce usability.
+
+---
+
+# PHASE 19 — LOADING, ERROR AND EMPTY STATES
+
+Create a unified system for:
+
+- Page loaders.
+- Skeleton loaders.
+- Table loaders.
+- Card loaders.
+- Form submission loaders.
+- Upload progress.
+- API errors.
+- Network errors.
+- Permission errors.
+- Session expiration.
+- Empty results.
+- Empty campaigns.
+- Empty donations.
+- Empty reports.
+- Empty donor lists.
+
+Avoid generic messages such as "Something went wrong" when a more meaningful message can be provided.
+
+Add retry functionality where appropriate.
+
+Prevent duplicate API calls and unnecessary loading flickers.
+
+---
+
+# PHASE 20 — TECHNICAL IMPLEMENTATION
+
+First inspect the existing repository and identify the current stack.
+
+Preserve the existing architecture unless there is a strong technical reason to change it.
+
+Use the existing technologies and libraries where possible.
+
+Follow:
+
+- Clean architecture.
+- Separation of concerns.
+- Reusable components.
+- Reusable hooks.
+- Reusable services.
+- Reusable form schemas.
+- Type safety.
+- Consistent API handling.
+- Centralized error handling.
+- Secure authentication.
+- Server-side validation.
+- Database transactions.
+- Proper database indexes.
+- Pagination.
+- Performance optimization.
+- Accessibility.
+- SEO.
+- Maintainable code.
+
+Avoid:
+
+- Duplicated components.
+- Huge components.
+- Hardcoded data.
+- Hardcoded integration credentials.
+- Inconsistent styles.
+- Unnecessary dependencies.
+- Fake API responses.
+- Placeholder buttons.
+- Broken navigation.
+- Incomplete forms.
+- Dead UI actions.
+- Frontend-only security.
+- Destructive database migrations.
+
+If the backend or database schema needs modification, design migrations carefully.
+
+Preserve existing data.
+
+Do not break existing APIs without updating all dependent consumers.
+
+---
+
+# PHASE 21 — IMPLEMENTATION WORKFLOW
+
+Work in a systematic, phased manner.
+
+## Step 1: Audit
+
+Inspect:
+
+- Repository structure.
+- Frontend.
+- Backend.
+- Database.
+- Authentication.
+- API routes.
+- Existing components.
+- Existing pages.
+- Existing design system.
+- Existing integrations.
+- Existing tests.
+- Previously working UI.
+
+Identify the existing UI patterns that were particularly good and preserve or improve them.
+
+## Step 2: Research
+
+Research established nonprofit platforms.
+
+Create a feature matrix.
+
+Identify missing features.
+
+Identify incorrect or incomplete data fields.
+
+Identify UI/UX problems.
+
+Identify security and performance issues.
+
+## Step 3: Plan
+
+Create a complete implementation plan.
+
+Group work into phases.
+
+List every existing page and module.
+
+For each page, identify:
+
+- Current problems.
+- Required data fields.
+- Required actions.
+- Detail page design.
+- List page design.
+- Add/edit form design.
+- Reports.
+- API requirements.
+- Database requirements.
+- Responsive behavior.
+- Validation requirements.
+
+## Step 4: Design System
+
+Implement the reusable design system first.
+
+Create the foundational components.
+
+Implement light and dark themes.
+
+Implement the responsive application shell.
+
+## Step 5: Authentication
+
+Fix the admin login issue.
+
+Verify the complete authentication flow.
+
+## Step 6: Admin Modules
+
+Implement each module completely.
+
+Do not skip add/edit/detail/list workflows.
+
+## Step 7: Public Website
+
+Implement the public donation website.
+
+## Step 8: Donor Portal
+
+Implement the complete donor experience.
+
+## Step 9: Volunteer Portal
+
+Implement the complete volunteer experience.
+
+## Step 10: Settings and Integrations
+
+Implement configurable integrations.
+
+## Step 11: Reports
+
+Implement real-data reporting and analytics.
+
+## Step 12: Testing
+
+Test all workflows.
+
+## Step 13: Final Review
+
+Review every page and module.
+
+Fix any incomplete or inconsistent experiences.
+
+---
+
+# PHASE 22 — TESTING AND ACCEPTANCE CRITERIA
+
+The work is not complete until the following requirements are satisfied.
+
+### Authentication
+
+- Admin login works.
+- Admin data loads.
+- Session persists correctly.
+- Protected routes work.
+- Unauthorized access is blocked.
+- Token refresh works.
+- Logout works.
+
+### Admin modules
+
+- Every module has a complete list page.
+- Every module has an add workflow.
+- Every module has an edit workflow.
+- Every module has a detail page.
+- Every module has appropriate delete/archive handling.
+- Every module has proper validation.
+- Every module has loading and error states.
+- Every module is responsive.
+- Every module supports light and dark themes.
+
+### Public website
+
+- Campaigns load from real data.
+- Campaign filtering works.
+- Campaign details work.
+- Donation checkout works.
+- Payment verification works.
+- Donation confirmation works.
+- Donation receipts work.
+
+### Receipts
+
+- Receipt generation works.
+- Receipt numbering is unique.
+- Receipt download works.
+- Receipt email works.
+- Receipt preview works.
+- Receipt correction and cancellation are auditable.
+
+### Portals
+
+- Donor portal works.
+- Volunteer portal works.
+- Authorization is enforced.
+- Users cannot access another user's private information.
+
+### Settings
+
+- Integrations can be configured.
+- Credentials are stored securely.
+- Test connections work.
+- Integration statuses reflect actual backend health.
+
+### Reports
+
+- Reports use real data.
+- Filters work.
+- Exports work.
+- Totals are accurate.
+- Reports are responsive.
+
+### UI/UX
+
+- No broken layouts.
+- No horizontal overflow on mobile.
+- No inconsistent typography.
+- No broken dark theme.
+- No dead buttons.
+- No broken navigation.
+- No placeholder forms.
+- No unnecessary modal forms.
+- No duplicate components.
+- No missing loading states.
+- No missing error states.
+
+---
+
+# FINAL INSTRUCTIONS
+
+This project must be treated as a complete product transformation.
+
+Do not just provide recommendations or a plan and stop.
+
+After reviewing the repository, begin implementation and work through the phases systematically.
+
+Use your full-stack development capabilities.
+
+Make thoughtful design decisions.
+
+Research before creating data models and forms.
+
+Think carefully about every field, every column, every action, every page, every layout, and every user journey.
+
+Use reusable components and maintainable architecture.
+
+Preserve existing functionality and previously successful UI patterns.
+
+Make the admin panel powerful without making it confusing.
+
+Make the public donation website engaging without making it cluttered.
+
+Make the donor and volunteer portals intuitive.
+
+Make the entire application responsive, accessible, secure, and visually consistent.
+
+The final result must feel like a premium, modern, enterprise-grade trust management platform.
+
+**Do not stop after implementing the dashboard. Do not skip any page. Do not leave placeholder buttons or incomplete workflows. Do not claim features are implemented unless they actually work.**
+
+Start by auditing the repository, identifying the authentication root cause, researching the relevant nonprofit platforms, and creating the detailed implementation plan. Then execute the implementation phase by phase.

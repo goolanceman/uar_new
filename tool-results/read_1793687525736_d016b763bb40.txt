@@ -1,0 +1,1821 @@
+     1→# Z.ai Master Prompt — Complete Trust Management & Donation Platform Transformation
+     2→
+     3→## Project: MassStudio Trust Management Platform
+     4→
+     5→You are an elite full-stack software architect, senior UI/UX designer, product strategist, database architect, and application security engineer.
+     6→
+     7→Your task is to completely review, redesign, enhance, and implement my existing Trust Management and Donation Platform.
+     8→
+     9→This is NOT a simple UI redesign. I want a complete, modern, innovative, production-ready trust management application with advanced features, a premium user experience, comprehensive admin functionality, donor and volunteer portals, public donation pages, reports, integrations, and automated 80G tax receipt generation.
+    10→
+    11→The existing application is available in the current repository.
+    12→
+    13→**Your first responsibility is to understand the existing codebase, identify the root causes of the problems, research established trust and nonprofit platforms, and then systematically improve every page and module.**
+    14→
+    15→Do not blindly replace the existing application. Preserve the functionality and UI patterns that were previously working well.
+    16→
+    17→---
+    18→
+    19→# PHASE 1 — APPLICATION AUDIT AND AUTHENTICATION FIX
+    20→
+    21→## 1. Fix the Admin Authentication Issue First
+    22→
+    23→Currently, when I log in to the admin pages:
+    24→
+    25→- The application says "Please sign in."
+    26→- Admin data is not displayed.
+    27→- The session appears to be lost or not recognized.
+    28→- Some admin pages may redirect to the login page even after successful authentication.
+    29→
+    30→Investigate and fix this issue before beginning the major redesign.
+    31→
+    32→Review:
+    33→
+    34→- Authentication implementation.
+    35→- Login API and response structure.
+    36→- Session management.
+    37→- JWT generation and validation.
+    38→- Access token and refresh token handling.
+    39→- Cookie configuration.
+    40→- Cookie domain, path, SameSite, Secure, and HttpOnly settings.
+    41→- CORS configuration.
+    42→- API interceptors.
+    43→- Authentication middleware.
+    44→- Protected routes.
+    45→- Admin authorization and role permissions.
+    46→- User context and authentication state.
+    47→- Server-side rendering authentication.
+    48→- Client-side hydration.
+    49→- API request headers.
+    50→- Data fetching and caching.
+    51→- Logout and session expiration.
+    52→- Refresh token rotation.
+    53→- API response handling.
+    54→- Backend authorization.
+    55→- Frontend route guards.
+    56→
+    57→Identify the exact root cause.
+    58→
+    59→Do not simply hide the "Please sign in" message or bypass authentication.
+    60→
+    61→Implement a secure and reliable authentication flow.
+    62→
+    63→### Expected authentication behavior
+    64→
+    65→1. Admin logs in successfully.
+    66→2. Authentication state is established correctly.
+    67→3. The admin dashboard loads without asking the user to sign in again.
+    68→4. Admin data is fetched and displayed.
+    69→5. Refreshing the browser does not unexpectedly log out the user.
+    70→6. Protected routes remain protected.
+    71→7. Expired sessions are handled gracefully.
+    72→8. Unauthorized users cannot access admin APIs.
+    73→9. Login, logout, session restoration, and token refresh work correctly.
+    74→10. No infinite redirects or repeated login prompts.
+    75→
+    76→Add proper loading states, error states, session-expired dialogs, and retry behavior.
+    77→
+    78→Create automated tests for authentication and protected routes.
+    79→
+    80→---
+    81→
+    82→# PHASE 2 — RESEARCH EXISTING TRUST AND NGO PLATFORMS
+    83→
+    84→Before redesigning the application, research established nonprofit and donation platforms.
+    85→
+    86→Study the public-facing experience, admin workflows, donor journeys, reporting capabilities, and design patterns of platforms such as:
+    87→
+    88→- Give.do
+    89→- GiveIndia
+    90→- Ketto
+    91→- Milaap
+    92→- Donorbox
+    93→- Givebutter
+    94→- Classy
+    95→- Salesforce Nonprofit Cloud
+    96→- Raiser's Edge NXT
+    97→- Charity: water
+    98→
+    99→Research relevant official websites, product documentation, public screenshots, and available feature documentation.
+   100→
+   101→Do not blindly copy another website.
+   102→
+   103→Identify the best practices and apply them to our application.
+   104→
+   105→Research:
+   106→
+   107→- Modern nonprofit dashboards.
+   108→- Campaign management.
+   109→- Donation forms.
+   110→- Donor management.
+   111→- Volunteer management.
+   112→- Trust and NGO administration.
+   113→- Donation receipts.
+   114→- Indian 80G tax exemption receipts.
+   115→- Fundraising analytics.
+   116→- Recurring donations.
+   117→- Payment gateway integration.
+   118→- Donor communication.
+   119→- Public campaign pages.
+   120→- Mobile-first donation flows.
+   121→- Accessibility.
+   122→- Data management.
+   123→- Reporting and compliance.
+   124→
+   125→Build a feature inventory and page-by-page implementation plan before making major changes.
+   126→
+   127→---
+   128→
+   129→# PHASE 3 — COMPLETE DESIGN SYSTEM
+   130→
+   131→Create a reusable, premium design system.
+   132→
+   133→The entire application must have a consistent visual identity.
+   134→
+   135→## Design direction
+   136→
+   137→Create a modern, elegant, innovative, premium SaaS-style interface inspired by high-quality fintech, nonprofit, and enterprise administration platforms.
+   138→
+   139→The design should feel:
+   140→
+   141→- Modern.
+   142→- Trustworthy.
+   143→- Premium.
+   144→- Minimal but feature-rich.
+   145→- Innovative.
+   146→- Professional.
+   147→- Responsive.
+   148→- Easy to understand.
+   149→- Visually engaging.
+   150→- Accessible.
+   151→- Consistent across all modules.
+   152→
+   153→Avoid generic dashboard designs.
+   154→
+   155→Do not use excessive gradients, oversized cards, unnecessary shadows, random colors, or crowded layouts.
+   156→
+   157→Use meaningful visual hierarchy, spacing, typography, icons, illustrations, and interactive elements.
+   158→
+   159→## Design system requirements
+   160→
+   161→Create reusable tokens for:
+   162→
+   163→- Primary colors.
+   164→- Secondary colors.
+   165→- Accent colors.
+   166→- Background colors.
+   167→- Surface colors.
+   168→- Border colors.
+   169→- Text colors.
+   170→- Success colors.
+   171→- Warning colors.
+   172→- Error colors.
+   173→- Information colors.
+   174→- Typography.
+   175→- Font sizes.
+   176→- Font weights.
+   177→- Line heights.
+   178→- Spacing.
+   179→- Border radii.
+   180→- Shadows.
+   181→- Elevation.
+   182→- Responsive breakpoints.
+   183→- Animation duration.
+   184→- Focus states.
+   185→- Disabled states.
+   186→- Hover states.
+   187→- Loading states.
+   188→
+   189→Use modern typography such as Inter, Geist, Plus Jakarta Sans, or another suitable font.
+   190→
+   191→Use a consistent modern icon library such as Lucide.
+   192→
+   193→Avoid emojis as primary UI icons.
+   194→
+   195→## Dark theme
+   196→
+   197→Implement a complete dark theme.
+   198→
+   199→The dark theme must not simply invert colors.
+   200→
+   201→Design dedicated dark theme tokens for:
+   202→
+   203→- Backgrounds.
+   204→- Cards.
+   205→- Tables.
+   206→- Sidebars.
+   207→- Forms.
+   208→- Dialogs.
+   209→- Drawers.
+   210→- Charts.
+   211→- Inputs.
+   212→- Tooltips.
+   213→- Dropdowns.
+   214→- Navigation.
+   215→- Notifications.
+   216→
+   217→Provide a theme switcher with:
+   218→
+   219→- Light.
+   220→- Dark.
+   221→- System.
+   222→
+   223→Persist the selected theme.
+   224→
+   225→Ensure every page and component works correctly in all themes.
+   226→
+   227→---
+   228→
+   229→# PHASE 4 — REUSABLE COMPONENT ARCHITECTURE
+   230→
+   231→Use reusable code throughout the application.
+   232→
+   233→Do not implement the same UI repeatedly in different pages.
+   234→
+   235→Create a component library that includes:
+   236→
+   237→### Layout components
+   238→
+   239→- Application shell.
+   240→- Admin sidebar.
+   241→- Top navigation.
+   242→- Breadcrumbs.
+   243→- Page headers.
+   244→- Page descriptions.
+   245→- Responsive navigation.
+   246→- Mobile navigation drawer.
+   247→- Content containers.
+   248→- Dashboard sections.
+   249→- Split panels.
+   250→- Detail page layouts.
+   251→
+   252→### Data components
+   253→
+   254→- Advanced data table.
+   255→- Grid view.
+   256→- List view.
+   257→- Kanban view where appropriate.
+   258→- Pagination.
+   259→- Search.
+   260→- Sorting.
+   261→- Filters.
+   262→- Column selector.
+   263→- Bulk actions.
+   264→- Export controls.
+   265→- Empty states.
+   266→- Error states.
+   267→- Loading skeletons.
+   268→
+   269→### Form components
+   270→
+   271→- Text inputs.
+   272→- Number inputs.
+   273→- Currency inputs.
+   274→- Phone inputs.
+   275→- Email inputs.
+   276→- Date pickers.
+   277→- Date ranges.
+   278→- Select dropdowns.
+   279→- Multi-select.
+   280→- Searchable select.
+   281→- Radio groups.
+   282→- Checkboxes.
+   283→- Toggle switches.
+   284→- File uploads.
+   285→- Image uploads.
+   286→- Rich text editor.
+   287→- Address fields.
+   288→- Repeatable field groups.
+   289→- Conditional fields.
+   290→- Form sections.
+   291→- Validation messages.
+   292→
+   293→### Interactive components
+   294→
+   295→- Slide-over panels.
+   296→- Confirmation dialogs.
+   297→- Toast notifications.
+   298→- Tooltips.
+   299→- Popovers.
+   300→- Dropdown menus.
+   301→- Command palette.
+   302→- Stepper.
+   303→- Progress indicators.
+   304→- Tabs.
+   305→- Accordions.
+   306→- Timeline.
+   307→- Activity feed.
+   308→- Status badges.
+   309→- Charts.
+   310→- Notifications.
+   311→
+   312→All reusable components must support light and dark themes.
+   313→
+   314→---
+   315→
+   316→# PHASE 5 — ADD AND EDIT EXPERIENCE
+   317→
+   318→This is a critical requirement.
+   319→
+   320→For ALL admin modules, use a modern slide-over drawer instead of traditional modal popups for adding and editing records.
+   321→
+   322→Do not use modal dialogs for large forms.
+   323→
+   324→## Slide-over requirements
+   325→
+   326→Create a reusable slide-over component with:
+   327→
+   328→- Smooth animation.
+   329→- Responsive width.
+   330→- Full-screen mobile behavior.
+   331→- Sticky header.
+   332→- Sticky footer.
+   333→- Scrollable content.
+   334→- Close button.
+   335→- Unsaved changes warning.
+   336→- Form validation.
+   337→- Loading state.
+   338→- Save and cancel actions.
+   339→- Save and continue where appropriate.
+   340→- Multi-step form support.
+   341→- Inline field help.
+   342→- Section navigation.
+   343→- Error summary.
+   344→- Keyboard accessibility.
+   345→
+   346→Use different widths depending on the complexity of the form.
+   347→
+   348→For large forms, use a full-height drawer with an organized multi-section layout.
+   349→
+   350→For mobile, use a full-screen form experience.
+   351→
+   352→Do not place every field in a single long, unstructured form.
+   353→
+   354→Organize fields into logical sections with clear headings, descriptions, and guided steps.
+   355→
+   356→Example:
+   357→
+   358→Donor Details
+   359→- Personal Information
+   360→- Contact Information
+   361→- Address
+   362→- Tax Information
+   363→- Communication Preferences
+   364→- Donation History
+   365→- Documents
+   366→- Additional Information
+   367→
+   368→Use conditional fields where appropriate.
+   369→
+   370→Validate required fields, email addresses, phone numbers, amounts, dates, and file formats.
+   371→
+   372→Prevent duplicate submissions.
+   373→
+   374→Show meaningful success and error messages.
+   375→
+   376→---
+   377→
+   378→# PHASE 6 — EVERY LIST PAGE MUST BE ADVANCED
+   379→
+   380→Review every listing page in the admin panel.
+   381→
+   382→Every list page must have multiple display layouts.
+   383→
+   384→## Supported layouts
+   385→
+   386→1. Table view.
+   387→2. Grid/card view.
+   388→3. Compact list view.
+   389→4. Kanban view for appropriate modules.
+   390→
+   391→Users must be able to switch between layouts.
+   392→
+   393→Persist their preferred layout.
+   394→
+   395→## Advanced listing features
+   396→
+   397→Implement:
+   398→
+   399→- Global search.
+   400→- Module-specific search.
+   401→- Advanced filters.
+   402→- Date range filters.
+   403→- Status filters.
+   404→- Multi-field filters.
+   405→- Saved filters.
+   406→- Sorting.
+   407→- Pagination.
+   408→- Page size selection.
+   409→- Column visibility.
+   410→- Column reordering.
+   411→- Column resizing.
+   412→- Row selection.
+   413→- Bulk actions.
+   414→- Export CSV.
+   415→- Export Excel.
+   416→- Export PDF where appropriate.
+   417→- Print.
+   418→- Refresh.
+   419→- Clear filters.
+   420→- Search suggestions.
+   421→- Filter chips.
+   422→- Record counts.
+   423→- Empty states.
+   424→- Loading skeletons.
+   425→- Error states.
+   426→
+   427→The table columns must be based on the actual data model and business requirements.
+   428→
+   429→Do not display random or unnecessary columns.
+   430→
+   431→Each module should have meaningful default columns and customizable columns.
+   432→
+   433→On mobile, automatically adapt tables to a card/list experience without losing essential actions or information.
+   434→
+   435→---
+   436→
+   437→# PHASE 7 — COMPLETE ADMIN MODULE REDESIGN
+   438→
+   439→Review the existing admin application and redesign every existing page and module.
+   440→
+   441→Do not skip any existing module.
+   442→
+   443→For every module, implement:
+   444→
+   445→- List page.
+   446→- Add page or drawer.
+   447→- Edit page or drawer.
+   448→- Detail page.
+   449→- View history.
+   450→- Delete confirmation.
+   451→- Validation.
+   452→- Permissions.
+   453→- Loading states.
+   454→- Empty states.
+   455→- Error states.
+   456→- Search.
+   457→- Filters.
+   458→- Sorting.
+   459→- Export.
+   460→- Responsive design.
+   461→- Relevant reports.
+   462→- Activity tracking.
+   463→
+   464→## 1. Admin Dashboard
+   465→
+   466→Create a high-end dashboard with:
+   467→
+   468→- Total donations.
+   469→- Total donors.
+   470→- Total campaigns.
+   471→- Active campaigns.
+   472→- Total volunteers.
+   473→- Pending donations.
+   474→- Successful donations.
+   475→- Failed donations.
+   476→- Refunds.
+   477→- Recurring donations.
+   478→- Total funds collected.
+   479→- Funds utilized.
+   480→- Available funds.
+   481→- Campaign progress.
+   482→- Donation trends.
+   483→- Donation sources.
+   484→- Recent transactions.
+   485→- Recent donors.
+   486→- Recent volunteers.
+   487→- Pending tasks.
+   488→- Pending approvals.
+   489→- Upcoming events.
+   490→- Recent activities.
+   491→- Notifications.
+   492→
+   493→Include date filters and comparison periods.
+   494→
+   495→Add interactive charts and meaningful drill-down navigation.
+   496→
+   497→Allow users to customize dashboard widgets.
+   498→
+   499→---
+   500→
+   501→## 2. Trust Profile and Organization Management
+   502→
+   503→Create a comprehensive organization profile module.
+   504→
+   505→Fields should include:
+   506→
+   507→- Trust name.
+   508→- Registered name.
+   509→- Trust registration number.
+   510→- Registration date.
+   511→- PAN.
+   512→- TAN, if applicable.
+   513→- 12A registration information.
+   514→- 80G registration information.
+   515→- 80G approval reference.
+   516→- Approval validity.
+   517→- Darpan ID, if applicable.
+   518→- CSR-1 registration, if applicable.
+   519→- FCRA registration, if applicable.
+   520→- Registered address.
+   521→- Communication address.
+   522→- Contact email.
+   523→- Contact phone.
+   524→- Website.
+   525→- Logo.
+   526→- Organization description.
+   527→- Mission.
+   528→- Vision.
+   529→- Objectives.
+   530→- Trustees.
+   531→- Board members.
+   532→- Bank account details.
+   533→- Documents.
+   534→- Compliance records.
+   535→
+   536→Use conditional fields based on applicable registrations.
+   537→
+   538→Do not assume every trust has every registration.
+   539→
+   540→Add document expiry reminders and compliance tracking.
+   541→
+   542→---
+   543→
+   544→## 3. Donor Management
+   545→
+   546→Create a complete donor CRM.
+   547→
+   548→### Donor profile fields
+   549→
+   550→Personal information:
+   551→- Donor type: Individual, Company, Organization.
+   552→- Full name.
+   553→- First name.
+   554→- Middle name.
+   555→- Last name.
+   556→- Organization name.
+   557→- Gender, if relevant and legally appropriate.
+   558→- Date of birth, if required.
+   559→- Profile image.
+   560→
+   561→Contact information:
+   562→- Email.
+   563→- Mobile number.
+   564→- Alternate phone.
+   565→- Country.
+   566→- State.
+   567→- City.
+   568→- Address line 1.
+   569→- Address line 2.
+   570→- PIN code.
+   571→
+   572→Tax information:
+   573→- PAN.
+   574→- Tax receipt preference.
+   575→- Donor type.
+   576→- Applicable tax details.
+   577→- Tax declaration.
+   578→- Communication consent.
+   579→
+   580→Additional information:
+   581→- Donor category.
+   582→- Source.
+   583→- Tags.
+   584→- Assigned relationship manager.
+   585→- Notes.
+   586→- Attachments.
+   587→- Status.
+   588→- Created date.
+   589→- Last donation date.
+   590→
+   591→### Donor detail page
+   592→
+   593→Create a complete donor profile with tabs:
+   594→
+   595→- Overview.
+   596→- Donation history.
+   597→- Receipts.
+   598→- Recurring donations.
+   599→- Campaigns supported.
+   600→- Communication history.
+   601→- Documents.
+   602→- Notes.
+   603→- Activity timeline.
+   604→
+   605→Display lifetime donations, average donation, last donation, and donor engagement.
+   606→
+   607→Add donor segmentation and bulk communication features.
+   608→
+   609→---
+   610→
+   611→## 4. Campaign Management
+   612→
+   613→Create a comprehensive campaign module.
+   614→
+   615→### Campaign fields
+   616→
+   617→- Campaign name.
+   618→- Slug.
+   619→- Campaign code.
+   620→- Category.
+   621→- Campaign type.
+   622→- Short description.
+   623→- Detailed description.
+   624→- Campaign image.
+   625→- Gallery.
+   626→- Video.
+   627→- Beneficiary information.
+   628→- Location.
+   629→- Start date.
+   630→- End date.
+   631→- Fundraising goal.
+   632→- Minimum donation.
+   633→- Suggested donation amounts.
+   634→- Maximum donation, if applicable.
+   635→- Currency.
+   636→- Campaign status.
+   637→- Public visibility.
+   638→- Featured campaign.
+   639→- Urgency indicator.
+   640→- Donation frequency.
+   641→- Recurring donation support.
+   642→- Anonymous donation support.
+   643→- Tax receipt eligibility.
+   644→- Campaign manager.
+   645→- Expense budget.
+   646→- Fund utilization details.
+   647→- Documents.
+   648→- SEO title.
+   649→- SEO description.
+   650→- Social sharing image.
+   651→
+   652→### Campaign detail page
+   653→
+   654→Include:
+   655→
+   656→- Campaign overview.
+   657→- Total collected.
+   658→- Target amount.
+   659→- Progress percentage.
+   660→- Donor count.
+   661→- Donation history.
+   662→- Recent donors.
+   663→- Anonymous donations.
+   664→- Expenses.
+   665→- Fund utilization.
+   666→- Updates.
+   667→- Beneficiary details.
+   668→- Documents.
+   669→- Gallery.
+   670→- Timeline.
+   671→- Campaign activity.
+   672→- Reports.
+   673→
+   674→Allow campaign-specific customization of the public donation page.
+   675→
+   676→---
+   677→
+   678→## 5. Donation Management
+   679→
+   680→Build a complete donation transaction system.
+   681→
+   682→### Donation fields
+   683→
+   684→- Donation ID.
+   685→- Donor.
+   686→- Campaign.
+   687→- Amount.
+   688→- Currency.
+   689→- Donation type.
+   690→- One-time donation.
+   691→- Recurring donation.
+   692→- Payment method.
+   693→- Payment gateway.
+   694→- Transaction ID.
+   695→- Payment status.
+   696→- Donation date.
+   697→- Payment date.
+   698→- Anonymous donation.
+   699→- Donor message.
+   700→- Donor address.
+   701→- Tax receipt eligibility.
+   702→- Receipt status.
+   703→- Refund status.
+   704→- Gateway fees.
+   705→- Net amount.
+   706→- Fund allocation.
+   707→- Internal notes.
+   708→- Source.
+   709→- Created by.
+   710→
+   711→### Donation detail page
+   712→
+   713→Include:
+   714→
+   715→- Donation summary.
+   716→- Donor information.
+   717→- Campaign information.
+   718→- Payment details.
+   719→- Gateway response.
+   720→- Transaction timeline.
+   721→- Receipt details.
+   722→- Refund details.
+   723→- Communication history.
+   724→- Audit history.
+   725→
+   726→Implement proper payment status handling.
+   727→
+   728→Do not mark donations as successful based only on frontend payment callbacks.
+   729→
+   730→Verify payment gateway webhooks securely.
+   731→
+   732→Prevent duplicate transactions and duplicate receipts.
+   733→
+   734→---
+   735→
+   736→# PHASE 8 — PUBLIC DONATION WEBSITE
+   737→
+   738→Create a premium public-facing donation website.
+   739→
+   740→The website should be modern, emotionally engaging, trustworthy, and conversion-focused.
+   741→
+   742→Research successful nonprofit websites and apply their best practices.
+   743→
+   744→## Public pages
+   745→
+   746→- Home.
+   747→- About the Trust.
+   748→- Our Mission.
+   749→- Our Impact.
+   750→- Campaigns.
+   751→- Campaign Details.
+   752→- Donate.
+   753→- Donation Success.
+   754→- Donation Failure.
+   755→- Donation Pending.
+   756→- Donation Receipt.
+   757→- Volunteers.
+   758→- Become a Volunteer.
+   759→- Events.
+   760→- Gallery.
+   761→- Stories.
+   762→- Testimonials.
+   763→- Reports and Transparency.
+   764→- Contact.
+   765→- FAQ.
+   766→- Privacy Policy.
+   767→- Terms and Conditions.
+   768→- Refund Policy.
+   769→- Tax Exemption Information.
+   770→
+   771→## Public homepage
+   772→
+   773→Include:
+   774→
+   775→- Premium hero section.
+   776→- Mission statement.
+   777→- Featured campaigns.
+   778→- Donation call to action.
+   779→- Impact statistics.
+   780→- Beneficiary stories.
+   781→- Trust and compliance information.
+   782→- Campaign progress.
+   783→- Transparency reports.
+   784→- Testimonials.
+   785→- Volunteer opportunities.
+   786→- Newsletter subscription.
+   787→- Footer with contact details and policies.
+   788→
+   789→## Campaign browsing
+   790→
+   791→Allow users to:
+   792→
+   793→- Browse campaigns.
+   794→- Search campaigns.
+   795→- Filter by category.
+   796→- Filter by location.
+   797→- Filter by status.
+   798→- Sort campaigns.
+   799→- View campaign progress.
+   800→- View campaign details.
+   801→- Share campaigns.
+   802→- Donate to campaigns.
+   803→- View updates.
+   804→- View impact stories.
+   805→
+   806→Create beautiful campaign cards with meaningful visual hierarchy.
+   807→
+   808→Do not overload the page with information.
+   809→
+   810→## Donation checkout
+   811→
+   812→Create a guided, mobile-first donation experience.
+   813→
+   814→Steps:
+   815→
+   816→1. Select donation amount.
+   817→2. Select donation frequency.
+   818→3. Choose campaign.
+   819→4. Enter donor details.
+   820→5. Enter billing/tax details where required.
+   821→6. Choose anonymous donation if allowed.
+   822→7. Select payment method.
+   823→8. Review donation.
+   824→9. Complete payment.
+   825→10. Display confirmation.
+   826→
+   827→Support:
+   828→
+   829→- One-time donations.
+   830→- Monthly donations.
+   831→- Quarterly donations.
+   832→- Annual donations.
+   833→- Custom amounts.
+   834→- Suggested amounts.
+   835→- Anonymous donations.
+   836→- Donor messages.
+   837→- Secure payments.
+   838→- Donation receipts.
+   839→
+   840→Make the checkout simple, trustworthy, accessible, and fast.
+   841→
+   842→---
+   843→
+   844→# PHASE 9 — 80G TAX RECEIPT GENERATION
+   845→
+   846→Implement a comprehensive 80G donation receipt system suitable for Indian trusts.
+   847→
+   848→Research the current Indian 80G receipt requirements and applicable official guidance.
+   849→
+   850→Do not invent legal requirements.
+   851→
+   852→Support the applicable requirements and distinguish between a donation receipt and an official tax deduction certificate or filing.
+   853→
+   854→## Receipt information
+   855→
+   856→Include applicable fields such as:
+   857→
+   858→- Trust name.
+   859→- Trust registered address.
+   860→- Trust registration details.
+   861→- PAN.
+   862→- 80G approval/reference details.
+   863→- Approval validity, where relevant.
+   864→- Receipt number.
+   865→- Receipt date.
+   866→- Donor name.
+   867→- Donor address.
+   868→- Donor PAN, where applicable.
+   869→- Donation amount.
+   870→- Donation amount in words.
+   871→- Donation date.
+   872→- Payment mode.
+   873→- Transaction reference.
+   874→- Campaign or donation purpose.
+   875→- Authorized signatory.
+   876→- Digital signature or signature image.
+   877→- Trust logo.
+   878→- Receipt footer.
+   879→- Applicable tax declaration.
+   880→
+   881→Support multiple receipt templates.
+   882→
+   883→### Receipt features
+   884→
+   885→- PDF generation.
+   886→- Download receipt.
+   887→- Email receipt.
+   888→- Resend receipt.
+   889→- Receipt preview.
+   890→- Print receipt.
+   891→- Bulk receipt generation.
+   892→- Receipt cancellation.
+   893→- Receipt correction.
+   894→- Receipt version history.
+   895→- Receipt verification.
+   896→- Unique receipt numbering.
+   897→- Receipt audit logs.
+   898→
+   899→Receipt numbering must be unique and transaction-safe.
+   900→
+   901→Prevent duplicate receipts.
+   902→
+   903→Allow administrators to configure receipt templates.
+   904→
+   905→Support multiple languages.
+   906→
+   907→Make receipt layouts professional and print-ready.
+   908→
+   909→Include a QR code or verification URL where appropriate.
+   910→
+   911→Do not claim a receipt guarantees a tax deduction.
+   912→
+   913→---
+   914→
+   915→# PHASE 10 — VOLUNTEER MANAGEMENT AND PORTAL
+   916→
+   917→Create a complete volunteer management system.
+   918→
+   919→## Volunteer profile
+   920→
+   921→- Full name.
+   922→- Email.
+   923→- Mobile.
+   924→- Address.
+   925→- Profile image.
+   926→- Skills.
+   927→- Interests.
+   928→- Availability.
+   929→- Preferred location.
+   930→- Emergency contact.
+   931→- Experience.
+   932→- Languages.
+   933→- Documents.
+   934→- Verification status.
+   935→- Background verification status where applicable.
+   936→- Volunteer status.
+   937→- Registration date.
+   938→
+   939→## Volunteer features
+   940→
+   941→- Volunteer registration.
+   942→- Application review.
+   943→- Approval/rejection.
+   944→- Volunteer onboarding.
+   945→- Event participation.
+   946→- Task assignment.
+   947→- Attendance.
+   948→- Work hours.
+   949→- Volunteer certificates.
+   950→- Activity history.
+   951→- Communication.
+   952→- Document management.
+   953→
+   954→## Volunteer portal
+   955→
+   956→Provide:
+   957→
+   958→- Personal dashboard.
+   959→- Profile management.
+   960→- Available opportunities.
+   961→- Applications.
+   962→- Assigned tasks.
+   963→- Events.
+   964→- Attendance.
+   965→- Work hours.
+   966→- Certificates.
+   967→- Notifications.
+   968→- Documents.
+   969→- Communication preferences.
+   970→
+   971→Create an intuitive volunteer experience with clear next actions.
+   972→
+   973→---
+   974→
+   975→# PHASE 11 — DONOR PORTAL
+   976→
+   977→Create a dedicated donor portal.
+   978→
+   979→Donors must be able to:
+   980→
+   981→- Register.
+   982→- Log in.
+   983→- Reset password.
+   984→- Manage profile.
+   985→- Update contact details.
+   986→- Manage tax information.
+   987→- View donation history.
+   988→- View campaign contributions.
+   989→- Download receipts.
+   990→- View recurring donations.
+   991→- Manage recurring payment methods.
+   992→- Cancel recurring donations.
+   993→- Update communication preferences.
+   994→- View transaction status.
+   995→- Submit support requests.
+   996→- View notifications.
+   997→
+   998→Do not expose one donor's information to another donor.
+   999→
+  1000→Implement strict server-side authorization.
+  1001→
+  1002→---
+  1003→
+  1004→# PHASE 12 — COMPLETE APPLICATION SETTINGS
+  1005→
+  1006→Create a comprehensive Settings section.
+  1007→
+  1008→Every integration must have a proper configuration page.
+  1009→
+  1010→Do not hardcode API keys, credentials, URLs, or provider settings.
+  1011→
+  1012→## 1. General Settings
+  1013→
+  1014→- Application name.
+  1015→- Organization name.
+  1016→- Logo.
+  1017→- Favicon.
+  1018→- Application URL.
+  1019→- Support email.
+  1020→- Support phone.
+  1021→- Default currency.
+  1022→- Default language.
+  1023→- Timezone.
+  1024→- Date format.
+  1025→- Number format.
+  1026→- Theme defaults.
+  1027→- Maintenance mode.
+  1028→- Public registration.
+  1029→- Default pagination.
+  1030→- Branding.
+  1031→
+  1032→## 2. Logging Settings
+  1033→
+  1034→Create an advanced logging configuration module.
+  1035→
+  1036→Fields:
+  1037→
+  1038→- Log level.
+  1039→- Debug mode.
+  1040→- Application logs.
+  1041→- Audit logs.
+  1042→- API logs.
+  1043→- Error logs.
+  1044→- Payment logs.
+  1045→- Authentication logs.
+  1046→- Retention period.
+  1047→- Log rotation.
+  1048→- Maximum log size.
+  1049→- External logging provider.
+  1050→- Log export.
+  1051→- Sensitive-data masking.
+  1052→- Log search.
+  1053→- Log filtering.
+  1054→- Log download.
+  1055→
+  1056→Support appropriate integrations such as:
+  1057→
+  1058→- Winston/Pino.
+  1059→- ELK/Elasticsearch.
+  1060→- OpenSearch.
+  1061→- Grafana Loki.
+  1062→- External log services where supported.
+  1063→
+  1064→Do not expose sensitive data in logs.
+  1065→
+  1066→Never log passwords, secret keys, access tokens, or complete payment credentials.
+  1067→
+  1068→## 3. Language Settings
+  1069→
+  1070→- Default language.
+  1071→- Supported languages.
+  1072→- Translation management.
+  1073→- Locale.
+  1074→- Date format.
+  1075→- Currency format.
+  1076→- RTL support where required.
+  1077→- Language switcher.
+  1078→- Translation completeness.
+  1079→
+  1080→Support multilingual public pages and donor receipts.
+  1081→
+  1082→## 4. Payment Settings
+  1083→
+  1084→Create a payment integration management module.
+  1085→
+  1086→Support provider-specific configurations for:
+  1087→
+  1088→- Razorpay.
+  1089→- Cashfree.
+  1090→- PayU.
+  1091→- Stripe.
+  1092→- PayPal.
+  1093→- Other providers through a reusable payment adapter.
+  1094→
+  1095→For each provider:
+  1096→
+  1097→- Enable/disable.
+  1098→- Test mode.
+  1099→- Live mode.
+  1100→- Public key.
+  1101→- Secret key.
+  1102→- Webhook secret.
+  1103→- Currency support.
+  1104→- Payment methods.
+  1105→- Minimum amount.
+  1106→- Maximum amount.
+  1107→- Transaction fee settings.
+  1108→- Recurring payments.
+  1109→- Refund support.
+  1110→- Webhook configuration.
+  1111→- Connection test.
+  1112→- Payment logs.
+  1113→
+  1114→Store credentials securely on the backend.
+  1115→
+  1116→Mask sensitive credentials in the UI.
+  1117→
+  1118→Never expose secret keys to the frontend.
+  1119→
+  1120→Implement secure webhook signature verification.
+  1121→
+  1122→## 5. SMS Settings
+  1123→
+  1124→Support configurable SMS providers.
+  1125→
+  1126→Examples:
+  1127→
+  1128→- MSG91.
+  1129→- Twilio.
+  1130→- AWS SNS.
+  1131→- Other configurable providers.
+  1132→
+  1133→Include:
+  1134→
+  1135→- Provider.
+  1136→- API key.
+  1137→- Sender ID.
+  1138→- Template ID.
+  1139→- OTP configuration.
+  1140→- SMS templates.
+  1141→- Delivery status.
+  1142→- Retry settings.
+  1143→- Test message.
+  1144→- Provider logs.
+  1145→- Enable/disable.
+  1146→
+  1147→## 6. Email Settings
+  1148→
+  1149→Support:
+  1150→
+  1151→- SMTP.
+  1152→- Amazon SES.
+  1153→- SendGrid.
+  1154→- Mailgun.
+  1155→- Other configurable providers.
+  1156→
+  1157→Include:
+  1158→
+  1159→- Host.
+  1160→- Port.
+  1161→- Username.
+  1162→- Password.
+  1163→- Encryption.
+  1164→- Sender name.
+  1165→- Sender email.
+  1166→- Reply-to email.
+  1167→- Email templates.
+  1168→- Test email.
+  1169→- Retry settings.
+  1170→- Delivery logs.
+  1171→- Bounce handling.
+  1172→- Notification preferences.
+  1173→
+  1174→## 7. Other Integrations
+  1175→
+  1176→Create settings for:
+  1177→
+  1178→- WhatsApp Business.
+  1179→- Google Analytics.
+  1180→- Google Tag Manager.
+  1181→- Google reCAPTCHA.
+  1182→- Cloud storage.
+  1183→- S3-compatible storage.
+  1184→- CDN.
+  1185→- Webhooks.
+  1186→- External CRM.
+  1187→- Accounting software.
+  1188→- PDF generation.
+  1189→- Maps.
+  1190→- Search.
+  1191→- Backup.
+  1192→- Monitoring.
+  1193→- Error tracking.
+  1194→
+  1195→Each integration must have:
+  1196→
+  1197→- Provider selection.
+  1198→- Enable/disable.
+  1199→- Configuration.
+  1200→- Credentials.
+  1201→- Connection testing.
+  1202→- Health status.
+  1203→- Logs.
+  1204→- Error handling.
+  1205→
+  1206→Only implement integrations that have a real backend integration. Do not create fake connection statuses.
+  1207→
+  1208→---
+  1209→
+  1210→# PHASE 13 — REPORTS AND ANALYTICS
+  1211→
+  1212→Create a powerful reporting system.
+  1213→
+  1214→Research nonprofit reporting requirements and build comprehensive reports.
+  1215→
+  1216→## Financial reports
+  1217→
+  1218→- Donation summary.
+  1219→- Daily donations.
+  1220→- Monthly donations.
+  1221→- Annual donations.
+  1222→- Campaign-wise donations.
+  1223→- Donor-wise donations.
+  1224→- Payment method-wise donations.
+  1225→- Gateway-wise donations.
+  1226→- Successful transactions.
+  1227→- Failed transactions.
+  1228→- Refunds.
+  1229→- Recurring donations.
+  1230→- Payment gateway fees.
+  1231→- Net donations.
+  1232→- Fund allocation.
+  1233→- Fund utilization.
+  1234→- Campaign expenses.
+  1235→- Budget versus actual.
+  1236→- Available balance.
+  1237→
+  1238→## Donor reports
+  1239→
+  1240→- Donor directory.
+  1241→- New donors.
+  1242→- Repeat donors.
+  1243→- Donor retention.
+  1244→- Donor lifetime value.
+  1245→- Donor segmentation.
+  1246→- Donor engagement.
+  1247→- Inactive donors.
+  1248→- Anonymous donations.
+  1249→- Donor communication.
+  1250→
+  1251→## Campaign reports
+  1252→
+  1253→- Campaign performance.
+  1254→- Campaign progress.
+  1255→- Target versus collected.
+  1256→- Campaign-wise donors.
+  1257→- Campaign-wise expenses.
+  1258→- Fund utilization.
+  1259→- Campaign conversion.
+  1260→- Campaign source attribution.
+  1261→
+  1262→## Tax and receipt reports
+  1263→
+  1264→- 80G receipt register.
+  1265→- Receipt generation status.
+  1266→- Receipt cancellation.
+  1267→- Receipt correction.
+  1268→- Donor tax details.
+  1269→- Donation summary by financial year.
+  1270→- Donation receipt export.
+  1271→- Reconciliation reports.
+  1272→
+  1273→## Volunteer reports
+  1274→
+  1275→- Volunteer directory.
+  1276→- Volunteer applications.
+  1277→- Volunteer participation.
+  1278→- Volunteer hours.
+  1279→- Event attendance.
+  1280→- Task completion.
+  1281→- Volunteer certificates.
+  1282→
+  1283→## Reporting UI
+  1284→
+  1285→Every report should support:
+  1286→
+  1287→- Date filters.
+  1288→- Financial year filters.
+  1289→- Campaign filters.
+  1290→- Donor filters.
+  1291→- Status filters.
+  1292→- Search.
+  1293→- Sorting.
+  1294→- Summary metrics.
+  1295→- Charts.
+  1296→- Tables.
+  1297→- Drill-down.
+  1298→- Export CSV.
+  1299→- Export Excel.
+  1300→- PDF export.
+  1301→- Print.
+  1302→- Saved reports.
+  1303→- Scheduled reports where supported.
+  1304→
+  1305→Reports must be generated from real data.
+  1306→
+  1307→Do not use hardcoded dashboard values.
+  1308→
+  1309→---
+  1310→
+  1311→# PHASE 14 — ADVANCED FEATURES
+  1312→
+  1313→Implement additional useful features:
+  1314→
+  1315→- Role-based access control.
+  1316→- Fine-grained permissions.
+  1317→- Multiple admin roles.
+  1318→- Audit logs.
+  1319→- Activity tracking.
+  1320→- Approval workflows.
+  1321→- Campaign approval.
+  1322→- Refund approval.
+  1323→- Donation correction approval.
+  1324→- Notification center.
+  1325→- Email notifications.
+  1326→- SMS notifications.
+  1327→- WhatsApp notifications where configured.
+  1328→- In-app notifications.
+  1329→- Scheduled tasks.
+  1330→- Recurring donation reminders.
+  1331→- Donor segmentation.
+  1332→- Bulk imports.
+  1333→- Bulk exports.
+  1334→- CSV import validation.
+  1335→- Duplicate donor detection.
+  1336→- Duplicate donation detection.
+  1337→- Data reconciliation.
+  1338→- Document management.
+  1339→- File storage.
+  1340→- Backup management.
+  1341→- Data retention.
+  1342→- Consent management.
+  1343→- Accessibility.
+  1344→- SEO.
+  1345→- Public API.
+  1346→- Webhooks.
+  1347→- API documentation.
+  1348→
+  1349→Build the features in a maintainable and extensible way.
+  1350→
+  1351→---
+  1352→
+  1353→# PHASE 15 — DETAILS PAGE DESIGN
+  1354→
+  1355→Every major module must have a comprehensive detail page.
+  1356→
+  1357→Do not make detail pages simple displays of labels and values.
+  1358→
+  1359→Create a meaningful detail page layout with:
+  1360→
+  1361→- Header.
+  1362→- Primary identifier.
+  1363→- Status.
+  1364→- Main actions.
+  1365→- Summary cards.
+  1366→- Tabs.
+  1367→- Overview.
+  1368→- Related records.
+  1369→- Timeline.
+  1370→- Activity.
+  1371→- Documents.
+  1372→- Notes.
+  1373→- History.
+  1374→- Audit log.
+  1375→- Relevant analytics.
+  1376→- Contextual actions.
+  1377→
+  1378→For example, a donor detail page should show donor information, donations, receipts, communication history, campaign participation, and activity.
+  1379→
+  1380→A campaign detail page should show campaign progress, donations, donors, expenses, fund utilization, updates, and reports.
+  1381→
+  1382→A donation detail page should show payment information, transaction history, donor information, receipt information, refunds, and audit logs.
+  1383→
+  1384→Use responsive tab navigation and meaningful empty states.
+  1385→
+  1386→---
+  1387→
+  1388→# PHASE 16 — DELETE AND DESTRUCTIVE ACTIONS
+  1389→
+  1390→Every delete action must have a proper confirmation dialog.
+  1391→
+  1392→Do not use browser-native confirm() dialogs.
+  1393→
+  1394→The confirmation should show:
+  1395→
+  1396→- Record name.
+  1397→- Record type.
+  1398→- Consequences.
+  1399→- Whether deletion is permanent.
+  1400→- Related records that may be affected.
+  1401→- Cancel action.
+  1402→- Confirm action.
+  1403→
+  1404→For critical records, require typing the record name or an additional confirmation.
+  1405→
+  1406→Prefer archival or soft deletion where appropriate.
+  1407→
+  1408→Never allow deletion of financial transactions in a way that destroys audit history.
+  1409→
+  1410→Use cancellation, correction, or reversal workflows for financial records.
+  1411→
+  1412→---
+  1413→
+  1414→# PHASE 17 — MOBILE, TABLET, LAPTOP AND LARGE SCREEN SUPPORT
+  1415→
+  1416→The entire application must work on all screen sizes.
+  1417→
+  1418→Target:
+  1419→
+  1420→- Small mobile devices.
+  1421→- Large mobile devices.
+  1422→- Tablets.
+  1423→- Laptops.
+  1424→- Desktop monitors.
+  1425→- Large displays.
+  1426→
+  1427→Use responsive design principles.
+  1428→
+  1429→Do not simply shrink the desktop UI.
+  1430→
+  1431→Design appropriate experiences for each screen size.
+  1432→
+  1433→### Mobile
+  1434→
+  1435→- Mobile-first navigation.
+  1436→- Bottom navigation where appropriate.
+  1437→- Responsive cards.
+  1438→- Full-screen forms.
+  1439→- Touch-friendly controls.
+  1440→- Proper spacing.
+  1441→- No horizontal overflow.
+  1442→- Readable typography.
+  1443→- Responsive charts.
+  1444→- Responsive tables.
+  1445→- Optimized donation checkout.
+  1446→
+  1447→### Tablet
+  1448→
+  1449→- Adaptive sidebar.
+  1450→- Responsive grid layouts.
+  1451→- Two-column forms where suitable.
+  1452→- Adaptive table layouts.
+  1453→
+  1454→### Desktop
+  1455→
+  1456→- Expandable sidebar.
+  1457→- Full data tables.
+  1458→- Advanced filtering.
+  1459→- Multi-column forms.
+  1460→- Detailed analytics.
+  1461→- Efficient workflows.
+  1462→
+  1463→Test all pages at multiple viewport sizes.
+  1464→
+  1465→---
+  1466→
+  1467→# PHASE 18 — INTERACTION AND USER EXPERIENCE
+  1468→
+  1469→Every page must be carefully designed.
+  1470→
+  1471→Before implementing each page, think through:
+  1472→
+  1473→1. What is the user's goal?
+  1474→2. What information does the user need?
+  1475→3. What are the primary actions?
+  1476→4. What are the secondary actions?
+  1477→5. Is the page easy to understand?
+  1478→6. Is the layout visually balanced?
+  1479→7. Are the fields organized logically?
+  1480→8. Are validations clear?
+  1481→9. Are loading states handled?
+  1482→10. Are empty states helpful?
+  1483→11. Does the page work on mobile?
+  1484→12. Is the dark theme correct?
+  1485→13. Are all interactions functional?
+  1486→14. Can the user recover from errors?
+  1487→15. Is the page consistent with the design system?
+  1488→
+  1489→Do not build pages blindly.
+  1490→
+  1491→Every page must feel like a carefully designed product experience.
+  1492→
+  1493→Use:
+  1494→
+  1495→- Smooth transitions.
+  1496→- Subtle animations.
+  1497→- Interactive charts.
+  1498→- Tooltips.
+  1499→- Guided workflows.
+  1500→- Inline validation.
+  1501→- Progress indicators.
+  1502→- Helpful empty states.
+  1503→- Contextual help.
+  1504→- Meaningful micro-interactions.
+  1505→- Clear success feedback.
+  1506→
+  1507→Do not introduce unnecessary animations or interactions that reduce usability.
+  1508→
+  1509→---
+  1510→
+  1511→# PHASE 19 — LOADING, ERROR AND EMPTY STATES
+  1512→
+  1513→Create a unified system for:
+  1514→
+  1515→- Page loaders.
+  1516→- Skeleton loaders.
+  1517→- Table loaders.
+  1518→- Card loaders.
+  1519→- Form submission loaders.
+  1520→- Upload progress.
+  1521→- API errors.
+  1522→- Network errors.
+  1523→- Permission errors.
+  1524→- Session expiration.
+  1525→- Empty results.
+  1526→- Empty campaigns.
+  1527→- Empty donations.
+  1528→- Empty reports.
+  1529→- Empty donor lists.
+  1530→
+  1531→Avoid generic messages such as "Something went wrong" when a more meaningful message can be provided.
+  1532→
+  1533→Add retry functionality where appropriate.
+  1534→
+  1535→Prevent duplicate API calls and unnecessary loading flickers.
+  1536→
+  1537→---
+  1538→
+  1539→# PHASE 20 — TECHNICAL IMPLEMENTATION
+  1540→
+  1541→First inspect the existing repository and identify the current stack.
+  1542→
+  1543→Preserve the existing architecture unless there is a strong technical reason to change it.
+  1544→
+  1545→Use the existing technologies and libraries where possible.
+  1546→
+  1547→Follow:
+  1548→
+  1549→- Clean architecture.
+  1550→- Separation of concerns.
+  1551→- Reusable components.
+  1552→- Reusable hooks.
+  1553→- Reusable services.
+  1554→- Reusable form schemas.
+  1555→- Type safety.
+  1556→- Consistent API handling.
+  1557→- Centralized error handling.
+  1558→- Secure authentication.
+  1559→- Server-side validation.
+  1560→- Database transactions.
+  1561→- Proper database indexes.
+  1562→- Pagination.
+  1563→- Performance optimization.
+  1564→- Accessibility.
+  1565→- SEO.
+  1566→- Maintainable code.
+  1567→
+  1568→Avoid:
+  1569→
+  1570→- Duplicated components.
+  1571→- Huge components.
+  1572→- Hardcoded data.
+  1573→- Hardcoded integration credentials.
+  1574→- Inconsistent styles.
+  1575→- Unnecessary dependencies.
+  1576→- Fake API responses.
+  1577→- Placeholder buttons.
+  1578→- Broken navigation.
+  1579→- Incomplete forms.
+  1580→- Dead UI actions.
+  1581→- Frontend-only security.
+  1582→- Destructive database migrations.
+  1583→
+  1584→If the backend or database schema needs modification, design migrations carefully.
+  1585→
+  1586→Preserve existing data.
+  1587→
+  1588→Do not break existing APIs without updating all dependent consumers.
+  1589→
+  1590→---
+  1591→
+  1592→# PHASE 21 — IMPLEMENTATION WORKFLOW
+  1593→
+  1594→Work in a systematic, phased manner.
+  1595→
+  1596→## Step 1: Audit
+  1597→
+  1598→Inspect:
+  1599→
+  1600→- Repository structure.
+  1601→- Frontend.
+  1602→- Backend.
+  1603→- Database.
+  1604→- Authentication.
+  1605→- API routes.
+  1606→- Existing components.
+  1607→- Existing pages.
+  1608→- Existing design system.
+  1609→- Existing integrations.
+  1610→- Existing tests.
+  1611→- Previously working UI.
+  1612→
+  1613→Identify the existing UI patterns that were particularly good and preserve or improve them.
+  1614→
+  1615→## Step 2: Research
+  1616→
+  1617→Research established nonprofit platforms.
+  1618→
+  1619→Create a feature matrix.
+  1620→
+  1621→Identify missing features.
+  1622→
+  1623→Identify incorrect or incomplete data fields.
+  1624→
+  1625→Identify UI/UX problems.
+  1626→
+  1627→Identify security and performance issues.
+  1628→
+  1629→## Step 3: Plan
+  1630→
+  1631→Create a complete implementation plan.
+  1632→
+  1633→Group work into phases.
+  1634→
+  1635→List every existing page and module.
+  1636→
+  1637→For each page, identify:
+  1638→
+  1639→- Current problems.
+  1640→- Required data fields.
+  1641→- Required actions.
+  1642→- Detail page design.
+  1643→- List page design.
+  1644→- Add/edit form design.
+  1645→- Reports.
+  1646→- API requirements.
+  1647→- Database requirements.
+  1648→- Responsive behavior.
+  1649→- Validation requirements.
+  1650→
+  1651→## Step 4: Design System
+  1652→
+  1653→Implement the reusable design system first.
+  1654→
+  1655→Create the foundational components.
+  1656→
+  1657→Implement light and dark themes.
+  1658→
+  1659→Implement the responsive application shell.
+  1660→
+  1661→## Step 5: Authentication
+  1662→
+  1663→Fix the admin login issue.
+  1664→
+  1665→Verify the complete authentication flow.
+  1666→
+  1667→## Step 6: Admin Modules
+  1668→
+  1669→Implement each module completely.
+  1670→
+  1671→Do not skip add/edit/detail/list workflows.
+  1672→
+  1673→## Step 7: Public Website
+  1674→
+  1675→Implement the public donation website.
+  1676→
+  1677→## Step 8: Donor Portal
+  1678→
+  1679→Implement the complete donor experience.
+  1680→
+  1681→## Step 9: Volunteer Portal
+  1682→
+  1683→Implement the complete volunteer experience.
+  1684→
+  1685→## Step 10: Settings and Integrations
+  1686→
+  1687→Implement configurable integrations.
+  1688→
+  1689→## Step 11: Reports
+  1690→
+  1691→Implement real-data reporting and analytics.
+  1692→
+  1693→## Step 12: Testing
+  1694→
+  1695→Test all workflows.
+  1696→
+  1697→## Step 13: Final Review
+  1698→
+  1699→Review every page and module.
+  1700→
+  1701→Fix any incomplete or inconsistent experiences.
+  1702→
+  1703→---
+  1704→
+  1705→# PHASE 22 — TESTING AND ACCEPTANCE CRITERIA
+  1706→
+  1707→The work is not complete until the following requirements are satisfied.
+  1708→
+  1709→### Authentication
+  1710→
+  1711→- Admin login works.
+  1712→- Admin data loads.
+  1713→- Session persists correctly.
+  1714→- Protected routes work.
+  1715→- Unauthorized access is blocked.
+  1716→- Token refresh works.
+  1717→- Logout works.
+  1718→
+  1719→### Admin modules
+  1720→
+  1721→- Every module has a complete list page.
+  1722→- Every module has an add workflow.
+  1723→- Every module has an edit workflow.
+  1724→- Every module has a detail page.
+  1725→- Every module has appropriate delete/archive handling.
+  1726→- Every module has proper validation.
+  1727→- Every module has loading and error states.
+  1728→- Every module is responsive.
+  1729→- Every module supports light and dark themes.
+  1730→
+  1731→### Public website
+  1732→
+  1733→- Campaigns load from real data.
+  1734→- Campaign filtering works.
+  1735→- Campaign details work.
+  1736→- Donation checkout works.
+  1737→- Payment verification works.
+  1738→- Donation confirmation works.
+  1739→- Donation receipts work.
+  1740→
+  1741→### Receipts
+  1742→
+  1743→- Receipt generation works.
+  1744→- Receipt numbering is unique.
+  1745→- Receipt download works.
+  1746→- Receipt email works.
+  1747→- Receipt preview works.
+  1748→- Receipt correction and cancellation are auditable.
+  1749→
+  1750→### Portals
+  1751→
+  1752→- Donor portal works.
+  1753→- Volunteer portal works.
+  1754→- Authorization is enforced.
+  1755→- Users cannot access another user's private information.
+  1756→
+  1757→### Settings
+  1758→
+  1759→- Integrations can be configured.
+  1760→- Credentials are stored securely.
+  1761→- Test connections work.
+  1762→- Integration statuses reflect actual backend health.
+  1763→
+  1764→### Reports
+  1765→
+  1766→- Reports use real data.
+  1767→- Filters work.
+  1768→- Exports work.
+  1769→- Totals are accurate.
+  1770→- Reports are responsive.
+  1771→
+  1772→### UI/UX
+  1773→
+  1774→- No broken layouts.
+  1775→- No horizontal overflow on mobile.
+  1776→- No inconsistent typography.
+  1777→- No broken dark theme.
+  1778→- No dead buttons.
+  1779→- No broken navigation.
+  1780→- No placeholder forms.
+  1781→- No unnecessary modal forms.
+  1782→- No duplicate components.
+  1783→- No missing loading states.
+  1784→- No missing error states.
+  1785→
+  1786→---
+  1787→
+  1788→# FINAL INSTRUCTIONS
+  1789→
+  1790→This project must be treated as a complete product transformation.
+  1791→
+  1792→Do not just provide recommendations or a plan and stop.
+  1793→
+  1794→After reviewing the repository, begin implementation and work through the phases systematically.
+  1795→
+  1796→Use your full-stack development capabilities.
+  1797→
+  1798→Make thoughtful design decisions.
+  1799→
+  1800→Research before creating data models and forms.
+  1801→
+  1802→Think carefully about every field, every column, every action, every page, every layout, and every user journey.
+  1803→
+  1804→Use reusable components and maintainable architecture.
+  1805→
+  1806→Preserve existing functionality and previously successful UI patterns.
+  1807→
+  1808→Make the admin panel powerful without making it confusing.
+  1809→
+  1810→Make the public donation website engaging without making it cluttered.
+  1811→
+  1812→Make the donor and volunteer portals intuitive.
+  1813→
+  1814→Make the entire application responsive, accessible, secure, and visually consistent.
+  1815→
+  1816→The final result must feel like a premium, modern, enterprise-grade trust management platform.
+  1817→
+  1818→**Do not stop after implementing the dashboard. Do not skip any page. Do not leave placeholder buttons or incomplete workflows. Do not claim features are implemented unless they actually work.**
+  1819→
+  1820→Start by auditing the repository, identifying the authentication root cause, researching the relevant nonprofit platforms, and creating the detailed implementation plan. Then execute the implementation phase by phase.
+  1821→

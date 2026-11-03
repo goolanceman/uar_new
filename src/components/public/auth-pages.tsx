@@ -10,31 +10,20 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Field, TextField } from "@/components/shared/form-fields";
 import { Section } from "@/components/public/shared";
+import { emailRule, phoneRule, minLen, required, fieldError } from "@/lib/validators";
 import {
   Check,
   Copy,
   Eye,
   EyeOff,
+  HandHeart,
   Heart,
+  HeartHandshake,
   Info,
   KeyRound,
   Loader2,
@@ -283,14 +272,17 @@ export function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState<{ email?: string | null; password?: string | null }>({});
   const [busy, setBusy] = useState(false);
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!email.trim() || !password) {
-      toast.error("Enter your email and password");
-      return;
-    }
+    const errs = {
+      email: fieldError(email, [emailRule()]),
+      password: fieldError(password, [minLen(6, "Password")]),
+    };
+    setErrors(errs);
+    if (Object.values(errs).some(Boolean)) return;
     setBusy(true);
     try {
       const user: SessionUser = await login(email.trim(), password);
@@ -309,27 +301,37 @@ export function LoginPage() {
       subtitle="Donors, volunteers, beneficiaries and admins — one door."
       icon={<LogIn className="size-6" aria-hidden />}
     >
-      <form onSubmit={submit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="l-email">Email</Label>
-          <Input
-            id="l-email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="l-password">Password</Label>
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        <TextField
+          label="Email"
+          required
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          value={email}
+          onChange={(v) => {
+            setEmail(v);
+            if (errors.email) setErrors((e) => ({ ...e, email: null }));
+          }}
+          error={errors.email}
+          placeholder="you@example.com"
+        />
+        <Field
+          label="Password"
+          required
+          htmlFor="l-password"
+          error={errors.password}
+        >
           <PasswordInput
             id="l-password"
             value={password}
-            onChange={setPassword}
+            onChange={(v) => {
+              setPassword(v);
+              if (errors.password) setErrors((e) => ({ ...e, password: null }));
+            }}
             autoComplete="current-password"
           />
-        </div>
+        </Field>
         <Button
           type="submit"
           className="h-11 w-full bg-emerald-600 hover:bg-emerald-700"
@@ -362,20 +364,40 @@ export function LoginPage() {
         </p>
         <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Demo account quick fill">
           {DEMO_ACCOUNTS.map((d) => (
-            <button
+            <span
               key={d.email}
-              type="button"
-              onClick={() => {
-                setEmail(d.email);
-                setPassword(d.password);
-              }}
-              title={`${d.email} · ${d.password}`}
-              className="min-h-[36px] rounded-full border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+              className="inline-flex items-stretch overflow-hidden rounded-full border bg-background"
             >
-              {d.label}
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail(d.email);
+                  setPassword(d.password);
+                  setErrors({});
+                }}
+                title={`${d.email} · ${d.password}`}
+                className="min-h-[36px] px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+              >
+                {d.label}
+                <span className="ml-1.5 hidden font-normal text-muted-foreground md:inline">
+                  {d.email}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => copyText(`${d.email} / ${d.password}`)}
+                aria-label={`Copy ${d.label} demo credentials (${d.email})`}
+                className="flex w-9 min-h-[36px] items-center justify-center border-l text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              >
+                <Copy className="size-3.5" aria-hidden />
+              </button>
+            </span>
           ))}
         </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          Passwords: Admin@123 · Donor@123 · Volun@123 · Temp@12345 · Benef@123 — the copy button
+          grabs both email and password.
+        </p>
       </div>
     </AuthShell>
   );
