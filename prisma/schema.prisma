@@ -579,6 +579,26 @@ model Setting {
   @@map("settings")
 }
 
+// ==================== CERTIFICATES (80G receipts live on Donation.receiptNumber) ====================
+
+model Certificate {
+  id             String   @id @default(cuid())
+  code           String   @unique // UAR-CERT-2026-00001
+  type           String // DONOR_APPRECIATION | VOLUNTEER_SERVICE | ANIMAL_ADOPTION | MEDICINE_SPONSOR | PAD_DRIVE_CHAMPION
+  recipientName  String
+  recipientEmail String?
+  userId         String?
+  title          String
+  description    String?
+  refType        String? // DONATION | PLEDGE | ANIMAL | VOLUNTEER | CAMPAIGN
+  refId          String?
+  issuedBy       String?
+  meta           String? // JSON extras (hours, campaign, animal name…)
+  issuedAt       DateTime @default(now())
+
+  @@map("certificates")
+}
+
 // ==================== CONTACT QUERIES ====================
 
 model ContactQuery {

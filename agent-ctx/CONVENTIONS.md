@@ -71,3 +71,62 @@
 
 ## Helplines (official, use exactly)
 112 emergency · 108 ambulance · 1930 cyber fraud (cybercrime.gov.in) · 181 women (Sakhi/Abhayam) · 1091 women police · 1098 CHILDLINE · 14446 de-addiction · 14416 Tele-MANAS · 1933 drug trafficking (NCB MANAS) · 1962 animal rescue (AWBI).
+
+# ================= ENHANCEMENT ROUND 2 CONTRACTS (READ ALL) =================
+
+## Theme / dark mode (MANDATORY for every file you touch)
+- ThemeProvider (next-themes, class strategy) is already mounted in `src/app/layout.tsx`.
+- Dark palette already exists in `globals.css` (.dark block). USE SEMANTIC TOKENS ONLY in new/edited UI: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border`, `bg-accent`, `bg-muted/40`… NEVER `bg-white`, `text-black`, `bg-gray-50` (they break dark mode).
+- Campaign accent colors (emerald/orange/cyan/fuchsia/amber/teal/lime/red/pink): use opacity variants (`bg-emerald-500/10`, `text-emerald-600 dark:text-emerald-400`, `border-emerald-500/20`) so they hold in dark mode. NEVER indigo/blue.
+- Shared switcher: `<ThemeToggle align="end" />` from `@/components/shared/theme-toggle`.
+
+## Formatting lib (NEW code MUST use it — zero redundancy)
+`import { formatINR, formatINRCompact, amountInWords, formatDate, formatDateLong, formatDateTime, financialYear, formatDuration, initials, titleCase } from "@/lib/format";`
+- `amountInWords(125000)` → "Rupees One Lakh Twenty Five Thousand Only" (for 80G receipts/certificates).
+
+## Settings API (Agent A implements; C/D/F consume)
+- `GET /api/settings` → flat map `{ "org.name": "…", "finance.upiId": "…" }` (ADMIN only).
+- `PATCH /api/settings` body = partial flat map → upsert each key (ADMIN only).
+- `GET /api/settings/public` → `{ orgName, orgHq, orgAddress, orgEmail, orgPhone, org80g, orgPan, orgReg12a, orgDarpan, upiId, signatoryName, signatoryRole, defaultLanguage, vision }` (no auth).
+- `POST /api/settings/test` body `{ channel: "email"|"sms"|"whatsapp"|"gateway" }` → `{ ok: true, latencyMs, message }` (simulated connectivity check, ADMIN).
+- Canonical keys (seed defaults for all):
+  org.name, org.hq, org.address, org.email, org.phone, org.pan, org.80g, org.reg12a, org.darpan, org.website, org.vision,
+  receipts.signatoryName, receipts.signatoryRole, receipts.footer,
+  finance.upiId, finance.razorpayKeyId, finance.gatewayEnabled, finance.currency,
+  notify.email.enabled, notify.email.host, notify.email.port, notify.email.from, notify.email.fromName, notify.email.secure,
+  notify.sms.enabled, notify.sms.provider, notify.sms.senderId, notify.sms.endpoint,
+  notify.whatsapp.enabled, notify.whatsapp.number,
+  logs.enabled, logs.level, logs.retentionDays,
+  app.language, app.timezone, assist.model
+
+## 80G Receipts API
+- `GET /api/receipts?from&to&limit` → donations that have receiptNumber, newest first, with campaignTitle. ADMIN: all; DONOR session: own only (filter by donorId or donorEmail).
+- `GET /api/receipts/:receiptNumber` → `{ donation, org: { name, address, hq, email, phone, pan, reg80g, signatoryName, signatoryRole, footer } }`.
+- `GET /api/receipts/:receiptNumber/html` → `text/html` self-contained print-ready A4 80G receipt (inline CSS only, letterhead + amount in words + 80G reg no + donor PAN + signature block + `<script>window.onload=()=>window.print()</script>`). Public with receipt number as capability.
+
+## Certificates API (Certificate model is in schema — pushed)
+- Fields: id, code `UAR-CERT-YYYY-NNNNN`, type, recipientName, recipientEmail?, userId?, title, description?, refType?, refId?, issuedBy?, meta?(JSON string), issuedAt.
+- `POST /api/certificates` (ADMIN) body `{ type, recipientName, recipientEmail?, userId?, title?, description?, refType?, refId?, meta? }` → `{ certificate }` (auto code, issuedBy = session name, logActivity).
+- `GET /api/certificates?limit` → ADMIN: all; DONOR/VOLUNTEER: own (userId match). Order newest.
+- `GET /api/certificates/:code` → detail. `GET /api/certificates/:code/html` → print-ready A4 certificate HTML (bordered award layout, org letterhead, seal placeholder circle, signature block, type-aware wording).
+
+## Notifications API
+- `GET /api/notifications?limit=20` → latest (session user's, fall back to global). `PATCH /api/notifications` body `{ id, isRead }` or `{ all: true }`.
+
+## Reports API (enhance existing /api/reports)
+- `GET /api/reports?fy=2025` → single consolidated object:
+  `{ fy, kpis: { totalDonations, donationCount, avgDonation, donorCount, newDonorsThisFy }, monthly: [{ month:"Apr", amount, count } x12 ], categories: [{ category, amount }], topDonors: [{ name, amount, count } x10], programmes: { kits: { totalUnits, scannedUnits }, pads: { sessions, pads, girls, schools }, corridor: { missions, events, vehiclesAlerted, timeSavedMin }, animals: { available, adopted, activePledges }, medicine: { total, seeking, adopted, monthlyPledged } }, fyTotals: { amount, count } }`
+- FY = April→March. `fy` param is the START year (2025 ⇒ FY 2025-26); default = current.
+
+## Kit QR labels (Agent D)
+- `qrcode` package is ALREADY installed (with @types). Client-side: `import QRCode from "qrcode"; const dataUrl = await QRCode.toDataURL(text, { margin: 1, width: 160 });`
+- Kit label sheets: printable grid `qrcode.toDataURL(unit.code)` + code text + org name, `@media print` A4 grid, one row per kit unit.
+
+## Theme in shells (Agent B)
+- Admin header, public header (desktop+mobile), portal topbar each mount `<ThemeToggle align="end" />`.
+
+## Round-2 rules (ALL agents)
+- NO package installs (qrcode pre-installed; anything else → report need in final message).
+- NO git commands. NO dev-server restarts. NO edits to `src/app/page.tsx`, `prisma/schema.prisma`, or files outside your ownership list.
+- Every file you EDIT must remain `tsc`-clean and lint-clean (`bun run lint`), dark-mode safe, responsive (mobile-first), aria-labelled, with loading skeletons + empty states + sonner toasts.
+- Public pages read org identity via `GET /api/settings/public` (with graceful fallbacks).
