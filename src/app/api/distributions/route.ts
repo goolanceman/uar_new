@@ -113,6 +113,8 @@ export async function POST(req: Request) {
         volunteerId: volunteer?.id ?? null,
         items: body.items ? JSON.stringify(body.items) : null,
         quantity,
+        value: Number.isFinite(Number(body.value)) ? Number(body.value) : null,
+        photos: body.photos ? JSON.stringify(body.photos) : null,
         location,
         notes: body.notes ? String(body.notes) : null,
         distributedAt,

@@ -1,0 +1,1123 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  CalendarDays,
+     6→  Download,
+     7→  Eye,
+     8→  HandCoins,
+     9→  Inbox,
+    10→  Pencil,
+    11→  Plus,
+    12→  ReceiptText,
+    13→  RotateCcw,
+    14→  Search,
+    15→  Trash2,
+    16→  TrendingUp,
+    17→  Wallet,
+    18→} from "lucide-react";
+    19→import { toast } from "sonner";
+    20→import { del, get, patch, post } from "@/lib/api-client";
+    21→import { cn } from "@/lib/utils";
+    22→import {
+    23→  financialYear,
+    24→  formatDateTime,
+    25→  formatINR,
+    26→  formatINRCompact,
+    27→  titleCase,
+    28→} from "@/lib/format";
+    29→import { PageHeader } from "@/components/shared/page-header";
+    30→import { StatCard } from "@/components/shared/stat-card";
+    31→import { DataField } from "@/components/shared/data-field";
+    32→import { EmptyState } from "@/components/shared/empty-state";
+    33→import { SectionCard } from "@/components/shared/section-card";
+    34→import { Button } from "@/components/ui/button";
+    35→import { Input } from "@/components/ui/input";
+    36→import { Label } from "@/components/ui/label";
+    37→import { Textarea } from "@/components/ui/textarea";
+    38→import { Switch } from "@/components/ui/switch";
+    39→import { Skeleton } from "@/components/ui/skeleton";
+    40→import {
+    41→  Dialog,
+    42→  DialogContent,
+    43→  DialogDescription,
+    44→  DialogFooter,
+    45→  DialogHeader,
+    46→  DialogTitle,
+    47→} from "@/components/ui/dialog";
+    48→import {
+    49→  AlertDialog,
+    50→  AlertDialogAction,
+    51→  AlertDialogCancel,
+    52→  AlertDialogContent,
+    53→  AlertDialogDescription,
+    54→  AlertDialogFooter,
+    55→  AlertDialogHeader,
+    56→  AlertDialogTitle,
+    57→} from "@/components/ui/alert-dialog";
+    58→import {
+    59→  Sheet,
+    60→  SheetContent,
+    61→  SheetDescription,
+    62→  SheetHeader,
+    63→  SheetTitle,
+    64→} from "@/components/ui/sheet";
+    65→import {
+    66→  Select,
+    67→  SelectContent,
+    68→  SelectItem,
+    69→  SelectTrigger,
+    70→  SelectValue,
+    71→} from "@/components/ui/select";
+    72→import {
+    73→  Table,
+    74→  TableBody,
+    75→  TableCell,
+    76→  TableHead,
+    77→  TableHeader,
+    78→  TableRow,
+    79→} from "@/components/ui/table";
+    80→
+    81→/* ------------------------------ types & helpers ----------------------------- */
+    82→
+    83→interface DonationRow {
+    84→  id: string;
+    85→  donorId?: string | null;
+    86→  donorName: string;
+    87→  donorEmail: string;
+    88→  donorPhone?: string | null;
+    89→  amount: number;
+    90→  type: string;
+    91→  category: string;
+    92→  paymentMethod: string;
+    93→  paymentStatus: string;
+    94→  transactionId?: string | null;
+    95→  receiptNumber: string;
+    96→  campaignId?: string | null;
+    97→  campaign?: { title?: string } | null;
+    98→  message?: string | null;
+    99→  isAnonymous: boolean;
+   100→  pan?: string | null;
+   101→  createdAt: string;
+   102→  updatedAt: string;
+   103→}
+   104→
+   105→interface CampaignLite {
+   106→  id: string;
+   107→  title: string;
+   108→}
+   109→
+   110→const DONATION_TYPES = ["ONE_TIME", "RECURRING"];
+   111→const PAYMENT_STATUSES = ["PENDING", "COMPLETED", "FAILED", "REFUNDED"];
+   112→const PAYMENT_METHODS = ["UPI", "RAZORPAY", "STRIPE", "CASH", "BANK_TRANSFER"];
+   113→const CATEGORIES = [
+   114→  "GENERAL",
+   115→  "FOOD_DISTRIBUTION",
+   116→  "SANITARY_PADS",
+   117→  "MEDICAL",
+   118→  "AWARENESS",
+   119→  "SAFETY",
+   120→  "ANIMAL",
+   121→  "MOBILITY",
+   122→  "EDUCATION_SUPPORT",
+   123→  "EMERGENCY",
+   124→];
+   125→
+   126→const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+   127→const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+   128→
+   129→function statusTone(status: string): string {
+   130→  switch (status) {
+   131→    case "COMPLETED":
+   132→      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+   133→    case "PENDING":
+   134→      return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
+   135→    case "FAILED":
+   136→      return "bg-red-500/10 text-red-700 dark:text-red-400";
+   137→    case "REFUNDED":
+   138→      return "bg-muted text-muted-foreground";
+   139→    default:
+   140→      return "bg-muted text-muted-foreground";
+   141→  }
+   142→}
+   143→
+   144→function StatusPill({ status }: { status: string }) {
+   145→  return (
+   146→    <span
+   147→      className={cn(
+   148→        "inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
+   149→        statusTone(status)
+   150→      )}
+   151→    >
+   152→      {titleCase(status)}
+   153→    </span>
+   154→  );
+   155→}
+   156→
+   157→function downloadCsv(filename: string, rows: (string | number)[][]) {
+   158→  const csv = rows
+   159→    .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
+   160→    .join("\n");
+   161→  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+   162→  const url = URL.createObjectURL(blob);
+   163→  const a = document.createElement("a");
+   164→  a.href = url;
+   165→  a.download = filename;
+   166→  a.click();
+   167→  URL.revokeObjectURL(url);
+   168→}
+   169→
+   170→/** Normalises an Indian mobile number → 10 digits, or null when invalid. */
+   171→function normalisePhone(raw: string): string | null {
+   172→  const digits = raw.replace(/\D/g, "");
+   173→  const trimmed = digits.length > 10 && digits.startsWith("91") ? digits.slice(2) : digits;
+   174→  return trimmed.length === 10 ? trimmed : null;
+   175→}
+   176→
+   177→const emptyEditForm = {
+   178→  donorName: "",
+   179→  donorEmail: "",
+   180→  donorPhone: "",
+   181→  amount: "",
+   182→  type: "ONE_TIME",
+   183→  category: "GENERAL",
+   184→  paymentMethod: "UPI",
+   185→  paymentStatus: "COMPLETED",
+   186→  transactionId: "",
+   187→  campaignId: "",
+   188→  message: "",
+   189→  isAnonymous: false,
+   190→  pan: "",
+   191→};
+   192→
+   193→/* ---------------------------------- view ----------------------------------- */
+   194→
+   195→export default function DonationsView() {
+   196→  const [rows, setRows] = useState<DonationRow[]>([]);
+   197→  const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+   198→  const [loading, setLoading] = useState(true);
+   199→  const [saving, setSaving] = useState(false);
+   200→
+   201→  // filters (client-side over the fetched window)
+   202→  const [q, setQ] = useState("");
+   203→  const [search, setSearch] = useState("");
+   204→  const [status, setStatus] = useState("ALL");
+   205→  const [type, setType] = useState("ALL");
+   206→  const [category, setCategory] = useState("ALL");
+   207→  const [from, setFrom] = useState("");
+   208→  const [to, setTo] = useState("");
+   209→
+   210→  // dialogs / sheets
+   211→  const [viewTarget, setViewTarget] = useState<DonationRow | null>(null);
+   212→  const [createOpen, setCreateOpen] = useState(false);
+   213→  const [createForm, setCreateForm] = useState({ ...emptyEditForm });
+   214→  const [editTarget, setEditTarget] = useState<DonationRow | null>(null);
+   215→  const [editForm, setEditForm] = useState({ ...emptyEditForm });
+   216→  const [deleteTarget, setDeleteTarget] = useState<DonationRow | null>(null);
+   217→  const [refundTarget, setRefundTarget] = useState<DonationRow | null>(null);
+   218→
+   219→  /* ------------------------------- data load ------------------------------ */
+   220→
+   221→  const load = useCallback(async () => {
+   222→    setLoading(true);
+   223→    try {
+   224→      const data = await get<DonationRow[] | { items?: DonationRow[] }>(
+   225→        "/api/donations?limit=500"
+   226→      );
+   227→      setRows(Array.isArray(data) ? data : (data.items ?? []));
+   228→    } catch (e) {
+   229→      toast.error(e instanceof Error ? e.message : "Failed to load donations");
+   230→    } finally {
+   231→      setLoading(false);
+   232→    }
+   233→  }, []);
+   234→
+   235→  useEffect(() => {
+   236→    load();
+   237→  }, [load]);
+   238→
+   239→  useEffect(() => {
+   240→    get<CampaignLite[] | { items?: CampaignLite[] }>("/api/campaigns?all=1")
+   241→      .then((d) => setCampaigns(Array.isArray(d) ? d : (d.items ?? [])))
+   242→      .catch(() => setCampaigns([]));
+   243→  }, []);
+   244→
+   245→  // debounce the search box
+   246→  useEffect(() => {
+   247→    const t = setTimeout(() => setSearch(q), 350);
+   248→    return () => clearTimeout(t);
+   249→  }, [q]);
+   250→
+   251→  const campaignTitle = useCallback(
+   252→    (d: DonationRow) =>
+   253→      d.campaign?.title ??
+   254→      campaigns.find((c) => c.id === d.campaignId)?.title ??
+   255→      "General Fund",
+   256→    [campaigns]
+   257→  );
+   258→
+   259→  /* ------------------------------- filtering ------------------------------ */
+   260→
+   261→  const filtered = useMemo(() => {
+   262→    const needle = search.trim().toLowerCase();
+   263→    const fromDate = from ? new Date(`${from}T00:00:00`) : null;
+   264→    const toDate = to ? new Date(`${to}T23:59:59.999`) : null;
+   265→    return rows.filter((d) => {
+   266→      if (status !== "ALL" && d.paymentStatus !== status) return false;
+   267→      if (type !== "ALL" && d.type !== type) return false;
+   268→      if (category !== "ALL" && d.category !== category) return false;
+   269→      if (needle) {
+   270→        const hay = `${d.donorName} ${d.donorEmail} ${d.receiptNumber} ${d.transactionId ?? ""} ${d.message ?? ""}`.toLowerCase();
+   271→        if (!hay.includes(needle)) return false;
+   272→      }
+   273→      const created = new Date(d.createdAt);
+   274→      if (fromDate && created < fromDate) return false;
+   275→      if (toDate && created > toDate) return false;
+   276→      return true;
+   277→    });
+   278→  }, [rows, search, status, type, category, from, to]);
+   279→
+   280→  const hasFilters =
+   281→    search.trim() !== "" ||
+   282→    status !== "ALL" ||
+   283→    type !== "ALL" ||
+   284→    category !== "ALL" ||
+   285→    from !== "" ||
+   286→    to !== "";
+   287→
+   288→  const resetFilters = () => {
+   289→    setQ("");
+   290→    setStatus("ALL");
+   291→    setType("ALL");
+   292→    setCategory("ALL");
+   293→    setFrom("");
+   294→    setTo("");
+   295→  };
+   296→
+   297→  /* --------------------------------- stats -------------------------------- */
+   298→
+   299→  const stats = useMemo(() => {
+   300→    const now = new Date();
+   301→    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+   302→    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+   303→    let monthTotal = 0;
+   304→    let todayTotal = 0;
+   305→    let completedSum = 0;
+   306→    let completedCount = 0;
+   307→    let pending = 0;
+   308→    for (const d of rows) {
+   309→      const created = new Date(d.createdAt);
+   310→      if (d.paymentStatus === "COMPLETED") {
+   311→        if (created >= monthStart) monthTotal += d.amount;
+   312→        if (created >= todayStart) todayTotal += d.amount;
+   313→        completedSum += d.amount;
+   314→        completedCount += 1;
+   315→      }
+   316→      if (d.paymentStatus === "PENDING") pending += 1;
+   317→    }
+   318→    return {
+   319→      monthTotal,
+   320→      todayTotal,
+   321→      pending,
+   322→      avg: completedCount > 0 ? completedSum / completedCount : 0,
+   323→    };
+   324→  }, [rows]);
+   325→
+   326→  /* ------------------------------- mutations ------------------------------ */
+   327→
+   328→  const openEdit = (d: DonationRow) => {
+   329→    if (!d?.id) {
+   330→      toast.error("This donation has no record id — cannot edit");
+   331→      return;
+   332→    }
+   333→    setEditTarget(d);
+   334→    setEditForm({
+   335→      donorName: d.donorName ?? "",
+   336→      donorEmail: d.donorEmail ?? "",
+   337→      donorPhone: d.donorPhone ?? "",
+   338→      amount: d.amount !== undefined && d.amount !== null ? String(d.amount) : "",
+   339→      type: d.type ?? "ONE_TIME",
+   340→      category: d.category ?? "GENERAL",
+   341→      paymentMethod: d.paymentMethod ?? "UPI",
+   342→      paymentStatus: d.paymentStatus ?? "COMPLETED",
+   343→      transactionId: d.transactionId ?? "",
+   344→      campaignId: d.campaignId ?? "",
+   345→      message: d.message ?? "",
+   346→      isAnonymous: Boolean(d.isAnonymous),
+   347→      pan: d.pan ?? "",
+   348→    });
+   349→  };
+   350→
+   351→  const validateForm = (f: typeof emptyEditForm): string | null => {
+   352→    if (!f.donorName.trim()) return "Donor name is required";
+   353→    if (!f.donorEmail.trim()) return "Donor email is required";
+   354→    if (!EMAIL_RE.test(f.donorEmail.trim())) return "Enter a valid email address";
+   355→    const amount = Number(f.amount);
+   356→    if (!Number.isFinite(amount) || amount <= 0) return "Amount must be greater than zero";
+   357→    if (f.donorPhone.trim() && !normalisePhone(f.donorPhone)) return "Phone must be a 10-digit mobile number";
+   358→    if (f.pan.trim() && !PAN_RE.test(f.pan.trim().toUpperCase()))
+   359→      return "PAN must match the format ABCDE1234F";
+   360→    return null;
+   361→  };
+   362→
+   363→  const createDonation = async () => {
+   364→    const err = validateForm(createForm);
+   365→    if (err) {
+   366→      toast.error(err);
+   367→      return;
+   368→    }
+   369→    setSaving(true);
+   370→    try {
+   371→      await post("/api/donations", {
+   372→        donorName: createForm.donorName.trim(),
+   373→        donorEmail: createForm.donorEmail.trim(),
+   374→        donorPhone: createForm.donorPhone.trim() || undefined,
+   375→        amount: Number(createForm.amount),
+   376→        type: createForm.type,
+   377→        category: createForm.category,
+   378→        paymentMethod: createForm.paymentMethod,
+   379→        campaignId: createForm.campaignId || undefined,
+   380→        message: createForm.message.trim() || undefined,
+   381→        isAnonymous: createForm.isAnonymous,
+   382→        pan: createForm.pan.trim().toUpperCase() || undefined,
+   383→      });
+   384→      toast.success("Donation recorded — receipt generated");
+   385→      setCreateOpen(false);
+   386→      setCreateForm({ ...emptyEditForm });
+   387→      load();
+   388→    } catch (e) {
+   389→      toast.error(e instanceof Error ? e.message : "Failed to record donation");
+   390→    } finally {
+   391→      setSaving(false);
+   392→    }
+   393→  };
+   394→
+   395→  const saveEdit = async () => {
+   396→    if (!editTarget?.id) {
+   397→      toast.error("No donation selected — close the dialog and try again");
+   398→      return;
+   399→    }
+   400→    const err = validateForm(editForm);
+   401→    if (err) {
+   402→      toast.error(err);
+   403→      return;
+   404→    }
+   405→    setSaving(true);
+   406→    try {
+   407→      await patch(`/api/donations/${editTarget.id}`, {
+   408→        donorName: editForm.donorName.trim(),
+   409→        donorEmail: editForm.donorEmail.trim(),
+   410→        donorPhone: editForm.donorPhone.trim() || null,
+   411→        amount: Number(editForm.amount),
+   412→        type: editForm.type,
+   413→        category: editForm.category,
+   414→        paymentMethod: editForm.paymentMethod,
+   415→        paymentStatus: editForm.paymentStatus,
+   416→        transactionId: editForm.transactionId.trim() || null,
+   417→        campaignId: editForm.campaignId || null,
+   418→        message: editForm.message.trim() || null,
+   419→        isAnonymous: editForm.isAnonymous,
+   420→        pan: editForm.pan.trim().toUpperCase() || null,
+   421→      });
+   422→      toast.success(`Receipt ${editTarget.receiptNumber} updated`);
+   423→      setEditTarget(null);
+   424→      await load();
+   425→    } catch (e) {
+   426→      toast.error(e instanceof Error ? e.message : "Failed to update donation");
+   427→    } finally {
+   428→      setSaving(false);
+   429→    }
+   430→  };
+   431→
+   432→  const markRefunded = async () => {
+   433→    if (!refundTarget?.id) return;
+   434→    setSaving(true);
+   435→    try {
+   436→      await patch(`/api/donations/${refundTarget.id}`, { paymentStatus: "REFUNDED" });
+   437→      toast.success(`Receipt ${refundTarget.receiptNumber} marked refunded`);
+   438→      setRefundTarget(null);
+   439→      await load();
+   440→    } catch (e) {
+   441→      toast.error(e instanceof Error ? e.message : "Failed to mark refund");
+   442→    } finally {
+   443→      setSaving(false);
+   444→    }
+   445→  };
+   446→
+   447→  const confirmDelete = async () => {
+   448→    if (!deleteTarget?.id) return;
+   449→    setSaving(true);
+   450→    try {
+   451→      await del(`/api/donations/${deleteTarget.id}`);
+   452→      toast.success("Donation deleted");
+   453→      setDeleteTarget(null);
+   454→      await load();
+   455→    } catch (e) {
+   456→      toast.error(e instanceof Error ? e.message : "Failed to delete donation");
+   457→    } finally {
+   458→      setSaving(false);
+   459→    }
+   460→  };
+   461→
+   462→  const exportCsv = () => {
+   463→    const out: (string | number)[][] = [
+   464→      ["Receipt", "Donor", "Email", "Phone", "Amount", "Type", "Category", "Method", "Status", "Transaction", "Campaign", "Anonymous", "Date"],
+   465→      ...filtered.map((d) => [
+   466→        d.receiptNumber,
+   467→        d.donorName,
+   468→        d.donorEmail,
+   469→        d.donorPhone ?? "",
+   470→        d.amount,
+   471→        d.type,
+   472→        d.category,
+   473→        d.paymentMethod,
+   474→        d.paymentStatus,
+   475→        d.transactionId ?? "",
+   476→        campaignTitle(d),
+   477→        d.isAnonymous ? "Yes" : "No",
+   478→        formatDateTime(d.createdAt),
+   479→      ]),
+   480→    ];
+   481→    downloadCsv(`uar-donations-${new Date().toISOString().slice(0, 10)}.csv`, out);
+   482→    toast.success(`Exported ${filtered.length} donation${filtered.length === 1 ? "" : "s"} to CSV`);
+   483→  };
+   484→
+   485→  const open80G = (receiptNumber: string) => {
+   486→    window.open(`/api/receipts/${encodeURIComponent(receiptNumber)}/html`, "_blank", "noopener");
+   487→  };
+   488→
+   489→  /* ------------------------------ row actions ----------------------------- */
+   490→
+   491→  const rowActions = (d: DonationRow, withLabels = false) => (
+   492→    <div className={cn("items-center", withLabels ? "flex flex-wrap gap-2" : "flex justify-end gap-1")}>
+   493→      <Button
+   494→        size={withLabels ? "sm" : "icon"}
+   495→        variant="ghost"
+   496→        className={withLabels ? "" : "size-11 md:size-9"}
+   497→        aria-label={`View donation ${d.receiptNumber}`}
+   498→        onClick={() => setViewTarget(d)}
+   499→      >
+   500→        <Eye className="size-4" />
+   501→        {withLabels && <span>View</span>}
+   502→      </Button>
+   503→      <Button
+   504→        size={withLabels ? "sm" : "icon"}
+   505→        variant="ghost"
+   506→        className={withLabels ? "" : "size-11 md:size-9"}
+   507→        aria-label={`Edit donation ${d.receiptNumber}`}
+   508→        onClick={() => openEdit(d)}
+   509→      >
+   510→        <Pencil className="size-4" />
+   511→        {withLabels && <span>Edit</span>}
+   512→      </Button>
+   513→      <Button
+   514→        size={withLabels ? "sm" : "icon"}
+   515→        variant="ghost"
+   516→        className={withLabels ? "" : "size-11 md:size-9"}
+   517→        aria-label={`Mark donation ${d.receiptNumber} refunded`}
+   518→        disabled={d.paymentStatus === "REFUNDED"}
+   519→        onClick={() => setRefundTarget(d)}
+   520→      >
+   521→        <RotateCcw className="size-4" />
+   522→        {withLabels && <span>Refund</span>}
+   523→      </Button>
+   524→      <Button
+   525→        size={withLabels ? "sm" : "icon"}
+   526→        variant="ghost"
+   527→        className={cn(withLabels ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "size-11 md:size-9 text-red-600 hover:bg-red-500/10 hover:text-red-700")}
+   528→        aria-label={`Delete donation ${d.receiptNumber}`}
+   529→        onClick={() => setDeleteTarget(d)}
+   530→      >
+   531→        <Trash2 className="size-4" />
+   532→        {withLabels && <span>Delete</span>}
+   533→      </Button>
+   534→    </div>
+   535→  );
+   536→
+   537→  /* --------------------------------- render -------------------------------- */
+   538→
+   539→  return (
+   540→    <div className="space-y-4 sm:space-y-6">
+   541→      <PageHeader
+   542→        title="Donations"
+   543→        description="Every rupee received — filter, reconcile, export and issue 80G receipts."
+   544→        icon={<HandCoins className="size-5" aria-hidden="true" />}
+   545→        actions={
+   546→          <>
+   547→            <Button variant="outline" onClick={exportCsv} disabled={filtered.length === 0} aria-label="Export filtered donations to CSV">
+   548→              <Download className="size-4" /> Export CSV
+   549→            </Button>
+   550→            <Button onClick={() => setCreateOpen(true)} aria-label="Record new donation">
+   551→              <Plus className="size-4" /> Record donation
+   552→            </Button>
+   553→          </>
+   554→        }
+   555→      />
+   556→
+   557→      {/* Stat row */}
+   558→      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:gap-4">
+   559→        <StatCard
+   560→          label="This month"
+   561→          value={formatINRCompact(stats.monthTotal)}
+   562→          icon={<TrendingUp className="size-5" aria-hidden="true" />}
+   563→          accent="emerald"
+   564→          hint={`${financialYear(new Date())} · month to date`}
+   565→          loading={loading}
+   566→        />
+   567→        <StatCard
+   568→          label="Today"
+   569→          value={formatINRCompact(stats.todayTotal)}
+   570→          icon={<Wallet className="size-5" aria-hidden="true" />}
+   571→          accent="teal"
+   572→          hint="received since midnight"
+   573→          loading={loading}
+   574→        />
+   575→        <StatCard
+   576→          label="Pending"
+   577→          value={String(stats.pending)}
+   578→          icon={<Inbox className="size-5" aria-hidden="true" />}
+   579→          accent="amber"
+   580→          hint="awaiting confirmation"
+   581→          loading={loading}
+   582→        />
+   583→        <StatCard
+   584→          label="Avg gift"
+   585→          value={formatINRCompact(stats.avg)}
+   586→          icon={<HandCoins className="size-5" aria-hidden="true" />}
+   587→          accent="fuchsia"
+   588→          hint="across completed donations"
+   589→          loading={loading}
+   590→        />
+   591→      </div>
+   592→
+   593→      {/* Filters */}
+   594→      <div className="flex flex-col gap-3">
+   595→        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+   596→          <div className="relative flex-1">
+   597→            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+   598→            <Input
+   599→              value={q}
+   600→              onChange={(e) => setQ(e.target.value)}
+   601→              placeholder="Search donor, email, receipt or transaction…"
+   602→              className="pl-9"
+   603→              aria-label="Search donations"
+   604→            />
+   605→          </div>
+   606→          <div className="flex flex-wrap gap-2">
+   607→            <Select value={status} onValueChange={setStatus}>
+   608→              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by payment status">
+   609→                <SelectValue placeholder="All statuses" />
+   610→              </SelectTrigger>
+   611→              <SelectContent>
+   612→                <SelectItem value="ALL">All statuses</SelectItem>
+   613→                {PAYMENT_STATUSES.map((s) => (
+   614→                  <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+   615→                ))}
+   616→              </SelectContent>
+   617→            </Select>
+   618→            <Select value={type} onValueChange={setType}>
+   619→              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by donation type">
+   620→                <SelectValue placeholder="All types" />
+   621→              </SelectTrigger>
+   622→              <SelectContent>
+   623→                <SelectItem value="ALL">All types</SelectItem>
+   624→                {DONATION_TYPES.map((t) => (
+   625→                  <SelectItem key={t} value={t}>{t === "RECURRING" ? "Monthly" : "One-time"}</SelectItem>
+   626→                ))}
+   627→              </SelectContent>
+   628→            </Select>
+   629→            <Select value={category} onValueChange={setCategory}>
+   630→              <SelectTrigger className="w-full sm:w-44" aria-label="Filter by category">
+   631→                <SelectValue placeholder="All categories" />
+   632→              </SelectTrigger>
+   633→              <SelectContent>
+   634→                <SelectItem value="ALL">All categories</SelectItem>
+   635→                {CATEGORIES.map((c) => (
+   636→                  <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+   637→                ))}
+   638→              </SelectContent>
+   639→            </Select>
+   640→          </div>
+   641→        </div>
+   642→        <div className="flex flex-wrap items-center gap-2">
+   643→          <Label htmlFor="don-from" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   644→            <CalendarDays className="size-3.5" aria-hidden="true" /> From
+   645→          </Label>
+   646→          <Input id="don-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" aria-label="Filter from date" />
+   647→          <Label htmlFor="don-to" className="text-xs text-muted-foreground">To</Label>
+   648→          <Input id="don-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" aria-label="Filter to date" />
+   649→          {hasFilters && (
+   650→            <Button variant="ghost" size="sm" onClick={resetFilters} aria-label="Reset all filters">
+   651→              Reset filters
+   652→            </Button>
+   653→          )}
+   654→          <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">
+   655→            {loading ? "Loading…" : `${filtered.length} of ${rows.length} shown`}
+   656→          </span>
+   657→        </div>
+   658→      </div>
+   659→
+   660→      {/* Desktop table */}
+   661→      <div className="hidden rounded-xl border bg-card md:block">
+   662→        {loading ? (
+   663→          <div className="space-y-2 p-4">
+   664→            {Array.from({ length: 6 }).map((_, i) => (
+   665→              <Skeleton key={i} className="h-11 w-full" />
+   666→            ))}
+   667→          </div>
+   668→        ) : filtered.length === 0 ? (
+   669→          <div className="p-6">
+   670→            <EmptyState
+   671→              icon={<ReceiptText className="size-6" aria-hidden="true" />}
+   672→              title="No donations found"
+   673→              hint={hasFilters ? "Try widening the date range or clearing filters." : "Record your first donation to get started."}
+   674→            >
+   675→              {hasFilters ? (
+   676→                <Button variant="outline" size="sm" onClick={resetFilters}>Clear filters</Button>
+   677→              ) : (
+   678→                <Button size="sm" onClick={() => setCreateOpen(true)}>
+   679→                  <Plus className="size-4" /> Record donation
+   680→                </Button>
+   681→              )}
+   682→            </EmptyState>
+   683→          </div>
+   684→        ) : (
+   685→          <div className="overflow-x-auto">
+   686→            <Table>
+   687→              <TableHeader>
+   688→                <TableRow>
+   689→                  <TableHead>Receipt</TableHead>
+   690→                  <TableHead>Donor</TableHead>
+   691→                  <TableHead className="text-right">Amount</TableHead>
+   692→                  <TableHead>Type</TableHead>
+   693→                  <TableHead className="hidden xl:table-cell">Category</TableHead>
+   694→                  <TableHead>Status</TableHead>
+   695→                  <TableHead className="hidden lg:table-cell">Date</TableHead>
+   696→                  <TableHead className="hidden lg:table-cell">Campaign</TableHead>
+   697→                  <TableHead className="text-right">Actions</TableHead>
+   698→                </TableRow>
+   699→              </TableHeader>
+   700→              <TableBody>
+   701→                {filtered.map((d) => (
+   702→                  <TableRow key={d.id}>
+   703→                    <TableCell className="whitespace-nowrap font-mono text-xs">{d.receiptNumber}</TableCell>
+   704→                    <TableCell>
+   705→                      <p className="max-w-44 truncate font-medium">
+   706→                        {d.donorName}
+   707→                        {d.isAnonymous && <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">Anonymous</span>}
+   708→                      </p>
+   709→                      <p className="max-w-44 truncate text-xs text-muted-foreground">{d.donorEmail}</p>
+   710→                    </TableCell>
+   711→                    <TableCell className="whitespace-nowrap text-right font-semibold">{formatINR(d.amount)}</TableCell>
+   712→                    <TableCell>
+   713→                      <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold", d.type === "RECURRING" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400" : "bg-muted text-muted-foreground")}>
+   714→                        {d.type === "RECURRING" ? "Monthly" : "One-time"}
+   715→                      </span>
+   716→                    </TableCell>
+   717→                    <TableCell className="hidden xl:table-cell">{titleCase(d.category)}</TableCell>
+   718→                    <TableCell><StatusPill status={d.paymentStatus} /></TableCell>
+   719→                    <TableCell className="hidden whitespace-nowrap text-sm lg:table-cell">{formatDateTime(d.createdAt)}</TableCell>
+   720→                    <TableCell className="hidden max-w-40 truncate text-sm lg:table-cell">{campaignTitle(d)}</TableCell>
+   721→                    <TableCell className="text-right">{rowActions(d)}</TableCell>
+   722→                  </TableRow>
+   723→                ))}
+   724→              </TableBody>
+   725→            </Table>
+   726→          </div>
+   727→        )}
+   728→      </div>
+   729→
+   730→      {/* Mobile stacked cards */}
+   731→      <div className="space-y-3 md:hidden">
+   732→        {loading ? (
+   733→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)
+   734→        ) : filtered.length === 0 ? (
+   735→          <EmptyState
+   736→            icon={<ReceiptText className="size-6" aria-hidden="true" />}
+   737→            title="No donations found"
+   738→            hint={hasFilters ? "Try widening the date range or clearing filters." : "Record your first donation to get started."}
+   739→          >
+   740→            {hasFilters ? (
+   741→              <Button variant="outline" size="sm" onClick={resetFilters}>Clear filters</Button>
+   742→            ) : (
+   743→              <Button size="sm" onClick={() => setCreateOpen(true)}>
+   744→                <Plus className="size-4" /> Record donation
+   745→              </Button>
+   746→            )}
+   747→          </EmptyState>
+   748→        ) : (
+   749→          filtered.map((d) => (
+   750→            <article key={d.id} className="space-y-2.5 rounded-xl border bg-card p-4">
+   751→              <div className="flex items-start justify-between gap-2">
+   752→                <div className="min-w-0">
+   753→                  <p className="font-mono text-xs text-muted-foreground">{d.receiptNumber}</p>
+   754→                  <p className="truncate text-sm font-semibold">
+   755→                    {d.donorName}
+   756→                    {d.isAnonymous && <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">Anonymous</span>}
+   757→                  </p>
+   758→                </div>
+   759→                <p className="shrink-0 text-base font-bold">{formatINR(d.amount)}</p>
+   760→              </div>
+   761→              <div className="flex flex-wrap items-center gap-1.5">
+   762→                <StatusPill status={d.paymentStatus} />
+   763→                <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", d.type === "RECURRING" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400" : "bg-muted text-muted-foreground")}>
+   764→                  {d.type === "RECURRING" ? "Monthly" : "One-time"}
+   765→                </span>
+   766→                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">{titleCase(d.category)}</span>
+   767→              </div>
+   768→              <p className="truncate text-xs text-muted-foreground">
+   769→                {campaignTitle(d)} · {formatDateTime(d.createdAt)}
+   770→              </p>
+   771→              <div className="border-t pt-2">{rowActions(d, true)}</div>
+   772→            </article>
+   773→          ))
+   774→        )}
+   775→      </div>
+   776→
+   777→      {/* ------------------------------ View sheet ---------------------------- */}
+   778→      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
+   779→        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg">
+   780→          <SheetHeader className="text-left">
+   781→            <SheetTitle className="flex items-center gap-2">
+   782→              <ReceiptText className="size-4 text-primary" aria-hidden="true" />
+   783→              {viewTarget?.receiptNumber ?? "Donation"}
+   784→            </SheetTitle>
+   785→            <SheetDescription>
+   786→              {viewTarget ? `${viewTarget.donorName} · ${formatINR(viewTarget.amount)} · ${formatDateTime(viewTarget.createdAt)}` : ""}
+   787→            </SheetDescription>
+   788→          </SheetHeader>
+   789→          {viewTarget && (
+   790→            <div className="flex-1 space-y-4 px-4 pb-6">
+   791→              <SectionCard title="Donor" icon={<ReceiptText className="size-4" aria-hidden="true" />}>
+   792→                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   793→                  <DataField label="Name" value={viewTarget.isAnonymous ? `${viewTarget.donorName} (anonymous)` : viewTarget.donorName} />
+   794→                  <DataField label="Email" value={viewTarget.donorEmail} copy />
+   795→                  <DataField label="Phone" value={viewTarget.donorPhone} copy />
+   796→                  <DataField label="PAN" value={viewTarget.pan} mono copy />
+   797→                  <DataField label="Anonymous" value={viewTarget.isAnonymous ? "Yes" : "No"} />
+   798→                  <DataField label="Donor ID" value={viewTarget.donorId} mono />
+   799→                </div>
+   800→                {viewTarget.message && (
+   801→                  <blockquote className="mt-4 rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-xs italic text-muted-foreground">
+   802→                    “{viewTarget.message}”
+   803→                  </blockquote>
+   804→                )}
+   805→              </SectionCard>
+   806→
+   807→              <SectionCard title="Payment" icon={<Wallet className="size-4" aria-hidden="true" />}>
+   808→                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   809→                  <DataField label="Amount" value={formatINR(viewTarget.amount)} />
+   810→                  <DataField label="Type" value={titleCase(viewTarget.type)} />
+   811→                  <DataField label="Category" value={titleCase(viewTarget.category)} />
+   812→                  <DataField label="Method" value={titleCase(viewTarget.paymentMethod)} />
+   813→                  <DataField label="Status" value={<StatusPill status={viewTarget.paymentStatus} />} />
+   814→                  <DataField label="Transaction ID" value={viewTarget.transactionId} mono copy />
+   815→                  <DataField label="Created" value={formatDateTime(viewTarget.createdAt)} />
+   816→                  <DataField label="Updated" value={formatDateTime(viewTarget.updatedAt)} />
+   817→                </div>
+   818→              </SectionCard>
+   819→
+   820→              <SectionCard title="Receipt & campaign" icon={<HandCoins className="size-4" aria-hidden="true" />}>
+   821→                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   822→                  <DataField label="Receipt number" value={viewTarget.receiptNumber} mono copy />
+   823→                  <DataField label="Campaign" value={campaignTitle(viewTarget)} />
+   824→                </div>
+   825→                <div className="mt-4 flex flex-wrap gap-2">
+   826→                  <Button
+   827→                    size="sm"
+   828→                    variant="outline"
+   829→                    onClick={() => open80G(viewTarget.receiptNumber)}
+   830→                    aria-label="Open 80G receipt in a new tab"
+   831→                  >
+   832→                    <ReceiptText className="size-4" /> Open 80G receipt
+   833→                  </Button>
+   834→                  <Button
+   835→                    size="sm"
+   836→                    variant="ghost"
+   837→                    onClick={() => {
+   838→                      setViewTarget(null);
+   839→                      openEdit(viewTarget);
+   840→                    }}
+   841→                    aria-label="Edit this donation"
+   842→                  >
+   843→                    <Pencil className="size-4" /> Edit donation
+   844→                  </Button>
+   845→                </div>
+   846→              </SectionCard>
+   847→            </div>
+   848→          )}
+   849→        </SheetContent>
+   850→      </Sheet>
+   851→
+   852→      {/* --------------------------- Record dialog ---------------------------- */}
+   853→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   854→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   855→          <DialogHeader>
+   856→            <DialogTitle>Record donation</DialogTitle>
+   857→            <DialogDescription>Log an offline or manual contribution. A receipt number is generated automatically.</DialogDescription>
+   858→          </DialogHeader>
+   859→          <div className="grid gap-4">
+   860→            <div className="grid gap-4 sm:grid-cols-2">
+   861→              <div className="grid gap-2">
+   862→                <Label htmlFor="dc-name">Donor name *</Label>
+   863→                <Input id="dc-name" value={createForm.donorName} onChange={(e) => setCreateForm({ ...createForm, donorName: e.target.value })} placeholder="Full name" />
+   864→              </div>
+   865→              <div className="grid gap-2">
+   866→                <Label htmlFor="dc-email">Donor email *</Label>
+   867→                <Input id="dc-email" type="email" value={createForm.donorEmail} onChange={(e) => setCreateForm({ ...createForm, donorEmail: e.target.value })} placeholder="donor@example.org" />
+   868→              </div>
+   869→            </div>
+   870→            <div className="grid gap-4 sm:grid-cols-2">
+   871→              <div className="grid gap-2">
+   872→                <Label htmlFor="dc-amount">Amount (₹) *</Label>
+   873→                <Input id="dc-amount" type="number" min="1" value={createForm.amount} onChange={(e) => setCreateForm({ ...createForm, amount: e.target.value })} placeholder="5000" />
+   874→              </div>
+   875→              <div className="grid gap-2">
+   876→                <Label htmlFor="dc-phone">Phone (10 digits)</Label>
+   877→                <Input id="dc-phone" type="tel" inputMode="numeric" value={createForm.donorPhone} onChange={(e) => setCreateForm({ ...createForm, donorPhone: e.target.value })} placeholder="9876543210" />
+   878→              </div>
+   879→            </div>
+   880→            <div className="grid gap-4 sm:grid-cols-2">
+   881→              <div className="grid gap-2">
+   882→                <Label htmlFor="dc-pan">PAN (for 80G)</Label>
+   883→                <Input id="dc-pan" value={createForm.pan} onChange={(e) => setCreateForm({ ...createForm, pan: e.target.value.toUpperCase() })} placeholder="ABCDE1234F" className="font-mono uppercase" />
+   884→              </div>
+   885→              <div className="grid gap-2">
+   886→                <Label>Campaign</Label>
+   887→                <Select value={createForm.campaignId || "none"} onValueChange={(v) => setCreateForm({ ...createForm, campaignId: v === "none" ? "" : v })}>
+   888→                  <SelectTrigger aria-label="Select campaign"><SelectValue placeholder="General donation" /></SelectTrigger>
+   889→                  <SelectContent>
+   890→                    <SelectItem value="none">General donation</SelectItem>
+   891→                    {campaigns.map((c) => (
+   892→                      <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+   893→                    ))}
+   894→                  </SelectContent>
+   895→                </Select>
+   896→              </div>
+   897→            </div>
+   898→            <div className="grid gap-4 sm:grid-cols-3">
+   899→              <div className="grid gap-2">
+   900→                <Label>Type</Label>
+   901→                <Select value={createForm.type} onValueChange={(v) => setCreateForm({ ...createForm, type: v })}>
+   902→                  <SelectTrigger aria-label="Donation type"><SelectValue /></SelectTrigger>
+   903→                  <SelectContent>
+   904→                    {DONATION_TYPES.map((t) => (
+   905→                      <SelectItem key={t} value={t}>{t === "RECURRING" ? "Monthly" : "One-time"}</SelectItem>
+   906→                    ))}
+   907→                  </SelectContent>
+   908→                </Select>
+   909→              </div>
+   910→              <div className="grid gap-2">
+   911→                <Label>Category</Label>
+   912→                <Select value={createForm.category} onValueChange={(v) => setCreateForm({ ...createForm, category: v })}>
+   913→                  <SelectTrigger aria-label="Donation category"><SelectValue /></SelectTrigger>
+   914→                  <SelectContent>
+   915→                    {CATEGORIES.map((c) => (
+   916→                      <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+   917→                    ))}
+   918→                  </SelectContent>
+   919→                </Select>
+   920→              </div>
+   921→              <div className="grid gap-2">
+   922→                <Label>Method</Label>
+   923→                <Select value={createForm.paymentMethod} onValueChange={(v) => setCreateForm({ ...createForm, paymentMethod: v })}>
+   924→                  <SelectTrigger aria-label="Payment method"><SelectValue /></SelectTrigger>
+   925→                  <SelectContent>
+   926→                    {PAYMENT_METHODS.map((m) => (
+   927→                      <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>
+   928→                    ))}
+   929→                  </SelectContent>
+   930→                </Select>
+   931→              </div>
+   932→            </div>
+   933→            <div className="flex items-center justify-between rounded-lg border p-3">
+   934→              <div>
+   935→                <Label htmlFor="dc-anon" className="text-sm">Anonymous donation</Label>
+   936→                <p className="text-xs text-muted-foreground">Hide the donor name on public walls of giving</p>
+   937→              </div>
+   938→              <Switch id="dc-anon" checked={createForm.isAnonymous} onCheckedChange={(v) => setCreateForm({ ...createForm, isAnonymous: v })} />
+   939→            </div>
+   940→            <div className="grid gap-2">
+   941→              <Label htmlFor="dc-message">Message</Label>
+   942→              <Textarea id="dc-message" value={createForm.message} onChange={(e) => setCreateForm({ ...createForm, message: e.target.value })} placeholder="Optional note from the donor" rows={2} />
+   943→            </div>
+   944→          </div>
+   945→          <DialogFooter>
+   946→            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+   947→            <Button onClick={createDonation} disabled={saving}>{saving ? "Saving…" : "Record donation"}</Button>
+   948→          </DialogFooter>
+   949→        </DialogContent>
+   950→      </Dialog>
+   951→
+   952→      {/* ----------------------------- Edit dialog ---------------------------- */}
+   953→      <Dialog open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
+   954→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   955→          <DialogHeader>
+   956→            <DialogTitle>Edit donation</DialogTitle>
+   957→            <DialogDescription>
+   958→              {editTarget ? `Receipt ${editTarget.receiptNumber} · ${editTarget.donorName}` : ""}
+   959→            </DialogDescription>
+   960→          </DialogHeader>
+   961→          <div className="grid gap-4">
+   962→            <div className="grid gap-4 sm:grid-cols-2">
+   963→              <div className="grid gap-2">
+   964→                <Label htmlFor="de-name">Donor name *</Label>
+   965→                <Input id="de-name" value={editForm.donorName} onChange={(e) => setEditForm({ ...editForm, donorName: e.target.value })} />
+   966→              </div>
+   967→              <div className="grid gap-2">
+   968→                <Label htmlFor="de-email">Donor email *</Label>
+   969→                <Input id="de-email" type="email" value={editForm.donorEmail} onChange={(e) => setEditForm({ ...editForm, donorEmail: e.target.value })} />
+   970→              </div>
+   971→            </div>
+   972→            <div className="grid gap-4 sm:grid-cols-3">
+   973→              <div className="grid gap-2">
+   974→                <Label htmlFor="de-amount">Amount (₹) *</Label>
+   975→                <Input id="de-amount" type="number" min="1" value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} />
+   976→              </div>
+   977→              <div className="grid gap-2">
+   978→                <Label htmlFor="de-phone">Phone</Label>
+   979→                <Input id="de-phone" type="tel" inputMode="numeric" value={editForm.donorPhone} onChange={(e) => setEditForm({ ...editForm, donorPhone: e.target.value })} placeholder="10 digits" />
+   980→              </div>
+   981→              <div className="grid gap-2">
+   982→                <Label htmlFor="de-pan">PAN</Label>
+   983→                <Input id="de-pan" value={editForm.pan} onChange={(e) => setEditForm({ ...editForm, pan: e.target.value.toUpperCase() })} className="font-mono uppercase" placeholder="ABCDE1234F" />
+   984→              </div>
+   985→            </div>
+   986→            <div className="grid gap-4 sm:grid-cols-3">
+   987→              <div className="grid gap-2">
+   988→                <Label>Type</Label>
+   989→                <Select value={editForm.type} onValueChange={(v) => setEditForm({ ...editForm, type: v })}>
+   990→                  <SelectTrigger aria-label="Donation type"><SelectValue /></SelectTrigger>
+   991→                  <SelectContent>
+   992→                    {DONATION_TYPES.map((t) => (
+   993→                      <SelectItem key={t} value={t}>{t === "RECURRING" ? "Monthly" : "One-time"}</SelectItem>
+   994→                    ))}
+   995→                  </SelectContent>
+   996→                </Select>
+   997→              </div>
+   998→              <div className="grid gap-2">
+   999→                <Label>Category</Label>
+  1000→                <Select value={editForm.category} onValueChange={(v) => setEditForm({ ...editForm, category: v })}>
+  1001→                  <SelectTrigger aria-label="Donation category"><SelectValue /></SelectTrigger>
+  1002→                  <SelectContent>
+  1003→                    {CATEGORIES.map((c) => (
+  1004→                      <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+  1005→                    ))}
+  1006→                  </SelectContent>
+  1007→                </Select>
+  1008→              </div>
+  1009→              <div className="grid gap-2">
+  1010→                <Label>Method</Label>
+  1011→                <Select value={editForm.paymentMethod} onValueChange={(v) => setEditForm({ ...editForm, paymentMethod: v })}>
+  1012→                  <SelectTrigger aria-label="Payment method"><SelectValue /></SelectTrigger>
+  1013→                  <SelectContent>
+  1014→                    {PAYMENT_METHODS.map((m) => (
+  1015→                      <SelectItem key={m} value={m}>{titleCase(m)}</SelectItem>
+  1016→                    ))}
+  1017→                  </SelectContent>
+  1018→                </Select>
+  1019→              </div>
+  1020→            </div>
+  1021→            <div className="grid gap-4 sm:grid-cols-2">
+  1022→              <div className="grid gap-2">
+  1023→                <Label>Payment status</Label>
+  1024→                <Select value={editForm.paymentStatus} onValueChange={(v) => setEditForm({ ...editForm, paymentStatus: v })}>
+  1025→                  <SelectTrigger aria-label="Payment status"><SelectValue /></SelectTrigger>
+  1026→                  <SelectContent>
+  1027→                    {PAYMENT_STATUSES.map((s) => (
+  1028→                      <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+  1029→                    ))}
+  1030→                  </SelectContent>
+  1031→                </Select>
+  1032→              </div>
+  1033→              <div className="grid gap-2">
+  1034→                <Label htmlFor="de-txn">Transaction ID</Label>
+  1035→                <Input id="de-txn" value={editForm.transactionId} onChange={(e) => setEditForm({ ...editForm, transactionId: e.target.value })} className="font-mono" placeholder="UPI / gateway reference" />
+  1036→              </div>
+  1037→            </div>
+  1038→            <div className="grid gap-2">
+  1039→              <Label>Campaign</Label>
+  1040→              <Select value={editForm.campaignId || "none"} onValueChange={(v) => setEditForm({ ...editForm, campaignId: v === "none" ? "" : v })}>
+  1041→                <SelectTrigger aria-label="Linked campaign"><SelectValue placeholder="General donation" /></SelectTrigger>
+  1042→                <SelectContent>
+  1043→                  <SelectItem value="none">General donation</SelectItem>
+  1044→                  {campaigns.map((c) => (
+  1045→                    <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
+  1046→                  ))}
+  1047→                </SelectContent>
+  1048→              </Select>
+  1049→            </div>
+  1050→            <div className="grid gap-2">
+  1051→              <Label htmlFor="de-message">Message</Label>
+  1052→              <Textarea id="de-message" value={editForm.message} onChange={(e) => setEditForm({ ...editForm, message: e.target.value })} rows={2} />
+  1053→            </div>
+  1054→            <div className="flex items-center justify-between rounded-lg border p-3">
+  1055→              <div>
+  1056→                <Label htmlFor="de-anon" className="text-sm">Anonymous donation</Label>
+  1057→                <p className="text-xs text-muted-foreground">Hide the donor name on public walls of giving</p>
+  1058→              </div>
+  1059→              <Switch id="de-anon" checked={editForm.isAnonymous} onCheckedChange={(v) => setEditForm({ ...editForm, isAnonymous: v })} />
+  1060→            </div>
+  1061→          </div>
+  1062→          <DialogFooter>
+  1063→            <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+  1064→            <Button onClick={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+  1065→          </DialogFooter>
+  1066→        </DialogContent>
+  1067→      </Dialog>
+  1068→
+  1069→      {/* --------------------------- Refund confirm --------------------------- */}
+  1070→      <AlertDialog open={!!refundTarget} onOpenChange={(o) => !o && setRefundTarget(null)}>
+  1071→        <AlertDialogContent>
+  1072→          <AlertDialogHeader>
+  1073→            <AlertDialogTitle>Mark donation refunded?</AlertDialogTitle>
+  1074→            <AlertDialogDescription>
+  1075→              {refundTarget
+  1076→                ? `Receipt ${refundTarget.receiptNumber} from ${refundTarget.donorName} (${formatINR(refundTarget.amount)}) will be marked REFUNDED. Campaign totals are recalculated automatically.`
+  1077→                : ""}
+  1078→            </AlertDialogDescription>
+  1079→          </AlertDialogHeader>
+  1080→          <AlertDialogFooter>
+  1081→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+  1082→            <AlertDialogAction
+  1083→              className="bg-amber-600 text-white hover:bg-amber-700"
+  1084→              onClick={(e) => {
+  1085→                e.preventDefault();
+  1086→                markRefunded();
+  1087→              }}
+  1088→            >
+  1089→              {saving ? "Marking…" : "Mark refunded"}
+  1090→            </AlertDialogAction>
+  1091→          </AlertDialogFooter>
+  1092→        </AlertDialogContent>
+  1093→      </AlertDialog>
+  1094→
+  1095→      {/* --------------------------- Delete confirm --------------------------- */}
+  1096→      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+  1097→        <AlertDialogContent>
+  1098→          <AlertDialogHeader>
+  1099→            <AlertDialogTitle>Delete donation?</AlertDialogTitle>
+  1100→            <AlertDialogDescription>
+  1101→              {deleteTarget
+  1102→                ? `Receipt ${deleteTarget.receiptNumber} from ${deleteTarget.donorName} (${formatINR(deleteTarget.amount)}) will be permanently removed. This cannot be undone.`
+  1103→                : ""}
+  1104→            </AlertDialogDescription>
+  1105→          </AlertDialogHeader>
+  1106→          <AlertDialogFooter>
+  1107→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+  1108→            <AlertDialogAction
+  1109→              className="bg-destructive text-white hover:bg-destructive/90"
+  1110→              onClick={(e) => {
+  1111→                e.preventDefault();
+  1112→                confirmDelete();
+  1113→              }}
+  1114→            >
+  1115→              {saving ? "Deleting…" : "Delete"}
+  1116→            </AlertDialogAction>
+  1117→          </AlertDialogFooter>
+  1118→        </AlertDialogContent>
+  1119→      </AlertDialog>
+  1120→    </div>
+  1121→  );
+  1122→}
+  1123→

@@ -197,7 +197,7 @@ export default function BeneficiaryHub({ user }: { user: SessionUser }) {
   const loadCase = useCallback(async () => {
     setLoadingCase(true);
     try {
-      const rows = await get<unknown>("/api/beneficiaries").catch(() => []);
+      const rows = await get<unknown>("/api/beneficiaries?mine=1").catch(() => []);
       const list = Array.isArray(rows) ? (rows as BeneficiaryRow[]) : [];
       const mine =
         list.find((r) => r.userId === user.id) ??

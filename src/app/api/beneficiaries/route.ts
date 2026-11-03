@@ -25,11 +25,21 @@ const CATEGORIES = [
 ];
 const URGENCY = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 
-// GET /api/beneficiaries?q=&category=&active=0/1 (auth)
+// GET /api/beneficiaries?q=&category=&active=0/1 (staff) · ?mine=1 (self case)
 export async function GET(req: Request) {
   try {
-    await requireAuth();
     const sp = new URL(req.url).searchParams;
+
+    if (sp.get("mine") === "1") {
+      // A beneficiary sees only their own case record (no cross-enumeration)
+      const s = await requireAuth();
+      const mine = await db.beneficiary.findUnique({
+        where: { userId: s.userId },
+      });
+      return json(mine ? [mine] : []);
+    }
+
+    await requireRole("ADMIN", "VOLUNTEER");
     const q = sp.get("q")?.trim() || undefined;
     const category = sp.get("category") || undefined;
     const active = sp.get("active");

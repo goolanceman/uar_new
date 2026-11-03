@@ -31,9 +31,30 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       data.name = name;
     }
     if (body?.role !== undefined) data.role = String(body.role);
+    if (body?.email !== undefined) {
+      const email = String(body.email).trim().toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(email))
+        throw new ApiError("Please enter a valid email address", 400);
+      const taken = await db.user.findFirst({ where: { email, id: { not: id } } });
+      if (taken) throw new ApiError("Another account already uses this email", 409);
+      data.email = email;
+    }
     if (body?.phone !== undefined) data.phone = body.phone ? String(body.phone).trim() : null;
     if (body?.city !== undefined) data.city = body.city ? String(body.city).trim() : null;
-    if (body?.password) data.password = hashPassword(String(body.password));
+    if (body?.pan !== undefined) {
+      const v = body.pan ? String(body.pan).trim().toUpperCase() : null;
+      if (v && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(v))
+        throw new ApiError("PAN must look like ABCDE1234F", 400);
+      data.pan = v;
+    }
+    if (body?.about !== undefined) data.about = body.about ? String(body.about) : null;
+    if (body?.avatar !== undefined) data.avatar = body.avatar ? String(body.avatar) : null;
+    if (body?.password) {
+      const pw = String(body.password);
+      if (pw.length < 6)
+        throw new ApiError("Password must be at least 6 characters", 400);
+      data.password = hashPassword(pw);
+    }
 
     // Status drives isActive: PENDING → false, ACTIVE → true, SUSPENDED → false
     if (body?.status !== undefined) {

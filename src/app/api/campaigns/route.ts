@@ -77,20 +77,45 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(targetAmount) || targetAmount <= 0)
       throw new ApiError("Target amount must be a positive number", 400);
 
+    const slug = body?.slug ? String(body.slug).trim() : await uniqueSlug(title);
+    const startDate = body?.startDate ? new Date(String(body.startDate)) : new Date();
+    if (Number.isNaN(startDate.getTime()))
+      throw new ApiError("Start date is invalid", 400);
+    const endDate = body?.endDate ? new Date(String(body.endDate)) : null;
+    if (endDate && Number.isNaN(endDate.getTime()))
+      throw new ApiError("End date is invalid", 400);
+    if (endDate && endDate < startDate)
+      throw new ApiError("End date must be after the start date", 400);
+    const minDonation = body?.minDonation ? Number(body.minDonation) : null;
+    if (minDonation !== null && (!Number.isFinite(minDonation) || minDonation <= 0))
+      throw new ApiError("Minimum donation must be a positive number", 400);
+
     const campaign = await db.campaign.create({
       data: {
         title,
-        slug: await uniqueSlug(title),
+        slug,
         tagline: body?.tagline ? String(body.tagline).trim() : "",
         description,
         category,
         targetAmount,
+        startDate,
+        endDate,
+        location: body?.location ? String(body.location).trim() : null,
         icon: body?.icon ? String(body.icon) : "heart",
         accent: body?.accent ? String(body.accent) : "emerald",
         helpline: body?.helpline ? String(body.helpline).trim() : null,
         featured: Boolean(body?.featured),
+        urgent: Boolean(body?.urgent),
+        taxEligible: body?.taxEligible === undefined ? true : Boolean(body.taxEligible),
+        minDonation,
+        videoUrl: body?.videoUrl ? String(body.videoUrl).trim() : null,
+        gallery: body?.gallery ? JSON.stringify(body.gallery) : null,
+        budgetBreakdown: body?.budgetBreakdown ? JSON.stringify(body.budgetBreakdown) : null,
+        coordinatorName: body?.coordinatorName ? String(body.coordinatorName).trim() : null,
+        coordinatorPhone: body?.coordinatorPhone ? String(body.coordinatorPhone).trim() : null,
+        seoTitle: body?.seoTitle ? String(body.seoTitle).trim() : null,
+        seoDescription: body?.seoDescription ? String(body.seoDescription).trim() : null,
         status: body?.status ? String(body.status) : "ACTIVE",
-        startDate: new Date(),
         createdBy: session.userId,
       },
     });
