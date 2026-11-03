@@ -313,6 +313,18 @@ const EMPTY_PLEDGE_FORM: PledgeForm = {
 
 /* -------------------------------- utilities -------------------------------- */
 
+/** Compact KPI tile used inside the animal detail sheet tabs. */
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate text-sm font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
 /** ageMonths → "2y 3m" (months under a year render as "8m"). */
 function ageText(months: number): string {
   const m = Math.max(0, Math.trunc(Number(months ?? 0)));
@@ -2108,169 +2120,256 @@ export default function AnimalsView() {
         }
       >
         {detail ? (
-          <>
-            <DetailSection title="Profile" description="Who this resident is and where they came from.">
-              <DetailGrid cols={4}>
-                <DataField label="Species" value={speciesLabel(detail.species)} />
-                <DataField label="Breed" value={detail.breed ?? null} />
-                <DataField
-                  label="Age"
-                  value={`${ageText(detail.ageMonths)} (${detail.ageMonths} months)`}
+          <Tabs
+            defaultValue="overview"
+            className="gap-5"
+          >
+            <TabsList className="h-auto w-full flex-wrap justify-start">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="health">Health &amp; care</TabsTrigger>
+              <TabsTrigger value="adoption">Adoption</TabsTrigger>
+              <TabsTrigger value="pledges">
+                Pledges
+                <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+                  {detailPledges.length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+
+            {/* ---------------------------- OVERVIEW ---------------------------- */}
+            <TabsContent value="overview" className="space-y-6">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <MiniStat label="Monthly food" value={formatINR(detail.monthlyFood)} />
+                <MiniStat
+                  label="Donor support"
+                  value={`${formatINRCompact(detailMonthlySupport)}/mo`}
                 />
-                <DataField label="Gender" value={titleCase(detail.gender)} />
-                <DataField
-                  label="Location"
-                  value={detail.location}
-                  icon={<MapPin className="size-3" aria-hidden="true" />}
+                <MiniStat
+                  label="Shortfall"
+                  value={formatINRCompact(Math.max(0, detail.monthlyFood - detailMonthlySupport))}
                 />
-                <DataField label="Health status" value={detail.healthStatus ?? null} />
-                <DataField
-                  label="Resident since"
-                  value={detail.createdAt ? formatDate(detail.createdAt) : null}
-                />
-                <DataField label="Reference" value={detail.id} mono copy />
-              </DetailGrid>
-              <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Rescue story
-                </p>
-                <p className="mt-1 text-sm leading-relaxed">{detail.story || "—"}</p>
+                <MiniStat label="Pledges" value={String(detailPledges.length)} />
               </div>
-            </DetailSection>
 
-            <DetailSection
-              title="Health & care"
-              description="Toggle vaccination and sterilization right here — changes save instantly."
-              actions={
-                busyAction === `care-${detail.id}-vaccinated` ||
-                busyAction === `care-${detail.id}-sterilized` ? (
-                  <Skeleton className="h-6 w-24" />
-                ) : null
-              }
-            >
-              <DetailGrid cols={2}>
-                <SwitchField
-                  label="Vaccinated"
-                  hint={detail.vaccinated ? "Vaccination complete" : "Vaccination pending"}
-                  checked={detail.vaccinated}
-                  disabled={busyAction !== null}
-                  onChange={() => void toggleCare(detail, "vaccinated")}
-                />
-                <SwitchField
-                  label="Sterilized"
-                  hint={detail.sterilized ? "Sterilization complete" : "Sterilization pending"}
-                  checked={detail.sterilized}
-                  disabled={busyAction !== null}
-                  onChange={() => void toggleCare(detail, "sterilized")}
-                />
-              </DetailGrid>
-            </DetailSection>
+              <DetailSection title="Profile" description="Who this resident is and where they came from.">
+                <DetailGrid cols={4}>
+                  <DataField label="Species" value={speciesLabel(detail.species)} />
+                  <DataField label="Breed" value={detail.breed ?? null} />
+                  <DataField
+                    label="Age"
+                    value={`${ageText(detail.ageMonths)} (${detail.ageMonths} months)`}
+                  />
+                  <DataField label="Gender" value={titleCase(detail.gender)} />
+                  <DataField
+                    label="Location"
+                    value={detail.location}
+                    icon={<MapPin className="size-3" aria-hidden="true" />}
+                  />
+                  <DataField label="Health status" value={detail.healthStatus ?? null} />
+                  <DataField
+                    label="Resident since"
+                    value={detail.createdAt ? formatDate(detail.createdAt) : null}
+                  />
+                  <DataField label="Reference" value={detail.id} mono copy />
+                </DetailGrid>
+                <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Rescue story
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed">{detail.story || "—"}</p>
+                </div>
+              </DetailSection>
 
-            <DetailSection
-              title="Adoption"
-              description="Foster and adoption status with the adopter on record."
-              actions={
-                detail.status !== "ADOPTED" ? (
-                  <Button variant="outline" size="sm" onClick={() => openAdopt(detail)}>
-                    <UserCheck className="size-3.5" aria-hidden="true" /> Mark adopted…
-                  </Button>
-                ) : null
-              }
-            >
-              <DetailGrid cols={3}>
-                <DataField label="Status" value={<StatusBadge status={detail.status} />} />
-                <DataField label="Adopted by" value={detail.adoptedByName ?? null} />
-                <DataField label="Adopter ID" value={detail.adoptedById ?? null} mono />
-              </DetailGrid>
-            </DetailSection>
-
-            <DetailSection
-              title="Food & cost"
-              description="What it costs to keep this resident fed, and what donors cover."
-            >
-              <DetailGrid cols={4}>
-                <DataField
-                  label="Monthly food"
-                  value={formatINR(detail.monthlyFood)}
-                  mono
-                />
-                <DataField
-                  label="Monthly donor support"
-                  value={
-                    <span>
-                      {formatINR(detailMonthlySupport)}
-                      <span className="block text-xs font-normal text-muted-foreground">
-                        {detailPledges.filter((p) => p.status === "ACTIVE" && p.frequency === "MONTHLY").length} active monthly
-                        pledge(s)
-                      </span>
-                    </span>
-                  }
-                  mono
-                />
-                <DataField label="Total pledged (all time)" value={formatINR(detailTotalPledged)} mono />
-                <DataField
-                  label="Monthly shortfall"
-                  value={
-                    <span>
-                      {formatINR(Math.max(0, detail.monthlyFood - detailMonthlySupport))}
-                      <span className="block text-xs font-normal text-muted-foreground">
-                        {detail.monthlyFood - detailMonthlySupport > 0
-                          ? "Not yet fully covered by pledges"
-                          : "Fully covered by donors"}
-                      </span>
-                    </span>
-                  }
-                  mono
-                />
-              </DetailGrid>
-            </DetailSection>
-
-            <DetailSection
-              title="Pledges"
-              description="Donor commitments backing this resident's care."
-              actions={
-                <Button variant="outline" size="sm" onClick={() => openPledgeForAnimal(detail)}>
-                  <Plus className="size-3.5" aria-hidden="true" /> Add pledge
-                </Button>
-              }
-            >
-              {detailPledges.length === 0 ? (
-                <EmptyState
-                  icon={<HandCoins className="size-8" aria-hidden="true" />}
-                  title={`No pledges for ${detail.name} yet`}
-                  hint={`A ${formatINR(detail.monthlyFood) || "₹900"}/mo food pledge keeps this ${speciesLabel(detail.species).toLowerCase()}'s bowl full. Donors can pledge food, medical care, vaccinations or shelter support.`}
-                >
-                  <Button onClick={() => openPledgeForAnimal(detail)}>
-                    <Plus className="size-4" aria-hidden="true" /> Add pledge
-                  </Button>
-                </EmptyState>
-              ) : (
-                <ul className="space-y-1.5 text-sm">
-                  {detailPledges.map((p) => (
-                    <li
-                      key={p.id}
-                      className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"
-                    >
-                      {kindChip(p.kind)}
-                      <span className="min-w-0 flex-1 truncate font-medium">
-                        {p.donorName}
-                      </span>
-                      <Badge variant="outline" className="font-mono">
-                        {formatINR(p.amount)} · {titleCase(p.frequency)}
-                      </Badge>
-                      <StatusBadge status={p.status} />
-                      {p.createdAt ? (
-                        <span className="hidden text-xs text-muted-foreground sm:inline">
-                          {formatDate(p.createdAt)}
+              <DetailSection
+                title="Food & cost"
+                description="What it costs to keep this resident fed, and what donors cover."
+              >
+                <DetailGrid cols={4}>
+                  <DataField
+                    label="Monthly food"
+                    value={formatINR(detail.monthlyFood)}
+                    mono
+                  />
+                  <DataField
+                    label="Monthly donor support"
+                    value={
+                      <span>
+                        {formatINR(detailMonthlySupport)}
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {detailPledges.filter((p) => p.status === "ACTIVE" && p.frequency === "MONTHLY").length} active monthly
+                          pledge(s)
                         </span>
-                      ) : null}
-                      {pledgeMenu(p)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </DetailSection>
-          </>
+                      </span>
+                    }
+                    mono
+                  />
+                  <DataField label="Total pledged (all time)" value={formatINR(detailTotalPledged)} mono />
+                  <DataField
+                    label="Monthly shortfall"
+                    value={
+                      <span>
+                        {formatINR(Math.max(0, detail.monthlyFood - detailMonthlySupport))}
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          {detail.monthlyFood - detailMonthlySupport > 0
+                            ? "Not yet fully covered by pledges"
+                            : "Fully covered by donors"}
+                        </span>
+                      </span>
+                    }
+                    mono
+                  />
+                </DetailGrid>
+              </DetailSection>
+            </TabsContent>
+
+            {/* -------------------------- HEALTH & CARE -------------------------- */}
+            <TabsContent value="health" className="space-y-6">
+              <DetailSection
+                title="Preventive care"
+                description="Toggle vaccination and sterilization right here — changes save instantly."
+                actions={
+                  busyAction === `care-${detail.id}-vaccinated` ||
+                  busyAction === `care-${detail.id}-sterilized` ? (
+                    <Skeleton className="h-6 w-24" />
+                  ) : null
+                }
+              >
+                <DetailGrid cols={2}>
+                  <SwitchField
+                    label="Vaccinated"
+                    hint={detail.vaccinated ? "Vaccination complete" : "Vaccination pending"}
+                    checked={detail.vaccinated}
+                    disabled={busyAction !== null}
+                    onChange={() => void toggleCare(detail, "vaccinated")}
+                  />
+                  <SwitchField
+                    label="Sterilized"
+                    hint={detail.sterilized ? "Sterilization complete" : "Sterilization pending"}
+                    checked={detail.sterilized}
+                    disabled={busyAction !== null}
+                    onChange={() => void toggleCare(detail, "sterilized")}
+                  />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection
+                title="Medical condition"
+                description="Free-text health status shown as a badge across the module."
+                actions={
+                  <Button variant="outline" size="sm" onClick={() => openEdit(detail)}>
+                    <Pencil className="size-3.5" aria-hidden="true" /> Update
+                  </Button>
+                }
+              >
+                <p className="min-h-10 whitespace-pre-wrap rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed">
+                  {detail.healthStatus || "No condition recorded — mark a status in the edit form."}
+                </p>
+              </DetailSection>
+            </TabsContent>
+
+            {/* ---------------------------- ADOPTION ---------------------------- */}
+            <TabsContent value="adoption" className="space-y-6">
+              <DetailSection
+                title="Adoption pipeline"
+                description="Foster and adoption status with the adopter on record."
+                actions={
+                  detail.status !== "ADOPTED" ? (
+                    <Button variant="outline" size="sm" onClick={() => openAdopt(detail)}>
+                      <UserCheck className="size-3.5" aria-hidden="true" /> Mark adopted…
+                    </Button>
+                  ) : null
+                }
+              >
+                <DetailGrid cols={3}>
+                  <DataField label="Current status" value={<StatusBadge status={detail.status} />} />
+                  <DataField label="Adopted by" value={detail.adoptedByName ?? null} />
+                  <DataField label="Adopter ID" value={detail.adoptedById ?? null} mono />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection
+                title="Status actions"
+                description="Move the resident through the care pipeline — each change is logged."
+              >
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={detail.status === "AVAILABLE" || busyAction !== null}
+                    onClick={() => void setStatus(detail, "AVAILABLE")}
+                  >
+                    <HeartPulse className="size-3.5" aria-hidden="true" /> Mark available
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={detail.status === "FOSTERED" || busyAction !== null}
+                    onClick={() => void setStatus(detail, "FOSTERED")}
+                  >
+                    <Home className="size-3.5" aria-hidden="true" /> Mark fostered
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={detail.status === "CRITICAL" || busyAction !== null}
+                    onClick={() => void setStatus(detail, "CRITICAL")}
+                    className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  >
+                    <TriangleAlert className="size-3.5" aria-hidden="true" /> Mark critical
+                  </Button>
+                </div>
+              </DetailSection>
+            </TabsContent>
+
+            {/* ---------------------------- PLEDGES ---------------------------- */}
+            <TabsContent value="pledges" className="space-y-6">
+              <DetailSection
+                title="Pledges"
+                description="Donor commitments backing this resident's care."
+                actions={
+                  <Button variant="outline" size="sm" onClick={() => openPledgeForAnimal(detail)}>
+                    <Plus className="size-3.5" aria-hidden="true" /> Add pledge
+                  </Button>
+                }
+              >
+                {detailPledges.length === 0 ? (
+                  <EmptyState
+                    icon={<HandCoins className="size-8" aria-hidden="true" />}
+                    title={`No pledges for ${detail.name} yet`}
+                    hint={`A ${formatINR(detail.monthlyFood) || "₹900"}/mo food pledge keeps this ${speciesLabel(detail.species).toLowerCase()}'s bowl full. Donors can pledge food, medical care, vaccinations or shelter support.`}
+                  >
+                    <Button onClick={() => openPledgeForAnimal(detail)}>
+                      <Plus className="size-4" aria-hidden="true" /> Add pledge
+                    </Button>
+                  </EmptyState>
+                ) : (
+                  <ul className="space-y-1.5 text-sm">
+                    {detailPledges.map((p) => (
+                      <li
+                        key={p.id}
+                        className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"
+                      >
+                        {kindChip(p.kind)}
+                        <span className="min-w-0 flex-1 truncate font-medium">
+                          {p.donorName}
+                        </span>
+                        <Badge variant="outline" className="font-mono">
+                          {formatINR(p.amount)} · {titleCase(p.frequency)}
+                        </Badge>
+                        <StatusBadge status={p.status} />
+                        {p.createdAt ? (
+                          <span className="hidden text-xs text-muted-foreground sm:inline">
+                            {formatDate(p.createdAt)}
+                          </span>
+                        ) : null}
+                        {pledgeMenu(p)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </DetailSection>
+            </TabsContent>
+          </Tabs>
         ) : null}
       </DetailSheet>
 

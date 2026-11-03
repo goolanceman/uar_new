@@ -158,6 +158,39 @@ interface BeneficiaryLite {
 const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"] as const;
 const STATUSES = ["ACTIVE", "PENDING", "SUSPENDED"] as const;
 
+/** What each role can reach — surfaced in the user detail Profile tab. */
+const ROLE_ACCESS: Record<string, string[]> = {
+  ADMIN: [
+    "Admin console (every module)",
+    "Donations, donors & 80G receipts",
+    "Campaigns, causes & certificates",
+    "Distributions, inventory & kits",
+    "Volunteers, tasks & attendance",
+    "Users, roles & settings",
+  ],
+  VOLUNTEER: [
+    "Volunteer portal dashboard",
+    "My tasks (start & complete)",
+    "Record distributions",
+    "Scan kit QR codes",
+    "Check inventory stock",
+    "My profile & analytics",
+  ],
+  DONOR: [
+    "Donor portal dashboard",
+    "Donate & payment history",
+    "Support causes & medicine pledges",
+    "Sponsor shelter animals",
+    "Download 80G receipts",
+    "My profile & analytics",
+  ],
+  BENEFICIARY: [
+    "Help centre (request support)",
+    "Track my requests",
+    "My profile & analytics",
+  ],
+};
+
 const ROLE_TONE: Record<string, Tone> = {
   ADMIN: "purple",
   VOLUNTEER: "progress",
@@ -1461,6 +1494,30 @@ export default function UsersView() {
                     <DataField label="Last updated" value={formatDateTime(viewTarget.updatedAt)} />
                   ) : null}
                 </DetailGrid>
+              </DetailSection>
+
+              <DetailSection
+                title="Portal access for this role"
+                description={`What ${titleCase(viewTarget.role)} accounts can reach. Change the role from the Security tab.`}
+                actions={
+                  <RoleBadge role={viewTarget.role} />
+                }
+              >
+                <ul className="grid gap-1.5 text-sm sm:grid-cols-2" aria-label="Module access for this role">
+                  {ROLE_ACCESS[viewTarget.role]?.map((m) => (
+                    <li
+                      key={m}
+                      className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2"
+                    >
+                      <Check className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                      {m}
+                    </li>
+                  )) ?? null}
+                </ul>
+                <p className="text-xs text-muted-foreground">
+                  Feature availability is role-based. Disable sign-in entirely from the Security
+                  tab — per-module toggles live in Settings.
+                </p>
               </DetailSection>
             </TabsContent>
 

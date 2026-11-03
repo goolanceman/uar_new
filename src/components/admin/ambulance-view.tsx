@@ -1208,7 +1208,8 @@ function FleetTab({
             rows={pageRows}
             rowKey={(r) => r.id}
             onRowClick={(r) => setDetailId(r.id)}
-            height="max-h-[34rem]"
+            height="fill"
+            fillOffset={330}
             page={safePage}
             pages={pageCount(filtered.length, pageSize)}
             total={filtered.length}
@@ -2163,7 +2164,8 @@ function MissionsTab({
             rows={pageRows}
             rowKey={(r) => r.id}
             onRowClick={(r) => setDetailId(r.id)}
-            height="max-h-[34rem]"
+            height="fill"
+            fillOffset={330}
             page={safePage}
             pages={pageCount(filteredMissions.length, pageSize)}
             total={filteredMissions.length}
@@ -2551,7 +2553,7 @@ function MissionsTab({
       <DetailSheet
         open={!!detail}
         onOpenChange={(o) => !o && setDetailId(null)}
-        eyebrow="Emergency mission"
+        eyebrow="Emergency mission · Live tracking"
         title={detail?.requestRef ?? ""}
         description={
           detail
@@ -2568,7 +2570,7 @@ function MissionsTab({
                   variant="outline"
                   className="border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400"
                 >
-                  <Zap className="size-3" aria-hidden="true" /> Corridor active
+                  <Zap className="size-3 animate-pulse" aria-hidden="true" /> Corridor active
                 </Badge>
               )}
             </span>
@@ -2589,122 +2591,186 @@ function MissionsTab({
         }
       >
         {detail && (
-          <>
-            <DetailSection title="Mission overview">
-              <DetailGrid cols={3}>
-                <DataField label="Request ref" value={detail.requestRef} mono />
-                <DataField label="Patient" value={detail.patientName} />
-                <DataField label="Contact" value={detail.contact} mono copy />
-                <DataField
-                  label="Emergency type"
-                  value={labelOf(emergencyOptions.options, detail.emergencyType)}
-                />
-                <DataField
-                  label="Priority"
-                  value={
-                    <StatusBadge
-                      status={detail.priority}
-                      tone={PRIORITY_TONE[detail.priority] ?? "neutral"}
-                    />
-                  }
-                />
-                <DataField
-                  label="Ambulance"
-                  value={
-                    detail.ambulance
-                      ? `${detail.ambulance.code} (${detail.ambulance.type})`
-                      : "Unassigned"
-                  }
-                />
-                <DataField
-                  label="Pickup"
-                  value={detail.pickup}
-                  icon={<MapPin className="size-3" aria-hidden="true" />}
-                />
-                <DataField
-                  label="Destination"
-                  value={detail.destination}
-                  icon={<Flag className="size-3" aria-hidden="true" />}
-                />
-                <DataField
-                  label="Requested"
-                  value={
-                    detail.createdAt ? formatDateTime(detail.createdAt) : "—"
-                  }
-                />
-              </DetailGrid>
-            </DetailSection>
+          <Tabs defaultValue="overview" className="gap-5">
+            <TabsList className="h-auto w-full flex-wrap justify-start">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="tracking">
+                Live tracking
+                {detail.corridorActive ? (
+                  <span
+                    aria-hidden="true"
+                    className="ml-1.5 inline-block size-1.5 animate-pulse rounded-full bg-red-500"
+                  />
+                ) : null}
+              </TabsTrigger>
+              <TabsTrigger value="corridor">
+                Corridor
+                <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+                  {detailEvents.length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="timeline">Timeline</TabsTrigger>
+            </TabsList>
 
-            <DetailSection
-              title="Status"
-              description="Advance along the corridor — progress is set automatically per step."
-            >
-              <StatusStepper status={detail.status} />
-              <div className="flex items-center gap-3">
-                <Progress
-                  value={detail.progress}
-                  className="h-2 flex-1 [&>div]:bg-red-500"
-                  aria-label={`Mission progress ${detail.progress}%`}
-                />
-                <span className="text-xs font-medium tabular-nums">
-                  {detail.progress}%
-                </span>
-              </div>
-            </DetailSection>
-
-            <DetailSection
-              title="Impact & corridor"
-              description="What the green corridor achieved on this run."
-            >
-              <DetailGrid cols={3}>
-                <DataField
+            {/* ------------------------ OVERVIEW ------------------------ */}
+            <TabsContent value="overview" className="space-y-6">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <MiniStat label="Progress" value={`${detail.progress}%`} />
+                <MiniStat
                   label="Vehicles alerted"
                   value={formatNumber(detail.vehiclesAlerted)}
-                  icon={<Radio className="size-3" aria-hidden="true" />}
                 />
-                <DataField
-                  label="Time saved"
-                  value={formatDuration(detail.timeSavedSec)}
-                  icon={<Timer className="size-3" aria-hidden="true" />}
-                />
-                <DataField
-                  label="Corridor"
-                  value={
-                    detail.corridorActive ? (
-                      <span className="flex items-center gap-1.5 font-semibold text-red-600 dark:text-red-400">
-                        <Zap className="size-3.5 animate-pulse" aria-hidden="true" />
-                        ACTIVE
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">Disarmed</span>
-                    )
-                  }
-                />
-                <DataField
-                  label="ETA"
-                  value={detail.etaMin ? `${detail.etaMin} min` : "—"}
-                />
-              </DetailGrid>
-            </DetailSection>
+                <MiniStat label="Time saved" value={formatDuration(detail.timeSavedSec)} />
+                <MiniStat label="ETA" value={detail.etaMin ? `${detail.etaMin} min` : "—"} />
+              </div>
 
-            <DetailSection
-              title="Route segments"
-              description="Congestion along the planned corridor"
-            >
-              <RouteTimeline route={detailRoute} />
-            </DetailSection>
+              <DetailSection title="Mission overview">
+                <DetailGrid cols={3}>
+                  <DataField label="Request ref" value={detail.requestRef} mono />
+                  <DataField label="Patient" value={detail.patientName} />
+                  <DataField label="Contact" value={detail.contact} mono copy />
+                  <DataField
+                    label="Emergency type"
+                    value={labelOf(emergencyOptions.options, detail.emergencyType)}
+                  />
+                  <DataField
+                    label="Priority"
+                    value={
+                      <StatusBadge
+                        status={detail.priority}
+                        tone={PRIORITY_TONE[detail.priority] ?? "neutral"}
+                      />
+                    }
+                  />
+                  <DataField
+                    label="Ambulance"
+                    value={
+                      detail.ambulance
+                        ? `${detail.ambulance.code} (${detail.ambulance.type}) · ${detail.ambulance.driverName}`
+                        : "Unassigned"
+                    }
+                  />
+                  <DataField
+                    label="Pickup"
+                    value={detail.pickup}
+                    icon={<MapPin className="size-3" aria-hidden="true" />}
+                  />
+                  <DataField
+                    label="Destination"
+                    value={detail.destination}
+                    icon={<Flag className="size-3" aria-hidden="true" />}
+                  />
+                  <DataField
+                    label="Requested"
+                    value={
+                      detail.createdAt ? formatDateTime(detail.createdAt) : "—"
+                    }
+                  />
+                </DetailGrid>
+              </DetailSection>
 
-            <DetailSection
-              title="Corridor events"
-              description="Alert ladder per congested segment"
-            >
-              <EventFeed
-                events={detailEvents}
-                loading={false}
-                emptyHint="No corridor events yet — they are recorded when the mission is dispatched."
-              />
-            </DetailSection>
-          </>
+              <DetailSection
+                title="Status"
+                description="Advance along the corridor — progress is set automatically per step."
+              >
+                <StatusStepper status={detail.status} />
+                <div className="flex items-center gap-3">
+                  <Progress
+                    value={detail.progress}
+                    className="h-2 flex-1 [&>div]:bg-red-500"
+                    aria-label={`Mission progress ${detail.progress}%`}
+                  />
+                  <span className="text-xs font-medium tabular-nums">
+                    {detail.progress}%
+                  </span>
+                </div>
+              </DetailSection>
+            </TabsContent>
+
+            {/* ------------------------ LIVE TRACKING ------------------------ */}
+            <TabsContent value="tracking" className="space-y-6">
+              <DetailSection
+                title="Route progress"
+                description="Segment-by-segment congestion along the planned corridor."
+              >
+                <RouteTimeline route={detailRoute} />
+              </DetailSection>
+
+              <DetailSection
+                title="Run telemetry"
+                description="What the green corridor achieved on this run."
+              >
+                <DetailGrid cols={3}>
+                  <DataField
+                    label="Vehicles alerted"
+                    value={formatNumber(detail.vehiclesAlerted)}
+                    icon={<Radio className="size-3" aria-hidden="true" />}
+                  />
+                  <DataField
+                    label="Time saved"
+                    value={formatDuration(detail.timeSavedSec)}
+                    icon={<Timer className="size-3" aria-hidden="true" />}
+                  />
+                  <DataField
+                    label="Corridor"
+                    value={
+                      detail.corridorActive ? (
+                        <span className="flex items-center gap-1.5 font-semibold text-red-600 dark:text-red-400">
+                          <Zap className="size-3.5 animate-pulse" aria-hidden="true" />
+                          ACTIVE
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">Disarmed</span>
+                      )
+                    }
+                  />
+                  <DataField
+                    label="ETA"
+                    value={detail.etaMin ? `${detail.etaMin} min` : "—"}
+                  />
+                  <DataField
+                    label="Route segments"
+                    value={`${detailRoute.length} planned`}
+                  />
+                  <DataField
+                    label="Alert events"
+                    value={`${detailEvents.length} recorded`}
+                  />
+                </DetailGrid>
+              </DetailSection>
+            </TabsContent>
+
+            {/* ------------------------ CORRIDOR ------------------------ */}
+            <TabsContent value="corridor" className="space-y-6">
+              <DetailSection
+                title="Corridor events"
+                description="Alert ladder per congested segment"
+              >
+                <EventFeed
+                  events={detailEvents}
+                  loading={false}
+                  emptyHint="No corridor events yet — they are recorded when the mission is dispatched."
+                />
+              </DetailSection>
+
+              <DetailSection
+                title="Fallback chain"
+                description="Higher layers fail over to the next; the siren is always the last resort."
+              >
+                <MethodChainStrip />
+              </DetailSection>
+            </TabsContent>
+
+            {/* ------------------------ TIMELINE ------------------------ */}
+            <TabsContent value="timeline" className="space-y-6">
+              <DetailSection
+                title="Mission timeline"
+                description="From request to hand-off, reconstructed from status and event times."
+              >
+                <MissionTimeline mission={detail} events={detailEvents} />
+              </DetailSection>
+            </TabsContent>
+          </Tabs>
         )}
       </DetailSheet>
 
@@ -2728,6 +2794,100 @@ function MissionsTab({
         {loading ? "Loading missions" : `${filteredMissions.length} missions shown`}
       </span>
     </div>
+  );
+}
+
+/** Sticky footer actions for the mission DetailSheet. */
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate text-sm font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+/**
+ * Mission timeline — reconstructed from the status step the mission has
+ * reached plus the recorded corridor-event timestamps. Cheap (no extra API),
+ * but reads as a genuine run log.
+ */
+function MissionTimeline({
+  mission,
+  events,
+}: {
+  mission: Mission;
+  events: CorridorEventRow[];
+}) {
+  const idx = MISSION_FLOW.indexOf(mission.status as (typeof MISSION_FLOW)[number]);
+  const cancelled = mission.status === "CANCELLED";
+
+  const steps = MISSION_FLOW.map((s, i) => ({
+    label: STEP_LABEL[s],
+    done: !cancelled && idx >= i,
+    at:
+      i === 0
+        ? mission.createdAt
+        : i <= idx
+          ? events[i - 1]?.createdAt ?? null
+          : null,
+    detail:
+      i === 0
+        ? "Emergency call received — corridor request raised"
+        : i === MISSION_FLOW.length - 1
+          ? "Patient handed over — corridor disarmed"
+          : undefined,
+  }));
+
+  return (
+    <ol className="relative space-y-4 border-l-2 pl-5" aria-label="Mission timeline">
+      {steps.map((s, i) => (
+        <li key={s.label} className="relative">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2",
+              s.done
+                ? "border-emerald-500 bg-emerald-500"
+                : "border-border bg-background"
+            )}
+          />
+          <p
+            className={cn(
+              "text-sm font-medium",
+              !s.done && "text-muted-foreground"
+            )}
+          >
+            {s.label}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {s.at ? formatDateTime(s.at) : s.done ? "Recorded" : "Pending"}
+            {s.detail ? ` · ${s.detail}` : ""}
+          </p>
+          {i === 0 && events.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground/80">
+              + {events.length} corridor alert{events.length === 1 ? "" : "s"} fired along the route
+            </p>
+          )}
+        </li>
+      ))}
+      {cancelled && (
+        <li className="relative">
+          <span
+            aria-hidden="true"
+            className="absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-rose-500 bg-rose-500"
+          />
+          <p className="text-sm font-medium text-rose-700 dark:text-rose-400">
+            Cancelled
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Corridor disarmed; the unit returned to AVAILABLE
+          </p>
+        </li>
+      )}
+    </ol>
   );
 }
 
@@ -3027,7 +3187,8 @@ function CorridorTab({
             rows={pageRows}
             rowKey={(r) => r.id}
             onRowClick={(r) => setDetailId(r.id)}
-            height="max-h-[34rem]"
+            height="fill"
+            fillOffset={330}
             page={safePage}
             pages={pageCount(filtered.length, pageSize)}
             total={filtered.length}

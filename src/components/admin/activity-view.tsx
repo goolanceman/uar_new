@@ -237,7 +237,7 @@ export default function ActivityView() {
     { key: "entity", header: "Entity", hideBelow: "sm" },
     { key: "details", header: "Details", hideBelow: "lg" },
     { key: "time", header: "Time", hideBelow: "md" },
-    { key: "chevron", header: "", align: "right", className: "w-10" },
+    { key: "actions", header: "", align: "right", className: "w-10" },
   ];
 
   return (

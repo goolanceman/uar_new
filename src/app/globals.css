@@ -349,4 +349,38 @@ html {
   .no-print {
     display: none !important;
   }
+
+  /* QR label sheets: the dialog is marked .print-area (dialog chrome is
+     .no-print). Break the scroll container so every label flows onto pages
+     instead of being clipped by max-h / overflow. */
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    width: 100% !important;
+    display: block !important;
+  }
+  .print-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .print-labels {
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 4mm !important;
+  }
+  .print-labels img {
+    width: 22mm !important;
+    height: 22mm !important;
+  }
+  .print-labels > div {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px dashed #999 !important;
+  }
 }

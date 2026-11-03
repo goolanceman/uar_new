@@ -390,7 +390,7 @@ export default function MastersView() {
     { key: "value", header: "Value", mono: true, hideBelow: "sm" },
     { key: "sortOrder", header: "Sort", align: "right" },
     { key: "active", header: "Active", hideBelow: "md" },
-    { key: "delete", header: "", align: "right", className: "w-12" },
+    { key: "actions", header: "", align: "right", className: "w-12" },
   ];
 
   const detailSiblings = useMemo(() => {
@@ -570,7 +570,7 @@ export default function MastersView() {
                   />
                 </div>
               );
-            case "delete":
+            case "actions":
               return (
                 <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
                   <Button

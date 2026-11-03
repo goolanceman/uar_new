@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Banknote,
+  BarChart3,
   Calculator,
   CalendarDays,
   GraduationCap,
@@ -31,12 +32,25 @@ import {
   Sparkles,
   Stethoscope,
   Trash2,
+  TrendingUp,
   TriangleAlert,
   Users,
   UtensilsCrossed,
   Wallet,
   X,
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip as ReTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import {
@@ -509,6 +523,13 @@ export default function DistributionsView() {
   const [deleteTarget, setDeleteTarget] = useState<DistributionRow | null>(null);
   const [deletingDist, setDeletingDist] = useState(false);
 
+  /* multi-step wizard (create only) — 1 details · 2 items · 3 people · 4 review */
+  const [wizardStep, setWizardStep] = useState(1);
+  const WIZARD_STEPS = ["Details", "Items", "People & place", "Review"] as const;
+
+  /* full-screen analytics slider */
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+
   /* ----------------------------- pad forms/sheets -------------------------- */
   const [padDetail, setPadDetail] = useState<PadDrive | null>(null);
   const [padOpen, setPadOpen] = useState(false);
@@ -766,7 +787,37 @@ export default function DistributionsView() {
     setDistErrors({});
     setEditingDist(null);
     setBenQuery("");
+    setWizardStep(1);
     setDistOpen(true);
+  };
+
+  /** Row-level "Record similar" — pre-seeds the wizard from an existing row. */
+  const openDistCreateFrom = (row: DistributionRow) => {
+    const items = parseItems(row.items);
+    const form: DistForm = {
+      ...EMPTY_DIST_FORM,
+      type: DISTRIBUTION_TYPES.includes(row.type) ? row.type : "OTHER",
+      beneficiaryId: row.beneficiaryId ?? "",
+      volunteerId: row.volunteerId ?? "",
+      campaignId: row.campaignId ?? "",
+      location: row.location ?? "",
+      distributedAt: nowLocalInput(),
+      items: items.length
+        ? items.map((i) => ({
+            name: String(i?.name ?? ""),
+            qty: String(i?.qty ?? 1),
+            unit: String(i?.unit ?? ""),
+          }))
+        : [{ ...EMPTY_ITEM }],
+    };
+    setDistForm(form);
+    setDistSnapshot({ ...EMPTY_DIST_FORM, distributedAt: nowLocalInput() });
+    setDistErrors({});
+    setEditingDist(null);
+    setBenQuery("");
+    setWizardStep(1);
+    setDistOpen(true);
+    toast.info("Pre-filled from the selected record — adjust and save");
   };
 
   const openDistEdit = (row: DistributionRow) => {
@@ -795,8 +846,50 @@ export default function DistributionsView() {
     setEditingDist(row);
     setDetail(null);
     setBenQuery("");
+    setWizardStep(1);
     setDistOpen(true);
   };
+
+  /** Validate only the fields that belong to a given wizard step. */
+  const validateDistStep = (step: number): boolean => {
+    const errs: Errors = {};
+    if (step === 1) {
+      if (!distForm.location.trim()) errs.location = "Location is required";
+      const qty = Math.trunc(Number(distForm.quantity));
+      if (!Number.isFinite(qty) || qty < 1)
+        errs.quantity = "Quantity must be a whole number of at least 1";
+      if (distForm.value.trim() !== "") {
+        const v = Number(distForm.value);
+        if (!Number.isFinite(v) || v < 0) errs.value = "Enter a valid amount (≥ 0)";
+      }
+      const dateErr = dateRule(true)(distForm.distributedAt);
+      if (dateErr) errs.distributedAt = dateErr;
+    }
+    if (step === 2) {
+      distForm.items.forEach((it, i) => {
+        if (!it.name.trim() && it.qty.trim() === "") return;
+        if (!it.name.trim()) {
+          errs[`item-${i}`] = "Item name is required";
+          return;
+        }
+        const q = Number(it.qty);
+        if (!Number.isFinite(q) || q <= 0)
+          errs[`item-${i}`] = "Quantity must be a positive number";
+      });
+    }
+    setDistErrors(errs);
+    return Object.values(errs).every((v) => !v);
+  };
+
+  const wizardNext = () => {
+    if (!validateDistStep(wizardStep)) {
+      toast.error("Please fix the highlighted fields");
+      return;
+    }
+    setWizardStep((s) => Math.min(4, s + 1));
+  };
+
+  const wizardBack = () => setWizardStep((s) => Math.max(1, s - 1));
 
   const validateDist = (): boolean => {
     const errs: Errors = {};
@@ -825,6 +918,7 @@ export default function DistributionsView() {
   };
 
   const saveDist = async () => {
+    // Full validation regardless of entry path (wizard jumps are step-checked).
     if (!validateDist()) {
       toast.error("Please fix the highlighted fields");
       return;
@@ -858,6 +952,7 @@ export default function DistributionsView() {
         toast.success("Distribution recorded");
       }
       setDistOpen(false);
+      setWizardStep(1);
       refreshAll();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -1133,9 +1228,12 @@ export default function DistributionsView() {
             <MoreHorizontal className="size-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-40">
+        <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuItem onClick={() => setDetail(row)}>
             <Info className="size-4" aria-hidden="true" /> View details
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openDistCreateFrom(row)}>
+            <Plus className="size-4" aria-hidden="true" /> Record distribution here
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => openDistEdit(row)}>
             <Pencil className="size-4" aria-hidden="true" /> Edit
@@ -1405,9 +1503,14 @@ export default function DistributionsView() {
         description="Every kit, pad drive and hand-out the trust delivers — with beneficiaries, volunteers and impact math."
         icon={<Package className="size-5" aria-hidden="true" />}
         actions={
-          <Button variant="outline" onClick={refreshAll} aria-label="Refresh distributions">
-            <RefreshCw className="size-4" aria-hidden="true" /> Refresh
-          </Button>
+          <>
+            <Button variant="outline" onClick={refreshAll} aria-label="Refresh distributions">
+              <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+            </Button>
+            <Button variant="outline" onClick={() => setAnalyticsOpen(true)}>
+              <BarChart3 className="size-4" aria-hidden="true" /> Analytics
+            </Button>
+          </>
         }
       />
 
@@ -2117,6 +2220,22 @@ export default function DistributionsView() {
         </TabsContent>
       </Tabs>
 
+      {/* ==================== DISTRIBUTION ANALYTICS SLIDER ==================== */}
+      <DetailSheet
+        open={analyticsOpen}
+        onOpenChange={setAnalyticsOpen}
+        eyebrow="Distributions · Analytics"
+        title="Distribution analytics"
+        description="Full-funnel view of what moved, where, and for whom — all recorded time."
+        status={
+          <Badge variant="outline" className="tabular-nums">
+            {distRows.length} records
+          </Badge>
+        }
+      >
+        <DistributionAnalyticsSlider rows={distRows} pads={padRows} kpi={kpi} />
+      </DetailSheet>
+
       {/* ========================= DISTRIBUTION DETAIL ========================= */}
       <DetailSheet
         open={!!detail}
@@ -2136,6 +2255,9 @@ export default function DistributionsView() {
                 Recorded {detail.createdAt ? formatDateTime(detail.createdAt) : formatDate(detail.distributedAt)}
               </p>
               <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => openDistCreateFrom(detail)}>
+                  <Plus className="size-3.5" aria-hidden="true" /> Record here
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => openDistEdit(detail)}>
                   <Pencil className="size-3.5" aria-hidden="true" /> Edit
                 </Button>
@@ -2473,22 +2595,78 @@ export default function DistributionsView() {
       {/* ======================= RECORD DISTRIBUTION (FormSheet) ====================== */}
       <FormSheet
         open={distOpen}
-        onOpenChange={setDistOpen}
+        onOpenChange={(o) => {
+          if (o) {
+            setDistOpen(true);
+            return;
+          }
+          // wizard step > 1: the footer button acts as "Back", not close
+          if (!editingDist && wizardStep > 1) {
+            wizardBack();
+            return;
+          }
+          setDistOpen(false);
+          setWizardStep(1);
+        }}
         title={editingDist ? "Edit distribution" : "Record distribution"}
         description={
           editingDist
             ? "Update the field record — changes apply immediately."
-            : "Log what was distributed, to whom, by whom, and what it was worth."
+            : "Four quick steps: what & for whom → items → people & place → review."
         }
-        badge={editingDist ? <Badge variant="outline">Editing</Badge> : null}
-        onSubmit={saveDist}
-        submitLabel={editingDist ? "Save changes" : "Record distribution"}
+        badge={
+          editingDist ? (
+            <Badge variant="outline">Editing</Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+            >
+              Step {wizardStep} of 4 · {WIZARD_STEPS[wizardStep - 1]}
+            </Badge>
+          )
+        }
+        footerExtra={
+          !editingDist ? (
+            <span className="flex items-center gap-1.5">
+              {WIZARD_STEPS.map((s, i) => (
+                <span
+                  key={s}
+                  aria-hidden="true"
+                  className={cn(
+                    "size-1.5 rounded-full transition-colors",
+                    i + 1 === wizardStep ? "bg-primary" : i + 1 < wizardStep ? "bg-primary/50" : "bg-muted-foreground/30"
+                  )}
+                />
+              ))}
+              <span className="ml-1">{WIZARD_STEPS[wizardStep - 1]}</span>
+            </span>
+          ) : undefined
+        }
+        onSubmit={() => {
+          if (editingDist) {
+            void saveDist();
+          } else if (wizardStep < 4) {
+            wizardNext();
+          } else {
+            void saveDist();
+          }
+        }}
+        submitLabel={
+          editingDist
+            ? "Save changes"
+            : wizardStep < 4
+              ? "Next"
+              : "Record distribution"
+        }
+        cancelLabel={editingDist || wizardStep === 1 ? "Cancel" : "Back"}
         loading={savingDist}
         dirty={distDirty}
         size="full"
       >
-        {/* 1 — What & for whom */}
-        <FormSection title="What & for whom" description="Type, beneficiary and quantity.">
+        {/* Step 1 — What & for whom */}
+        <div className={cn(wizardStep !== 1 && "hidden")}>
+          <FormSection title="What & for whom" description="Type, beneficiary and quantity.">
           <FieldGrid>
             <SelectField
               label="Type"
@@ -2596,11 +2774,13 @@ export default function DistributionsView() {
             }
           />
         </FormSection>
+        </div>
 
-        {/* 2 — Items */}
+        {/* Step 2 — Items */}
+        <div className={cn(wizardStep !== 2 && "hidden")}>
         <FormSection
           title="Items in this distribution"
-          description="Item-level tracking — names auto-match inventory to estimate value."
+          description="Pulled from the items master — names auto-match inventory to estimate value."
         >
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -2697,8 +2877,10 @@ export default function DistributionsView() {
             })}
           </div>
         </FormSection>
+        </div>
 
-        {/* 3 — People & place */}
+        {/* Step 3 — People & place */}
+        <div className={cn(wizardStep !== 3 && "hidden")}>
         <FormSection title="People & place" description="Volunteer assignment, campaign linkage and location.">
           {isAdmin ? (
             <FieldGrid>
@@ -2715,6 +2897,7 @@ export default function DistributionsView() {
                     label: `${v.user.name}${v.assignedArea ? ` — ${v.assignedArea}` : ""}${v.status !== "ACTIVE" ? ` (${titleCase(v.status)})` : ""}`,
                   })),
                 ]}
+                hint="Assigning here does NOT create volunteer tasks — use “Assign to record” from the detail view for task generation."
               />
               <SelectField
                 label="Campaign"
@@ -2747,7 +2930,6 @@ export default function DistributionsView() {
           />
         </FormSection>
 
-        {/* 4 — Notes & timing */}
         <FormSection title="Notes & timing" description="When it happened and anything worth remembering.">
           <TextField
             label="Distributed on"
@@ -2764,6 +2946,91 @@ export default function DistributionsView() {
             placeholder="Follow-ups, community feedback, photos pending…"
           />
         </FormSection>
+        </div>
+
+        {/* Step 4 — Review */}
+        <div className={cn(wizardStep !== 4 && "hidden")}>
+          <FormSection
+            title="Review & save"
+            description="A last look before the record is written — everything stays editable via Back."
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ReviewTile label="Type" value={(TYPE_META[distForm.type] ?? TYPE_META.OTHER).label} />
+              <ReviewTile label="Quantity" value={`${distForm.quantity} unit(s)`} />
+              <ReviewTile
+                label="Beneficiary"
+                value={selectedBeneficiary?.name ?? "Community hand-out"}
+                sub={
+                  selectedBeneficiary
+                    ? `${titleCase(selectedBeneficiary.category)} · family of ${selectedBeneficiary.familyMembers}`
+                    : undefined
+                }
+              />
+              <ReviewTile
+                label="Estimated value"
+                value={
+                  distForm.value.trim() !== ""
+                    ? formatINR(Number(distForm.value))
+                    : itemTotals.estValue > 0
+                      ? `${formatINR(itemTotals.estValue)} (inventory estimate)`
+                      : "—"
+                }
+              />
+              <ReviewTile
+                label="Volunteer"
+                value={volunteers.find((v) => v.id === distForm.volunteerId)?.user.name ?? "Not assigned"}
+              />
+              <ReviewTile
+                label="Campaign"
+                value={campaigns.find((c) => c.id === distForm.campaignId)?.title ?? "—"}
+              />
+              <ReviewTile label="Location" value={distForm.location || "—"} />
+              <ReviewTile
+                label="Distributed on"
+                value={distForm.distributedAt ? formatDateTime(new Date(distForm.distributedAt).toISOString()) : "—"}
+              />
+            </div>
+
+            {/* item preview */}
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/70">
+                  <tr className="border-b text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <th scope="col" className="px-3 py-2">Item</th>
+                    <th scope="col" className="px-3 py-2 text-right">Qty</th>
+                    <th scope="col" className="px-3 py-2">Unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {distForm.items.filter((i) => i.name.trim()).length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-3 text-sm text-muted-foreground">
+                        No item lines — the summary quantity is the record.
+                      </td>
+                    </tr>
+                  ) : (
+                    distForm.items
+                      .filter((i) => i.name.trim())
+                      .map((i, idx) => (
+                        <tr key={idx} className="border-b last:border-b-0">
+                          <td className="px-3 py-2 font-medium">{i.name}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{i.qty}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{i.unit || "—"}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {distForm.notes.trim() ? (
+              <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">Notes: </span>
+                {distForm.notes}
+              </p>
+            ) : null}
+          </FormSection>
+        </div>
       </FormSheet>
 
       {/* ========================= RECORD PAD DRIVE (FormSheet) ======================== */}
@@ -3051,4 +3318,329 @@ export default function DistributionsView() {
 /** Per-item error lookup helper. */
 function itemError(errors: Errors, i: number): string | null {
   return errors[`item-${i}`] ?? null;
+}
+
+/** Review-step tile in the record-distribution wizard. */
+function ReviewTile({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate text-sm font-semibold">{value}</p>
+      {sub ? <p className="truncate text-xs text-muted-foreground">{sub}</p> : null}
+    </div>
+  );
+}
+
+/* ====================== DISTRIBUTION ANALYTICS SLIDER ====================== */
+
+const ANALYTICS_PALETTE = [
+  "#10b981",
+  "#f43f5e",
+  "#f59e0b",
+  "#14b8a6",
+  "#a855f7",
+  "#f97316",
+  "#84cc16",
+  "#06b6d4",
+];
+
+function DistributionAnalyticsSlider({
+  rows,
+  pads,
+  kpi,
+}: {
+  rows: DistributionRow[];
+  pads: PadDrive[];
+  kpi: { pads: number; girls: number; sessions: number } | null;
+}) {
+  const byType = useMemo(() => {
+    const m = new Map<string, { count: number; qty: number; value: number }>();
+    for (const r of rows) {
+      const cur = m.get(r.type) ?? { count: 0, qty: 0, value: 0 };
+      cur.count += 1;
+      cur.qty += r.quantity ?? 0;
+      cur.value += r.value ?? 0;
+      m.set(r.type, cur);
+    }
+    return [...m.entries()]
+      .map(([type, v], i) => ({
+        type,
+        name: (TYPE_META[type] ?? TYPE_META.OTHER).label,
+        fill: ANALYTICS_PALETTE[i % ANALYTICS_PALETTE.length],
+        ...v,
+      }))
+      .sort((a, b) => b.count - a.count);
+  }, [rows]);
+
+  const byVolunteer = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const name = r.volunteer?.user?.name ?? "Unattributed";
+      m.set(name, (m.get(name) ?? 0) + 1);
+    }
+    return [...m.entries()]
+      .map(([name, count], i) => ({
+        name,
+        count,
+        fill: ANALYTICS_PALETTE[i % ANALYTICS_PALETTE.length],
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [rows]);
+
+  const byLocation = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      const loc = r.location?.trim() || "Unknown";
+      m.set(loc, (m.get(loc) ?? 0) + 1);
+    }
+    return [...m.entries()]
+      .map(([name, count], i) => ({
+        name,
+        count,
+        fill: ANALYTICS_PALETTE[(i + 3) % ANALYTICS_PALETTE.length],
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [rows]);
+
+  const monthly = useMemo(() => {
+    const m = new Map<string, { count: number; value: number }>();
+    for (const r of rows) {
+      const d = new Date(r.distributedAt);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = d.toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+      const cur = m.get(key) ?? { count: 0, value: 0 };
+      cur.count += 1;
+      cur.value += r.value ?? 0;
+      m.set(key, cur);
+    }
+    return [...m.entries()]
+      .map(([label, v]) => ({ label, ...v }))
+      .reverse();
+  }, [rows]);
+
+  const totals = useMemo(() => {
+    const value = rows.reduce((s, r) => s + (r.value ?? 0), 0);
+    const qty = rows.reduce((s, r) => s + (r.quantity ?? 0), 0);
+    const beneficiaries = rows.filter((r) => r.beneficiary).length;
+    const walkIn = rows.length - beneficiaries;
+    const girlMonths = Math.floor((kpi?.pads ?? 0) / PADS_PER_GIRL_MONTH);
+    return { value, qty, beneficiaries, walkIn, girlMonths };
+  }, [rows, kpi]);
+
+  const hasData = rows.length > 0;
+  const AXIS = { fontSize: 11 };
+
+  return (
+    <>
+      {/* headline numbers */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <MiniStatA label="Distributions" value={rows.length.toLocaleString("en-IN")} />
+        <MiniStatA label="Units delivered" value={totals.qty.toLocaleString("en-IN")} />
+        <MiniStatA label="Value disbursed" value={formatINRCompact(totals.value)} />
+        <MiniStatA
+          label="Registered cases"
+          value={`${totals.beneficiaries.toLocaleString("en-IN")} · ${totals.walkIn.toLocaleString("en-IN")} walk-in`}
+        />
+        <MiniStatA
+          label="Girl-months (pads)"
+          value={totals.girlMonths.toLocaleString("en-IN")}
+        />
+      </div>
+
+      {!hasData ? (
+        <EmptyState
+          icon={<BarChart3 className="size-6" aria-hidden="true" />}
+          title="No distributions recorded yet"
+          hint="Analytics appear as soon as field records come in."
+        />
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* type split donut */}
+          <SectionCard
+            title="What moved"
+            description="Distribution records by aid type"
+            icon={<Package className="size-4" aria-hidden="true" />}
+          >
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={byType}
+                    dataKey="count"
+                    nameKey="name"
+                    innerRadius="55%"
+                    outerRadius="85%"
+                    paddingAngle={2}
+                    strokeWidth={0}
+                  >
+                    {byType.map((t) => (
+                      <Cell key={t.type} fill={t.fill} />
+                    ))}
+                  </Pie>
+                  <ReTooltip
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid var(--border)",
+                      fontSize: 12,
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
+              {byType.map((t) => (
+                <li key={t.type} className="flex items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: t.fill }}
+                  />
+                  <span className="truncate">{t.name}</span>
+                  <span className="ml-auto font-medium tabular-nums">
+                    {t.count} · {formatINRCompact(t.value)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </SectionCard>
+
+          {/* monthly trend */}
+          <SectionCard
+            title="Monthly rhythm"
+            description="Records and value per month"
+            icon={<TrendingUp className="size-4" aria-hidden="true" />}
+          >
+            {monthly.length === 0 ? (
+              <EmptyState icon={<TrendingUp className="size-6" aria-hidden="true" />} title="No dated records" />
+            ) : (
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={monthly} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
+                    <XAxis dataKey="label" tick={AXIS} tickLine={false} axisLine={false} />
+                    <YAxis allowDecimals={false} tick={AXIS} tickLine={false} axisLine={false} />
+                    <ReTooltip
+                      contentStyle={{
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        fontSize: 12,
+                      }}
+                    />
+                    <Bar dataKey="count" name="Distributions" fill="#10b981" radius={[6, 6, 0, 0]} maxBarSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </SectionCard>
+
+          {/* top volunteers */}
+          <SectionCard
+            title="Field attribution"
+            description="Top volunteers by recorded distributions"
+            icon={<Users className="size-4" aria-hidden="true" />}
+          >
+            {byVolunteer.length === 0 ? (
+              <EmptyState icon={<Users className="size-6" aria-hidden="true" />} title="No records" />
+            ) : (
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={byVolunteer} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 0 }}>
+                    <CartesianGrid horizontal={false} stroke="var(--border)" strokeDasharray="3 3" />
+                    <XAxis type="number" allowDecimals={false} tick={AXIS} tickLine={false} axisLine={false} />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      width={130}
+                      tick={AXIS}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <ReTooltip
+                      contentStyle={{
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        fontSize: 12,
+                      }}
+                    />
+                    <Bar dataKey="count" name="Distributions" radius={[0, 6, 6, 0]} maxBarSize={18}>
+                      {byVolunteer.map((v) => (
+                        <Cell key={v.name} fill={v.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </SectionCard>
+
+          {/* top locations */}
+          <SectionCard
+            title="Where the work happens"
+            description="Top locations by distribution count"
+            icon={<MapPin className="size-4" aria-hidden="true" />}
+          >
+            {byLocation.length === 0 ? (
+              <EmptyState icon={<MapPin className="size-6" aria-hidden="true" />} title="No locations recorded" />
+            ) : (
+              <ul className="space-y-1.5">
+                {byLocation.map((l, i) => (
+                  <li key={l.name} className="flex items-center gap-3">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-7 shrink-0 items-center justify-center rounded-md text-[11px] font-bold text-white"
+                      style={{ backgroundColor: l.fill }}
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm">{l.name}</span>
+                    <Badge variant="outline" className="tabular-nums">
+                      {l.count}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SectionCard>
+
+          {/* pads programme recap */}
+          <SectionCard
+            title="Pads programme recap"
+            description="Sanitary-pad drives recorded in the same period"
+            icon={<Sparkles className="size-4" aria-hidden="true" />}
+            className="lg:col-span-2"
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <MiniStatA label="Drives" value={pads.length.toLocaleString("en-IN")} />
+              <MiniStatA label="Pads" value={(kpi?.pads ?? 0).toLocaleString("en-IN")} />
+              <MiniStatA label="Girls reached" value={(kpi?.girls ?? 0).toLocaleString("en-IN")} />
+              <MiniStatA label="Sessions" value={(kpi?.sessions ?? 0).toLocaleString("en-IN")} />
+            </div>
+          </SectionCard>
+        </div>
+      )}
+    </>
+  );
+}
+
+function MiniStatA({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate text-sm font-bold tabular-nums">{value}</p>
+    </div>
+  );
 }

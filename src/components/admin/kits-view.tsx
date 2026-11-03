@@ -32,6 +32,7 @@ import {
   Trash2,
   UtensilsCrossed,
   Wheat,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -252,8 +253,6 @@ const EMPTY_TPL_FORM: TemplateForm = {
   costPerUnit: "",
   items: [{ name: "", qty: "1", unit: "kg" }],
 };
-
-const QR_SHEET_LIMIT = 200;
 
 function parseItems(json: string | null | undefined): TplItem[] {
   if (!json) return [];
@@ -571,9 +570,10 @@ export default function KitsView() {
     let alive = true;
     const run = async () => {
       setQrLoading(true);
-      const picked = readyUnits.slice(0, QR_SHEET_LIMIT);
+      // Generate EVERY ready unit — the print sheet paginates via CSS so the
+      // browser's print dialog receives the complete set of labels.
       const out: { code: string; dataUrl: string }[] = [];
-      for (const u of picked) {
+      for (const u of readyUnits) {
         try {
           const dataUrl = await QRCode.toDataURL(u.code, { margin: 1, width: 140 });
           out.push({ code: u.code, dataUrl });
@@ -741,43 +741,97 @@ export default function KitsView() {
                 const tpl = tplMap.get(b.templateId);
                 const km = kindMeta(tpl?.kind);
                 const pct = scanPct(b);
+                const scanned = b.scannedUnits ?? 0;
+                const remaining = Math.max(0, b.totalUnits - scanned);
+                const done = pct === 100;
+                const kitValue = (b.template?.costPerUnit ?? 0) * b.totalUnits;
                 return (
                   <button
                     key={b.id}
                     type="button"
                     onClick={() => openSheet(b)}
-                    aria-label={`Open batch ${b.name}`}
-                    className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-emerald-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+                    aria-label={`Open batch ${b.name} — ${pct}% scanned`}
+                    className={cn(
+                      "card-hover relative flex flex-col gap-3 overflow-hidden rounded-xl border bg-card p-4 text-left shadow-sm transition focus-visible:outline-2 focus-visible:outline-primary",
+                      done
+                        ? "border-emerald-500/40"
+                        : "hover:border-emerald-500/40"
+                    )}
                   >
-                    <div className="flex items-start gap-2">
+                    {/* status glow ribbon */}
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "absolute inset-x-0 top-0 h-1",
+                        done ? "bg-emerald-500" : pct > 0 ? "bg-amber-500/70" : "bg-muted-foreground/25"
+                      )}
+                    />
+
+                    <div className="flex items-start gap-2.5">
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "flex size-10 shrink-0 items-center justify-center rounded-lg border",
+                          km.chip
+                        )}
+                      >
+                        <km.icon className="size-5" />
+                      </span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-semibold leading-tight">{b.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{b.template?.name ?? "Template"}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {b.template?.name ?? "Template"} · {km.label} kit
+                        </p>
                       </div>
                       <StatusBadge status={b.status} />
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant="outline" className={cn(km.chip)}>
-                        <km.icon className="size-3" aria-hidden="true" />
-                        {km.label} kit
-                      </Badge>
-                      <Badge variant="outline" className="tabular-nums">
-                        {b.scannedUnits ?? 0}/{b.totalUnits} scanned
-                      </Badge>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>Scan progress</span>
-                        <span className="tabular-nums">{pct}%</span>
+
+                    {/* scan progress — big number + segmented bar */}
+                    <div className="rounded-lg border bg-muted/30 p-3">
+                      <div className="flex items-end justify-between gap-2">
+                        <div>
+                          <p className="text-2xl font-bold leading-none tabular-nums">
+                            {pct}
+                            <span className="text-sm font-semibold text-muted-foreground">%</span>
+                          </p>
+                          <p className="mt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {done ? "Batch fully handed out" : "Scan progress"}
+                          </p>
+                        </div>
+                        <div className="text-right text-xs tabular-nums text-muted-foreground">
+                          <p>
+                            <strong className="font-semibold text-foreground">{scanned}</strong> scanned
+                          </p>
+                          <p>
+                            <strong className="font-semibold text-foreground">{remaining}</strong> remaining
+                          </p>
+                        </div>
                       </div>
-                      <Progress value={pct} className="h-2 [&>div]:bg-emerald-600" aria-label={`${pct}% scanned`} />
+                      <Progress
+                        value={pct}
+                        className={cn(
+                          "mt-2.5 h-2",
+                          done ? "[&>div]:bg-emerald-600" : "[&>div]:bg-amber-500"
+                        )}
+                        aria-label={`${pct}% scanned`}
+                      />
                     </div>
+
+                    {/* informative footer stats */}
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-md border px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Units</p>
+                        <p className="font-semibold tabular-nums">{b.totalUnits}</p>
+                      </div>
+                      <div className="rounded-md border px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Kit value</p>
+                        <p className="font-semibold tabular-nums">{formatINR(kitValue)}</p>
+                      </div>
+                    </div>
+
                     {b.instructions ? (
                       <p className="line-clamp-2 text-xs text-muted-foreground">{b.instructions}</p>
                     ) : null}
-                    <p className="mt-auto text-xs text-muted-foreground">
-                      ~{formatINR((b.template?.costPerUnit ?? 0) * b.totalUnits)} of kit value
-                    </p>
                   </button>
                 );
               })}
@@ -1399,58 +1453,109 @@ export default function KitsView() {
 
       {/* ============================ QR LABEL DIALOG ============================ */}
       <Dialog open={qrOpen} onOpenChange={setQrOpen}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>QR labels — {sheet?.name}</DialogTitle>
+        <DialogContent
+          className="no-print flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl print-area"
+          showCloseButton={false}
+        >
+          {/* fixed header */}
+          <DialogHeader className="shrink-0 space-y-1.5 border-b bg-background/95 px-6 py-4 backdrop-blur">
+            <div className="flex items-center justify-between gap-3 pr-10">
+              <DialogTitle className="flex items-center gap-2">
+                <QrCode className="size-4 text-primary" aria-hidden="true" />
+                QR labels — {sheet?.name}
+              </DialogTitle>
+              <button
+                type="button"
+                aria-label="Close label sheet"
+                onClick={() => setQrOpen(false)}
+                className="absolute right-4 top-4 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="size-4" aria-hidden="true" />
+              </button>
+            </div>
             <DialogDescription>
               {sheet
-                ? `Scan unit — ${sheetKind.label.toUpperCase()} kit batch #${sheet.name}. `
+                ? `${sheetKind.label.toUpperCase()} kit batch · `
                 : ""}
-              Print-ready labels for READY units; scanning at hand-off marks the unit distributed.
+              One label per READY unit — scanning at hand-off marks it distributed.
             </DialogDescription>
+            {qrLabels.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Badge variant="outline" className="tabular-nums">
+                  {qrLabels.length} label{qrLabels.length === 1 ? "" : "s"}
+                </Badge>
+                <Badge variant="outline" className="tabular-nums">
+                  ≈ {Math.ceil(qrLabels.length / 24)} page{Math.ceil(qrLabels.length / 24) === 1 ? "" : "s"} at 24/sheet
+                </Badge>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  {prefixFor(tplMap.get(sheet?.templateId ?? "") ?? { kind: undefined, codePrefix: undefined })}-…
+                </Badge>
+              </div>
+            ) : null}
           </DialogHeader>
 
-          {qrLoading ? (
-            <div className="grid place-items-center gap-3 py-10" aria-busy="true">
-              <Skeleton className="size-16 rounded-xl" />
-              <p className="text-sm text-muted-foreground">Generating QR codes…</p>
-            </div>
-          ) : qrLabels.length === 0 ? (
-            <EmptyState
-              icon={<QrCode className="size-6" aria-hidden="true" />}
-              title="No READY units to print"
-              hint="Labels are generated for units that have not been scanned yet."
-            />
-          ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{qrLabels.length} labels</Badge>
-                {readyUnits.length > QR_SHEET_LIMIT && (
-                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400">
-                    Limited to {QR_SHEET_LIMIT} per sheet — print again for the rest
-                  </Badge>
-                )}
-                <Button size="sm" className="ml-auto" onClick={() => window.print()} aria-label="Print labels">
-                  <Printer className="size-3.5" aria-hidden="true" /> Print
-                </Button>
+          {/* scrollable label preview — every label, paginated by CSS on print */}
+          <div className="print-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4 scrollbar-thin">
+            {qrLoading ? (
+              <div className="grid place-items-center gap-3 py-10" aria-busy="true">
+                <Skeleton className="size-16 rounded-xl" />
+                <p className="text-sm text-muted-foreground">
+                  Generating {readyUnits.length} QR codes…
+                </p>
               </div>
-              <div className="print-sheet grid grid-cols-3 gap-3 sm:grid-cols-4">
+            ) : qrLabels.length === 0 ? (
+              <EmptyState
+                icon={<QrCode className="size-6" aria-hidden="true" />}
+                title="No READY units to print"
+                hint="Labels are generated for units that have not been scanned yet."
+              />
+            ) : (
+              <div className="print-labels grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
                 {qrLabels.map((l) => (
                   <div
                     key={l.code}
-                    className="flex flex-col items-center gap-1 rounded-lg border border-dashed p-2 text-center"
+                    className="flex flex-col items-center gap-1 rounded-lg border border-dashed bg-card p-2 text-center"
                   >
-                    <img src={l.dataUrl} alt={`QR code for kit unit ${l.code}`} className="size-[100px]" />
-                    <span className="font-mono text-[10px] font-semibold leading-tight">{l.code}</span>
+                    <img
+                      src={l.dataUrl}
+                      alt={`QR code for kit unit ${l.code}`}
+                      className="size-[88px]"
+                      loading="lazy"
+                    />
+                    <span className="w-full truncate font-mono text-[10px] font-semibold leading-tight">
+                      {l.code}
+                    </span>
                     <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
                       UAR {sheetKind.label} Kit
                     </span>
-                    <span className="w-full truncate text-[9px] text-muted-foreground">{sheet?.name}</span>
+                    <span className="w-full truncate text-[9px] text-muted-foreground">
+                      {sheet?.name}
+                    </span>
                   </div>
                 ))}
               </div>
-            </>
-          )}
+            )}
+          </div>
+
+          {/* fixed footer — print shell lives in globals.css @media print */}
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-background/95 px-6 py-4 backdrop-blur">
+            <p className="text-xs text-muted-foreground">
+              Tip: use plain white sticker paper · label size ≈ 50 × 50 mm
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setQrOpen(false)}>
+                Close
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => window.print()}
+                disabled={qrLoading || qrLabels.length === 0}
+                aria-label="Print all labels"
+              >
+                <Printer className="size-3.5" aria-hidden="true" /> Print all {qrLabels.length || ""}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
