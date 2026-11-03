@@ -4,14 +4,19 @@
  * FormSheet — the single slide-over drawer used for ALL Add and Edit
  * operations across the app (replaces every centered Dialog form).
  *
- * - Right-side drawer on desktop, full-screen on mobile
+ * Width contract (desktop ≥ sm):
+ *  - every size is at least 60% of the viewport, per design spec
+ *  - "full" opens a full-screen workbench (detail-heavy modules:
+ *    distributions, campaign view, multi-section record sheets)
+ *  - full-screen behaviour on mobile for every size
+ *
  * - Sticky header (title + description + close) and sticky footer
- *   (Cancel + Save) with a sticky "step hint" strip for guided forms
+ *   (Cancel + Save) with an "unsaved changes" hint
  * - Submit/loading/disabled states, keyboard accessible (Esc closes)
  * - Unsaved-changes guard via `dirty` prop
  *
  * Usage:
- *   <FormSheet open onOpenChange title="Record donation" description="..."
+ *   <FormSheet open onOpenChange title="Record donation" size="lg"
  *     submitLabel="Save donation" onSubmit={save} loading={saving} dirty={dirty}>
  *     …form fields…
  *   </FormSheet>
@@ -31,13 +36,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type FormSheetSize = "sm" | "md" | "lg" | "xl";
+export type FormSheetSize = "sm" | "md" | "lg" | "xl" | "full";
 
+/** Every size ≥ 60vw on desktop; "full" is a full-screen slide-over. */
 const SIZE_CLASS: Record<FormSheetSize, string> = {
-  sm: "sm:max-w-md",
-  md: "sm:max-w-xl",
-  lg: "sm:max-w-3xl",
-  xl: "sm:max-w-5xl",
+  sm: "sm:w-[60vw] sm:max-w-[60vw]",
+  md: "sm:w-[68vw] sm:max-w-[68vw]",
+  lg: "sm:w-[76vw] sm:max-w-[76vw]",
+  xl: "sm:w-[88vw] sm:max-w-[88vw]",
+  full: "w-full sm:w-[100vw] sm:max-w-[100vw] h-full",
 };
 
 export interface FormSheetProps {
@@ -52,6 +59,8 @@ export interface FormSheetProps {
   loading?: boolean;
   dirty?: boolean;
   size?: FormSheetSize;
+  /** Optional small pill/badge rendered in the header (e.g. record ref). */
+  badge?: React.ReactNode;
   footerExtra?: React.ReactNode;
 }
 
@@ -67,6 +76,7 @@ export function FormSheet({
   loading = false,
   dirty = false,
   size = "md",
+  badge,
   footerExtra,
 }: FormSheetProps) {
   // Warn before losing unsaved edits on tab close / reload
@@ -89,9 +99,12 @@ export function FormSheet({
         )}
       >
         <SheetHeader className="sticky top-0 z-10 gap-1 border-b bg-background/95 px-6 py-4 pr-14 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <SheetTitle className="text-base font-semibold leading-snug">
-            {title}
-          </SheetTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <SheetTitle className="text-base font-semibold leading-snug">
+              {title}
+            </SheetTitle>
+            {badge}
+          </div>
           {description ? (
             <SheetDescription className="text-xs leading-relaxed">
               {description}
