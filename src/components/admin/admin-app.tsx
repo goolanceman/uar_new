@@ -4,7 +4,7 @@ import { useState } from "react";
 import {
   Activity, Ambulance, BadgeCheck, Boxes, ChevronDown, ClipboardList,
   ExternalLink, FileBarChart, HeartHandshake, LayoutDashboard,
-  LogOut, Menu, Package, PawPrint, Pill, RefreshCw, Settings, ShieldCheck,
+  LogIn, LogOut, Menu, Package, PawPrint, Pill, RefreshCw, Settings, ShieldCheck,
   Sprout, TrendingUp, Users, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -145,8 +145,34 @@ export default function AdminApp() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
         <RefreshCw className="size-6 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Checking your session…</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+        <div className="w-full max-w-md rounded-2xl border bg-card p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10">
+            <ShieldCheck className="size-7 text-primary" />
+          </div>
+          <h1 className="text-xl font-bold">Admin sign-in required</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Your session could not be verified. Sign in with an admin account
+            to open the console — data stays private to authorised users.
+          </p>
+          <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+            <Button onClick={() => navigate("/login")}>
+              <LogIn className="size-4" /> Sign in
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/")}>
+              Back to site
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }

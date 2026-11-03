@@ -1,13 +1,48 @@
 "use client";
 
-/** Typed fetch wrapper for all client → API calls. Throws Error with server message. */
+/**
+ * Typed fetch wrapper for all client → API calls.
+ *
+ * Auth strategy (works in every embedding context):
+ *  - If a session token is present in localStorage it is sent as
+ *    `Authorization: Bearer <token>` (survives cross-site preview iframes
+ *    where SameSite cookies are blocked).
+ *  - The httpOnly session cookie is still the primary mechanism for normal
+ *    top-level browsing.
+ */
+
+const TOKEN_KEY = "uar_token";
+
+export function getToken(): string | null {
+  try {
+    return window.localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // storage unavailable (private mode) — cookie-only fallback applies
+  }
+}
+
 export async function api<T = unknown>(
   path: string,
   options?: { method?: string; body?: unknown }
 ): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   const res = await fetch(path, {
     method: options?.method ?? "GET",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
     cache: "no-store",
   });

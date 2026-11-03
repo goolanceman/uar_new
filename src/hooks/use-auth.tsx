@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { get, post } from "@/lib/api-client";
+import { get, post, setToken } from "@/lib/api-client";
 
 export interface SessionUser {
   id: string;
@@ -62,10 +62,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const data = await post<{ user: SessionUser }>("/api/auth/login", {
-      email,
-      password,
-    });
+    const data = await post<{ user: SessionUser; token?: string }>(
+      "/api/auth/login",
+      { email, password }
+    );
+    if (data.token) setToken(data.token);
     setUser(data.user);
     return data.user;
   }, []);
@@ -80,8 +81,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }) => {
       const res = await post<{
         user: SessionUser;
+        token?: string;
         tempCreds: TempCreds;
       }>("/api/auth/register", data);
+      if (res.token) setToken(res.token);
       setUser(res.user);
       return res.tempCreds;
     },
@@ -89,6 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    setToken(null);
     await post("/api/auth/logout");
     setUser(null);
   }, []);

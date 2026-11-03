@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import {
   setSession,
+  issueToken,
   hashPassword,
   ApiError,
   json,
@@ -51,18 +52,20 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await setSession({
+    const session = {
       userId: user.id,
       role: user.role,
       name: user.name,
       email: user.email,
-    });
+    };
+    await setSession(session);
 
     await logActivity(name, "REGISTER", "USER", role, user.id);
 
     const { password: _pw, ...userSafe } = user;
     return json({
       user: userSafe,
+      token: issueToken(session),
       tempCreds: { email, password, fullName: name },
     });
   } catch (e) {

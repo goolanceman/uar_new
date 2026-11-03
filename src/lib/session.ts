@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import crypto from "crypto";
 
 const COOKIE_NAME = "uar_session";
@@ -38,7 +38,14 @@ export function verifyPassword(pw: string, stored: string): boolean {
   }
 }
 
-// ─── Cookie session (HMAC-signed) ────────────────────────────────────────────
+// ─── Session (HMAC-signed token via cookie AND/OR bearer header) ────────────
+/*
+ * The app is embedded in the sandbox preview iframe (cross-site context),
+ * where SameSite=Lax cookies are never sent. To keep auth working in every
+ * embedding context we accept the signed token from EITHER the cookie OR an
+ * `Authorization: Bearer <token>` header. The cookie is still set (with
+ * SameSite=None; Secure over HTTPS so it also works inside iframes).
+ */
 
 function sign(payload: string): string {
   return crypto
@@ -48,13 +55,41 @@ function sign(payload: string): string {
     .slice(0, 32);
 }
 
-export async function setSession(s: Session): Promise<void> {
+export function issueToken(s: Session): string {
   const payload = Buffer.from(JSON.stringify(s)).toString("base64url");
-  const token = `${payload}.${sign(payload)}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+function parseToken(raw: string | undefined | null): Session | null {
+  if (!raw) return null;
+  const [payload, sig] = raw.split(".");
+  if (!payload || !sig || sig.length !== 32) return null;
+  const expected = sign(payload);
+  if (
+    sig.length !== expected.length ||
+    !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+  )
+    return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString()) as Session;
+  } catch {
+    return null;
+  }
+}
+
+export async function setSession(s: Session): Promise<void> {
+  const token = issueToken(s);
   const store = await cookies();
+  const h = await headers();
+  const proto =
+    h.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
+  const isHttps = proto === "https";
   store.set(COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: "lax",
+    // None+Secure keeps the cookie alive inside cross-site preview iframes
+    // served over HTTPS; Lax is correct (and required) for plain HTTP.
+    sameSite: isHttps ? "none" : "lax",
+    secure: isHttps,
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
   });
@@ -67,12 +102,16 @@ export async function clearSession(): Promise<void> {
 
 export async function getSession(): Promise<Session | null> {
   try {
+    // 1) Authorization: Bearer header (works inside cross-site iframes)
+    const h = await headers();
+    const auth = h.get("authorization");
+    if (auth?.toLowerCase().startsWith("bearer ")) {
+      const s = parseToken(auth.slice(7).trim());
+      if (s) return s;
+    }
+    // 2) Cookie
     const store = await cookies();
-    const raw = store.get(COOKIE_NAME)?.value;
-    if (!raw) return null;
-    const [payload, sig] = raw.split(".");
-    if (!payload || !sig || sign(payload) !== sig) return null;
-    return JSON.parse(Buffer.from(payload, "base64url").toString()) as Session;
+    return parseToken(store.get(COOKIE_NAME)?.value);
   } catch {
     return null;
   }
@@ -104,6 +143,11 @@ export async function requireAuth(): Promise<Session> {
   const s = await getSession();
   if (!s) throw new ApiError("Please sign in to continue", 401);
   return s;
+}
+
+/** True when the current request carries a valid session (cookie or bearer). */
+export async function isAuthenticated(): Promise<boolean> {
+  return (await getSession()) !== null;
 }
 
 export async function requireRole(...roles: string[]): Promise<Session> {

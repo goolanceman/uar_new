@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import {
   setSession,
+  issueToken,
   verifyPassword,
   hashPassword,
   ApiError,
@@ -31,12 +32,13 @@ export async function POST(req: NextRequest) {
     if (user.status === "SUSPENDED")
       throw new ApiError("Account suspended", 403);
 
-    await setSession({
+    const session = {
       userId: user.id,
       role: user.role,
       name: user.name,
       email: user.email,
-    });
+    };
+    await setSession(session);
 
     // Upgrade legacy plain-text password to scrypt hash
     if (!user.password.includes(":")) {
@@ -49,7 +51,9 @@ export async function POST(req: NextRequest) {
     await logActivity(user.name, "LOGIN", "USER", undefined, user.id);
 
     const { password: _pw, ...userSafe } = user;
-    return json({ user: userSafe });
+    // token → client stores it and sends `Authorization: Bearer` so auth also
+    // works inside cross-site preview iframes where cookies are blocked.
+    return json({ user: userSafe, token: issueToken(session) });
   } catch (e) {
     return handleError(e);
   }
