@@ -28,6 +28,7 @@ import CausesView from "@/components/admin/causes-view";
 import AnimalsView from "@/components/admin/animals-view";
 import AmbulanceView from "@/components/admin/ambulance-view";
 import BeneficiariesView from "@/components/admin/beneficiaries-view";
+import DonorsView from "@/components/admin/donors-view";
 import VolunteersView from "@/components/admin/volunteers-view";
 import UsersView from "@/components/admin/users-view";
 import DistributionsView from "@/components/admin/distributions-view";
@@ -47,6 +48,7 @@ const NAV = [
     group: "Fundraising",
     items: [
       { key: "donations", label: "Donations", icon: TrendingUp },
+      { key: "donors", label: "Donors (CRM)", icon: HeartHandshake },
       { key: "campaigns", label: "Campaigns", icon: Sprout },
     ],
   },
@@ -74,7 +76,7 @@ const NAV = [
     items: [
       { key: "distributions", label: "Distributions", icon: Package },
       { key: "inventory", label: "Inventory", icon: Boxes },
-      { key: "kits", label: "Ration Kits", icon: ClipboardList },
+      { key: "kits", label: "Aid Kits", icon: ClipboardList },
     ],
   },
   {
@@ -296,6 +298,7 @@ export default function AdminApp() {
         <main className="min-w-0 flex-1 p-4 sm:p-6">
           {view === "dashboard" && <DashboardView />}
           {view === "donations" && <DonationsView />}
+          {view === "donors" && <DonorsView />}
           {view === "campaigns" && <CampaignsView />}
           {view === "causes" && <CausesView />}
           {view === "animals" && <AnimalsView />}
