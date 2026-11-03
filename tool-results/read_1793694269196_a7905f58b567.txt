@@ -1,0 +1,1286 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Users & Roles — round-5: DataTable (fill height, skeleton rows, built-in
+     5→ * pagination), full-screen DetailSheet with every account field, activity
+     6→ * count and SUSPENDED safety copy, lg FormSheets for create/edit, grid/list
+     7→ * views, CSV export and shared ConfirmDialogs for role changes and deletes.
+     8→ */
+     9→
+    10→import { useCallback, useEffect, useMemo, useState } from "react";
+    11→import {
+    12→  CalendarClock,
+    13→  Eye,
+    14→  Pencil,
+    15→  Plus,
+    16→  RefreshCw,
+    17→  Search,
+    18→  ShieldAlert,
+    19→  Trash2,
+    20→  Users,
+    21→} from "lucide-react";
+    22→import { toast } from "sonner";
+    23→import { del, get, patch, post } from "@/lib/api-client";
+    24→import { useAuth } from "@/hooks/use-auth";
+    25→import { formatDateTime, initials, titleCase } from "@/lib/format";
+    26→import { cn } from "@/lib/utils";
+    27→import {
+    28→  emailRule,
+    29→  minLen,
+    30→  panRule,
+    31→  phoneRule,
+    32→  required,
+    33→} from "@/lib/validators";
+    34→import { PageHeader } from "@/components/shared/page-header";
+    35→import { DataField } from "@/components/shared/data-field";
+    36→import { EmptyState } from "@/components/shared/empty-state";
+    37→import { FormSheet } from "@/components/shared/form-sheet";
+    38→import {
+    39→  DetailGrid,
+    40→  DetailSection,
+    41→  DetailSheet,
+    42→} from "@/components/shared/detail-sheet";
+    43→import {
+    44→  FieldGrid,
+    45→  FormSection,
+    46→  SelectField,
+    47→  SwitchField,
+    48→  TextField,
+    49→  TextareaField,
+    50→} from "@/components/shared/form-fields";
+    51→import { StatusBadge } from "@/components/shared/status-badge";
+    52→import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+    53→import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
+    54→import {
+    55→  PaginationBar,
+    56→  ViewSwitcher,
+    57→  useViewPref,
+    58→  type DataViewMode,
+    59→} from "@/components/shared/view-switcher";
+    60→import {
+    61→  DataTable,
+    62→  type DataTableColumn,
+    63→} from "@/components/shared/data-table";
+    64→import { Button } from "@/components/ui/button";
+    65→import { Input } from "@/components/ui/input";
+    66→import { Skeleton } from "@/components/ui/skeleton";
+    67→import {
+    68→  Select,
+    69→  SelectContent,
+    70→  SelectItem,
+    71→  SelectTrigger,
+    72→  SelectValue,
+    73→} from "@/components/ui/select";
+    74→
+    75→/* ------------------------------ types & constants --------------------------- */
+    76→
+    77→interface UserRow {
+    78→  id: string;
+    79→  name: string;
+    80→  email: string;
+    81→  role: string;
+    82→  status: string;
+    83→  isActive?: boolean;
+    84→  phone?: string | null;
+    85→  city?: string | null;
+    86→  pan?: string | null;
+    87→  about?: string | null;
+    88→  createdAt: string;
+    89→  updatedAt?: string;
+    90→}
+    91→
+    92→interface DonationLite {
+    93→  id: string;
+    94→  donorId?: string | null;
+    95→  amount: number;
+    96→  paymentStatus: string;
+    97→}
+    98→
+    99→interface VolunteerLite {
+   100→  id: string;
+   101→  userId: string;
+   102→  status: string;
+   103→  assignedArea?: string | null;
+   104→  joinedAt: string;
+   105→}
+   106→
+   107→interface BeneficiaryLite {
+   108→  id: string;
+   109→  userId?: string | null;
+   110→  name: string;
+   111→  category: string;
+   112→  caseStatus?: string;
+   113→  city?: string | null;
+   114→}
+   115→
+   116→const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"] as const;
+   117→const STATUSES = ["ACTIVE", "PENDING", "SUSPENDED"] as const;
+   118→
+   119→/* --------------------------------- form state ------------------------------- */
+   120→
+   121→interface CreateForm {
+   122→  name: string;
+   123→  email: string;
+   124→  password: string;
+   125→  role: string;
+   126→  city: string;
+   127→  phone: string;
+   128→}
+   129→
+   130→interface EditForm {
+   131→  name: string;
+   132→  email: string;
+   133→  phone: string;
+   134→  city: string;
+   135→  pan: string;
+   136→  about: string;
+   137→  role: string;
+   138→  status: string;
+   139→  isActive: boolean;
+   140→  password: string;
+   141→}
+   142→
+   143→const emptyCreateForm: CreateForm = {
+   144→  name: "",
+   145→  email: "",
+   146→  password: "",
+   147→  role: "DONOR",
+   148→  city: "",
+   149→  phone: "",
+   150→};
+   151→
+   152→const emptyEditForm: EditForm = {
+   153→  name: "",
+   154→  email: "",
+   155→  phone: "",
+   156→  city: "",
+   157→  pan: "",
+   158→  about: "",
+   159→  role: "DONOR",
+   160→  status: "ACTIVE",
+   161→  isActive: true,
+   162→  password: "",
+   163→};
+   164→
+   165→function formFromRow(u: UserRow): EditForm {
+   166→  return {
+   167→    name: u.name ?? "",
+   168→    email: u.email ?? "",
+   169→    phone: u.phone ?? "",
+   170→    city: u.city ?? "",
+   171→    pan: u.pan ?? "",
+   172→    about: u.about ?? "",
+   173→    role: u.role ?? "DONOR",
+   174→    status: u.status ?? "ACTIVE",
+   175→    isActive: u.isActive ?? u.status === "ACTIVE",
+   176→    password: "",
+   177→  };
+   178→}
+   179→
+   180→/* ----------------------------------- view ----------------------------------- */
+   181→
+   182→export default function UsersView() {
+   183→  const { user } = useAuth();
+   184→
+   185→  const [rows, setRows] = useState<UserRow[]>([]);
+   186→  const [loading, setLoading] = useState(true);
+   187→  const [saving, setSaving] = useState(false);
+   188→
+   189→  // toolbar
+   190→  const [q, setQ] = useState("");
+   191→  const [search, setSearch] = useState("");
+   192→  const [roleFilter, setRoleFilter] = useState("ALL");
+   193→  const [statusFilter, setStatusFilter] = useState("ALL");
+   194→
+   195→  // pagination + view mode
+   196→  const [page, setPage] = useState(1);
+   197→  const [pageSize, setPageSize] = useState(25);
+   198→  const [mode, setMode] = useViewPref("users");
+   199→
+   200→  // create / edit
+   201→  const [createOpen, setCreateOpen] = useState(false);
+   202→  const [createForm, setCreateForm] = useState<CreateForm>({ ...emptyCreateForm });
+   203→  const [editOpen, setEditOpen] = useState(false);
+   204→  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+   205→  const [editForm, setEditForm] = useState<EditForm>({ ...emptyEditForm });
+   206→  const [editSnapshot, setEditSnapshot] = useState<string>(JSON.stringify(emptyEditForm));
+   207→
+   208→  // inline role change confirm (table cell select)
+   209→  const [roleChange, setRoleChange] = useState<{ target: UserRow; role: string } | null>(null);
+   210→
+   211→  // delete
+   212→  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+   213→
+   214→  // detail sheet + linked data
+   215→  const [viewTarget, setViewTarget] = useState<UserRow | null>(null);
+   216→  const [donorStats, setDonorStats] = useState<
+   217→    { count: number; sum: number } | "unavailable" | null
+   218→  >(null);
+   219→  const [linkedVolunteer, setLinkedVolunteer] = useState<VolunteerLite | null>(null);
+   220→  const [linkedBeneficiary, setLinkedBeneficiary] = useState<BeneficiaryLite | null>(null);
+   221→  const [activityCount, setActivityCount] = useState<number | null>(null);
+   222→
+   223→  const adminCount = useMemo(() => rows.filter((r) => r.role === "ADMIN").length, [rows]);
+   224→
+   225→  /* -------------------------------- loading -------------------------------- */
+   226→
+   227→  const load = useCallback(async () => {
+   228→    setLoading(true);
+   229→    try {
+   230→      const data = await get<UserRow[] | { items?: UserRow[] }>("/api/users?limit=500");
+   231→      setRows(Array.isArray(data) ? data : (data.items ?? []));
+   232→    } catch (e) {
+   233→      toast.error(e instanceof Error ? e.message : "Failed to load users");
+   234→    } finally {
+   235→      setLoading(false);
+   236→    }
+   237→  }, []);
+   238→
+   239→  useEffect(() => {
+   240→    load();
+   241→  }, [load]);
+   242→
+   243→  useEffect(() => {
+   244→    const t = setTimeout(() => setSearch(q), 300);
+   245→    return () => clearTimeout(t);
+   246→  }, [q]);
+   247→
+   248→  const filtered = useMemo(() => {
+   249→    const needle = search.trim().toLowerCase();
+   250→    return rows.filter((u) => {
+   251→      if (roleFilter !== "ALL" && u.role !== roleFilter) return false;
+   252→      if (statusFilter !== "ALL" && u.status !== statusFilter) return false;
+   253→      if (
+   254→        needle &&
+   255→        !`${u.name} ${u.email} ${u.phone ?? ""} ${u.city ?? ""}`.toLowerCase().includes(needle)
+   256→      )
+   257→        return false;
+   258→      return true;
+   259→    });
+   260→  }, [rows, search, roleFilter, statusFilter]);
+   261→
+   262→  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+   263→  useEffect(() => {
+   264→    setPage(1);
+   265→  }, [search, roleFilter, statusFilter, pageSize]);
+   266→  const paged = useMemo(
+   267→    () => filtered.slice((page - 1) * pageSize, page * pageSize),
+   268→    [filtered, page, pageSize]
+   269→  );
+   270→
+   271→  const hasFilters = roleFilter !== "ALL" || statusFilter !== "ALL" || search.trim() !== "";
+   272→
+   273→  const clearFilters = () => {
+   274→    setQ("");
+   275→    setRoleFilter("ALL");
+   276→    setStatusFilter("ALL");
+   277→  };
+   278→
+   279→  /* -------------------------------- create ---------------------------------- */
+   280→
+   281→  const createDirty =
+   282→    createOpen && JSON.stringify(createForm) !== JSON.stringify(emptyCreateForm);
+   283→
+   284→  const submitCreate = async () => {
+   285→    const errors: string[] = [];
+   286→    const nameErr = required("Name")(createForm.name);
+   287→    if (nameErr) errors.push(nameErr);
+   288→    const emailErr = emailRule()(createForm.email);
+   289→    if (emailErr) errors.push(emailErr);
+   290→    const passErr = minLen(6, "Password")(createForm.password);
+   291→    if (passErr) errors.push(passErr);
+   292→    if (errors.length) {
+   293→      toast.error(errors[0]);
+   294→      return;
+   295→    }
+   296→    setSaving(true);
+   297→    try {
+   298→      await post("/api/users", {
+   299→        name: createForm.name.trim(),
+   300→        email: createForm.email.trim().toLowerCase(),
+   301→        password: createForm.password,
+   302→        role: createForm.role,
+   303→        city: createForm.city.trim() || undefined,
+   304→        phone: createForm.phone.trim() || undefined,
+   305→      });
+   306→      toast.success(`User ${createForm.name.trim()} created`);
+   307→      setCreateOpen(false);
+   308→      setCreateForm({ ...emptyCreateForm });
+   309→      await load();
+   310→    } catch (e) {
+   311→      toast.error(e instanceof Error ? e.message : "Failed to create user");
+   312→    } finally {
+   313→      setSaving(false);
+   314→    }
+   315→  };
+   316→
+   317→  /* --------------------------------- edit ----------------------------------- */
+   318→
+   319→  const openEdit = (u: UserRow) => {
+   320→    setEditTarget(u);
+   321→    const next = formFromRow(u);
+   322→    setEditForm(next);
+   323→    setEditSnapshot(JSON.stringify(next));
+   324→    setEditOpen(true);
+   325→  };
+   326→
+   327→  const editDirty = editOpen && JSON.stringify(editForm) !== editSnapshot;
+   328→
+   329→  const doSaveEdit = async () => {
+   330→    if (!editTarget) return;
+   331→    setSaving(true);
+   332→    try {
+   333→      await patch(`/api/users/${editTarget.id}`, {
+   334→        name: editForm.name.trim(),
+   335→        email: editForm.email.trim().toLowerCase(),
+   336→        phone: editForm.phone.trim() || null,
+   337→        city: editForm.city.trim() || null,
+   338→        pan: editForm.pan.trim() ? editForm.pan.trim().toUpperCase() : null,
+   339→        about: editForm.about.trim() || null,
+   340→        role: editForm.role,
+   341→        status: editForm.status,
+   342→        isActive: editForm.isActive,
+   343→        ...(editForm.password ? { password: editForm.password } : {}),
+   344→      });
+   345→      toast.success(`${editForm.name.trim()} updated`);
+   346→      setEditOpen(false);
+   347→      setEditTarget(null);
+   348→      await load();
+   349→    } catch (e) {
+   350→      toast.error(e instanceof Error ? e.message : "Failed to update user");
+   351→    } finally {
+   352→      setSaving(false);
+   353→    }
+   354→  };
+   355→
+   356→  const submitEdit = () => {
+   357→    if (!editTarget) return;
+   358→    const errors: string[] = [];
+   359→    const nameErr = required("Name")(editForm.name);
+   360→    if (nameErr) errors.push(nameErr);
+   361→    const emailErr = emailRule()(editForm.email);
+   362→    if (emailErr) errors.push(emailErr);
+   363→    const panErr = panRule(true)(editForm.pan);
+   364→    if (panErr) errors.push(panErr);
+   365→    const phoneErr = phoneRule(true)(editForm.phone);
+   366→    if (phoneErr) errors.push(phoneErr);
+   367→    if (editForm.password) {
+   368→      const passErr = minLen(6, "New password")(editForm.password);
+   369→      if (passErr) errors.push(passErr);
+   370→    }
+   371→    if (errors.length) {
+   372→      toast.error(errors[0]);
+   373→      return;
+   374→    }
+   375→    if (editForm.role !== editTarget.role) {
+   376→      // confirm via the shared role-change dialog
+   377→      setRoleChange({ target: editTarget, role: editForm.role });
+   378→      return;
+   379→    }
+   380→    void doSaveEdit();
+   381→  };
+   382→
+   383→  /* ---------------------------- inline role change --------------------------- */
+   384→
+   385→  const confirmRoleChange = async () => {
+   386→    if (!roleChange) return;
+   387→    const { target, role } = roleChange;
+   388→    if (target.role === "ADMIN" && adminCount <= 1 && role !== "ADMIN") {
+   389→      toast.error("You cannot change the role of the only administrator");
+   390→      setRoleChange(null);
+   391→      return;
+   392→    }
+   393→    setSaving(true);
+   394→    try {
+   395→      await patch(`/api/users/${target.id}`, { role });
+   396→      toast.success(`${target.name} is now ${titleCase(role)}`);
+   397→      setRoleChange(null);
+   398→      await load();
+   399→    } catch (e) {
+   400→      toast.error(e instanceof Error ? e.message : "Failed to change role");
+   401→    } finally {
+   402→      setSaving(false);
+   403→    }
+   404→  };
+   405→
+   406→  /* --------------------------------- delete ---------------------------------- */
+   407→
+   408→  const isSelf = (u: UserRow) => u.id === user?.id;
+   409→  const isLastAdmin = (u: UserRow) => u.role === "ADMIN" && adminCount <= 1;
+   410→
+   411→  const confirmDelete = async () => {
+   412→    if (!deleteTarget) return;
+   413→    if (isSelf(deleteTarget)) {
+   414→      toast.error("You cannot delete your own account");
+   415→      setDeleteTarget(null);
+   416→      return;
+   417→    }
+   418→    if (isLastAdmin(deleteTarget)) {
+   419→      toast.error("You cannot delete the only administrator account");
+   420→      setDeleteTarget(null);
+   421→      return;
+   422→    }
+   423→    setSaving(true);
+   424→    try {
+   425→      await del(`/api/users/${deleteTarget.id}`);
+   426→      toast.success("User deleted");
+   427→      setDeleteTarget(null);
+   428→      setViewTarget((v) => (v && v.id === deleteTarget.id ? null : v));
+   429→      await load();
+   430→    } catch (e) {
+   431→      toast.error(e instanceof Error ? e.message : "Failed to delete user");
+   432→    } finally {
+   433→      setSaving(false);
+   434→    }
+   435→  };
+   436→
+   437→  /* ------------------------------ detail sheet ------------------------------- */
+   438→
+   439→  const openView = (u: UserRow) => {
+   440→    setViewTarget(u);
+   441→    setDonorStats(null);
+   442→    setLinkedVolunteer(null);
+   443→    setLinkedBeneficiary(null);
+   444→    setActivityCount(null);
+   445→
+   446→    if (u.role === "DONOR") {
+   447→      // Aggregation is capped at the latest 500 donations (API limit) — close
+   448→      // enough for a summary badge, not an audited statement.
+   449→      get<DonationLite[] | { items?: DonationLite[] }>("/api/donations?limit=500")
+   450→        .then((data) => {
+   451→          const list = Array.isArray(data) ? data : (data.items ?? []);
+   452→          const mine = list.filter(
+   453→            (d) => d.donorId === u.id && d.paymentStatus === "COMPLETED"
+   454→          );
+   455→          setDonorStats({
+   456→            count: mine.length,
+   457→            sum: mine.reduce((acc, d) => acc + (Number(d.amount) || 0), 0),
+   458→          });
+   459→        })
+   460→        .catch(() => setDonorStats("unavailable"));
+   461→    }
+   462→
+   463→    if (u.role === "VOLUNTEER") {
+   464→      get<VolunteerLite[]>("/api/volunteers")
+   465→        .then((list) => {
+   466→          const v = Array.isArray(list) ? list.find((x) => x.userId === u.id) : undefined;
+   467→          setLinkedVolunteer(v ?? null);
+   468→        })
+   469→        .catch(() => setLinkedVolunteer(null));
+   470→    }
+   471→
+   472→    if (u.role === "BENEFICIARY") {
+   473→      get<BeneficiaryLite[]>("/api/beneficiaries")
+   474→        .then((list) => {
+   475→          const b = Array.isArray(list) ? list.find((x) => x.userId === u.id) : undefined;
+   476→          setLinkedBeneficiary(b ?? null);
+   477→        })
+   478→        .catch(() => setLinkedBeneficiary(null));
+   479→    }
+   480→
+   481→    // Activity count from the newest log pool (capped at 500 by the API).
+   482→    get<{ items?: Array<{ userId?: string | null }> } | Array<{ userId?: string | null }>>(
+   483→      "/api/activity-logs?limit=500"
+   484→    )
+   485→      .then((data) => {
+   486→        const list = Array.isArray(data) ? data : (data.items ?? []);
+   487→        setActivityCount(list.filter((l) => l.userId === u.id).length);
+   488→      })
+   489→      .catch(() => setActivityCount(null));
+   490→  };
+   491→
+   492→  /* --------------------------------- actions UI ------------------------------ */
+   493→
+   494→  const inlineRoleSelect = (u: UserRow) => (
+   495→    <Select
+   496→      value={u.role}
+   497→      onValueChange={(v) => {
+   498→        if (v === u.role) return;
+   499→        setRoleChange({ target: u, role: v });
+   500→      }}
+   501→    >
+   502→      <SelectTrigger
+   503→        className="h-8 w-36 text-xs"
+   504→        aria-label={`Change role for ${u.name}`}
+   505→        onClick={(e) => e.stopPropagation()}
+   506→      >
+   507→        <SelectValue />
+   508→      </SelectTrigger>
+   509→      <SelectContent onClick={(e) => e.stopPropagation()}>
+   510→        {ROLES.map((r) => (
+   511→          <SelectItem key={r} value={r}>
+   512→            {titleCase(r)}
+   513→          </SelectItem>
+   514→        ))}
+   515→      </SelectContent>
+   516→    </Select>
+   517→  );
+   518→
+   519→  const rowActions = (u: UserRow, withLabels = false) => {
+   520→    const self = isSelf(u);
+   521→    const lastAdmin = isLastAdmin(u);
+   522→    return (
+   523→      <div
+   524→        className={cn(
+   525→          "items-center",
+   526→          withLabels ? "flex flex-wrap gap-2" : "flex justify-end gap-1"
+   527→        )}
+   528→      >
+   529→        <Button
+   530→          size={withLabels ? "sm" : "icon"}
+   531→          variant="ghost"
+   532→          className={withLabels ? "" : "size-11 md:size-9"}
+   533→          aria-label={`View user ${u.name}`}
+   534→          onClick={(e) => {
+   535→            e.stopPropagation();
+   536→            openView(u);
+   537→          }}
+   538→        >
+   539→          <Eye className="size-4" />
+   540→          {withLabels && <span>View</span>}
+   541→        </Button>
+   542→        <Button
+   543→          size={withLabels ? "sm" : "icon"}
+   544→          variant="ghost"
+   545→          className={withLabels ? "" : "size-11 md:size-9"}
+   546→          aria-label={`Edit user ${u.name}`}
+   547→          onClick={(e) => {
+   548→            e.stopPropagation();
+   549→            openEdit(u);
+   550→          }}
+   551→        >
+   552→          <Pencil className="size-4" />
+   553→          {withLabels && <span>Edit</span>}
+   554→        </Button>
+   555→        <Button
+   556→          size={withLabels ? "sm" : "icon"}
+   557→          variant="ghost"
+   558→          className={cn(
+   559→            "text-red-600 hover:bg-red-500/10 hover:text-red-700",
+   560→            !withLabels && "size-11 md:size-9"
+   561→          )}
+   562→          aria-label={
+   563→            self
+   564→              ? "You cannot delete your own account"
+   565→              : lastAdmin
+   566→                ? "You cannot delete the only administrator"
+   567→                : `Delete user ${u.name}`
+   568→          }
+   569→          disabled={self || lastAdmin}
+   570→          onClick={(e) => {
+   571→            e.stopPropagation();
+   572→            setDeleteTarget(u);
+   573→          }}
+   574→        >
+   575→          <Trash2 className="size-4" />
+   576→          {withLabels && <span>Delete</span>}
+   577→        </Button>
+   578→      </div>
+   579→    );
+   580→  };
+   581→
+   582→  /* ---------------------------------- CSV ------------------------------------ */
+   583→
+   584→  const csvColumns: CsvColumn<UserRow>[] = useMemo(
+   585→    () => [
+   586→      { header: "Name", value: (u) => u.name },
+   587→      { header: "Email", value: (u) => u.email },
+   588→      { header: "Role", value: (u) => titleCase(u.role) },
+   589→      { header: "Status", value: (u) => titleCase(u.status) },
+   590→      { header: "Active", value: (u) => (u.isActive ? "Yes" : "No") },
+   591→      { header: "Phone", value: (u) => u.phone ?? "" },
+   592→      { header: "City", value: (u) => u.city ?? "" },
+   593→      { header: "PAN", value: (u) => u.pan ?? "" },
+   594→      { header: "Joined", value: (u) => formatDateTime(u.createdAt) },
+   595→    ],
+   596→    []
+   597→  );
+   598→
+   599→  /* ------------------------------- table columns ----------------------------- */
+   600→
+   601→  const columns: DataTableColumn<UserRow>[] = [
+   602→    { key: "user", header: "User" },
+   603→    { key: "role", header: "Role" },
+   604→    { key: "status", header: "Status" },
+   605→    { key: "city", header: "City", hideBelow: "md" },
+   606→    { key: "phone", header: "Phone", mono: true, hideBelow: "lg" },
+   607→    { key: "pan", header: "PAN", mono: true, hideBelow: "sm" },
+   608→    { key: "joined", header: "Joined", hideBelow: "sm" },
+   609→    { key: "actions", header: "", align: "right", className: "w-28" },
+   610→  ];
+   611→
+   612→  /* --------------------------------- render ---------------------------------- */
+   613→
+   614→  return (
+   615→    <div className="space-y-4 sm:space-y-6">
+   616→      <PageHeader
+   617→        title="Users & Roles"
+   618→        description="Manage accounts, roles and access across the trust."
+   619→        icon={<Users className="size-5" aria-hidden="true" />}
+   620→        actions={
+   621→          <>
+   622→            <Button variant="outline" onClick={() => load()} aria-label="Refresh list">
+   623→              <RefreshCw className="size-4" /> <span className="hidden sm:inline">Refresh</span>
+   624→            </Button>
+   625→            <Button onClick={() => setCreateOpen(true)} aria-label="Create new user">
+   626→              <Plus className="size-4" /> New user
+   627→            </Button>
+   628→          </>
+   629→        }
+   630→      />
+   631→
+   632→      {/* Toolbar */}
+   633→      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 lg:flex-row lg:items-center">
+   634→        <div className="relative flex-1">
+   635→          <Search
+   636→            className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+   637→            aria-hidden="true"
+   638→          />
+   639→          <Input
+   640→            value={q}
+   641→            onChange={(e) => setQ(e.target.value)}
+   642→            placeholder="Search name, email, phone or city…"
+   643→            className="pl-9"
+   644→            aria-label="Search users"
+   645→          />
+   646→        </div>
+   647→        <div className="flex flex-wrap items-center gap-2">
+   648→          <Select value={roleFilter} onValueChange={setRoleFilter}>
+   649→            <SelectTrigger className="w-full sm:w-40" aria-label="Filter by role">
+   650→              <SelectValue placeholder="All roles" />
+   651→            </SelectTrigger>
+   652→            <SelectContent>
+   653→              <SelectItem value="ALL">All roles</SelectItem>
+   654→              {ROLES.map((r) => (
+   655→                <SelectItem key={r} value={r}>
+   656→                  {titleCase(r)}
+   657→                </SelectItem>
+   658→              ))}
+   659→            </SelectContent>
+   660→          </Select>
+   661→          <Select value={statusFilter} onValueChange={setStatusFilter}>
+   662→            <SelectTrigger className="w-full sm:w-40" aria-label="Filter by status">
+   663→              <SelectValue placeholder="All statuses" />
+   664→            </SelectTrigger>
+   665→            <SelectContent>
+   666→              <SelectItem value="ALL">All statuses</SelectItem>
+   667→              {STATUSES.map((s) => (
+   668→                <SelectItem key={s} value={s}>
+   669→                  {titleCase(s)}
+   670→                </SelectItem>
+   671→              ))}
+   672→            </SelectContent>
+   673→          </Select>
+   674→          {hasFilters && (
+   675→            <Button variant="ghost" size="sm" onClick={clearFilters} aria-label="Clear filters">
+   676→              Clear
+   677→            </Button>
+   678→          )}
+   679→          <ViewSwitcher value={mode} onChange={(m: DataViewMode) => setMode(m)} />
+   680→          <ExportMenu
+   681→            columns={csvColumns}
+   682→            rows={filtered}
+   683→            filename="uar-users"
+   684→            disabled={filtered.length === 0}
+   685→          />
+   686→        </div>
+   687→        <p className="text-xs text-muted-foreground lg:ml-auto" aria-live="polite">
+   688→          {loading ? "Loading…" : `${filtered.length} of ${rows.length} users`}
+   689→        </p>
+   690→      </div>
+   691→
+   692→      {/* Table view */}
+   693→      {mode === "table" ? (
+   694→        <DataTable
+   695→          columns={columns}
+   696→          rows={paged}
+   697→          rowKey={(u) => u.id}
+   698→          loading={loading}
+   699→          skeletonRows={8}
+   700→          height="fill"
+   701→          fillOffset={300}
+   702→          onRowClick={openView}
+   703→          page={page}
+   704→          pages={pages}
+   705→          total={filtered.length}
+   706→          pageSize={pageSize}
+   707→          onPage={setPage}
+   708→          onPageSize={setPageSize}
+   709→          itemLabel="users"
+   710→          empty={
+   711→            <EmptyState
+   712→              icon={<Users className="size-6" aria-hidden="true" />}
+   713→              title="No users found"
+   714→              hint="Adjust the filters or create a new account."
+   715→            >
+   716→              {hasFilters ? (
+   717→                <Button size="sm" variant="outline" onClick={clearFilters}>
+   718→                  Clear filters
+   719→                </Button>
+   720→              ) : (
+   721→                <Button size="sm" onClick={() => setCreateOpen(true)}>
+   722→                  <Plus className="size-4" /> New user
+   723→                </Button>
+   724→              )}
+   725→            </EmptyState>
+   726→          }
+   727→        >
+   728→          {(u, col) => {
+   729→            switch (col.key) {
+   730→              case "user":
+   731→                return (
+   732→                  <div className="flex items-center gap-2.5">
+   733→                    <span
+   734→                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+   735→                      aria-hidden="true"
+   736→                    >
+   737→                      {initials(u.name)}
+   738→                    </span>
+   739→                    <div className="min-w-0">
+   740→                      <p className="truncate font-medium">
+   741→                        {u.name}
+   742→                        {isSelf(u) && (
+   743→                          <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   744→                            You
+   745→                          </span>
+   746→                        )}
+   747→                      </p>
+   748→                      <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+   749→                    </div>
+   750→                  </div>
+   751→                );
+   752→              case "role":
+   753→                return <div onClick={(e) => e.stopPropagation()}>{inlineRoleSelect(u)}</div>;
+   754→              case "status":
+   755→                return <StatusBadge status={u.status} />;
+   756→              case "city":
+   757→                return <span className="text-sm">{u.city || "—"}</span>;
+   758→              case "phone":
+   759→                return <span className="text-sm">{u.phone || "—"}</span>;
+   760→              case "pan":
+   761→                return <span className="font-mono text-xs">{u.pan || "—"}</span>;
+   762→              case "joined":
+   763→                return <span className="whitespace-nowrap text-sm">{formatDateTime(u.createdAt)}</span>;
+   764→              case "actions":
+   765→                return <div onClick={(e) => e.stopPropagation()}>{rowActions(u)}</div>;
+   766→              default:
+   767→                return null;
+   768→            }
+   769→          }}
+   770→        </DataTable>
+   771→      ) : null}
+   772→
+   773→      {/* Grid view */}
+   774→      {mode === "grid" ? (
+   775→        <div>
+   776→          {loading ? (
+   777→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   778→              {Array.from({ length: 6 }).map((_, i) => (
+   779→                <Skeleton key={i} className="h-40 rounded-xl" />
+   780→              ))}
+   781→            </div>
+   782→          ) : paged.length === 0 ? (
+   783→            <EmptyState
+   784→              icon={<Users className="size-6" aria-hidden="true" />}
+   785→              title="No users found"
+   786→              hint="Adjust the filters or create a new account."
+   787→            />
+   788→          ) : (
+   789→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   790→              {paged.map((u) => {
+   791→                const self = isSelf(u);
+   792→                return (
+   793→                  <article
+   794→                    key={u.id}
+   795→                    className="card-hover flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4"
+   796→                    onClick={() => openView(u)}
+   797→                  >
+   798→                    <div className="flex items-start justify-between gap-2">
+   799→                      <div className="flex min-w-0 items-start gap-2.5">
+   800→                        <span
+   801→                          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary"
+   802→                          aria-hidden="true"
+   803→                        >
+   804→                          {initials(u.name)}
+   805→                        </span>
+   806→                        <div className="min-w-0">
+   807→                          <p className="truncate text-sm font-semibold">
+   808→                            {u.name}
+   809→                            {self && (
+   810→                              <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   811→                                You
+   812→                              </span>
+   813→                            )}
+   814→                          </p>
+   815→                          <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+   816→                        </div>
+   817→                      </div>
+   818→                      <div onClick={(e) => e.stopPropagation()}>{rowActions(u)}</div>
+   819→                    </div>
+   820→                    <div className="flex flex-wrap items-center gap-2">
+   821→                      {inlineRoleSelect(u)}
+   822→                      <StatusBadge status={u.status} />
+   823→                    </div>
+   824→                    <p className="mt-auto text-xs text-muted-foreground">
+   825→                      {u.city ? `${u.city} · ` : ""}Joined {formatDateTime(u.createdAt)}
+   826→                    </p>
+   827→                  </article>
+   828→                );
+   829→              })}
+   830→            </div>
+   831→          )}
+   832→        </div>
+   833→      ) : null}
+   834→
+   835→      {/* List view */}
+   836→      {mode === "list" ? (
+   837→        <div className="rounded-xl border bg-card p-2">
+   838→          {loading ? (
+   839→            <div className="space-y-2 p-2">
+   840→              {Array.from({ length: 6 }).map((_, i) => (
+   841→                <Skeleton key={i} className="h-12 w-full" />
+   842→              ))}
+   843→            </div>
+   844→          ) : paged.length === 0 ? (
+   845→            <EmptyState
+   846→              icon={<Users className="size-6" aria-hidden="true" />}
+   847→              title="No users found"
+   848→              hint="Adjust the filters or create a new account."
+   849→            />
+   850→          ) : (
+   851→            <ul
+   852→              className="max-h-96 divide-y overflow-y-auto scrollbar-thin"
+   853→              aria-label="Users list"
+   854→            >
+   855→              {paged.map((u) => {
+   856→                const self = isSelf(u);
+   857→                return (
+   858→                  <li key={u.id}>
+   859→                    <div
+   860→                      role="button"
+   861→                      tabIndex={0}
+   862→                      aria-label={`View user ${u.name}`}
+   863→                      className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+   864→                      onClick={() => openView(u)}
+   865→                      onKeyDown={(e) => {
+   866→                        if (e.key === "Enter" || e.key === " ") {
+   867→                          e.preventDefault();
+   868→                          openView(u);
+   869→                        }
+   870→                      }}
+   871→                    >
+   872→                      <span
+   873→                        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+   874→                        aria-hidden="true"
+   875→                      >
+   876→                        {initials(u.name)}
+   877→                      </span>
+   878→                      <span className="min-w-0 flex-1">
+   879→                        <span className="block truncate text-sm font-medium">
+   880→                          {u.name}
+   881→                          {self && (
+   882→                            <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">
+   883→                              You
+   884→                            </span>
+   885→                          )}
+   886→                        </span>
+   887→                        <span className="block truncate text-xs text-muted-foreground">
+   888→                          {u.email} · {titleCase(u.role)} · {u.city || "—"}
+   889→                        </span>
+   890→                      </span>
+   891→                      <span className="hidden shrink-0 sm:block">
+   892→                        <StatusBadge status={u.status} />
+   893→                      </span>
+   894→                      <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
+   895→                        {rowActions(u)}
+   896→                      </span>
+   897→                    </div>
+   898→                  </li>
+   899→                );
+   900→              })}
+   901→            </ul>
+   902→          )}
+   903→        </div>
+   904→      ) : null}
+   905→
+   906→      {/* Pagination for grid/list modes (table mode paginates inside DataTable) */}
+   907→      {mode !== "table" ? (
+   908→        <PaginationBar
+   909→          page={page}
+   910→          pages={pages}
+   911→          total={filtered.length}
+   912→          onPage={setPage}
+   913→          itemLabel="users"
+   914→        />
+   915→      ) : null}
+   916→
+   917→      {/* ------------------------------ Create sheet ---------------------------- */}
+   918→      <FormSheet
+   919→        open={createOpen}
+   920→        onOpenChange={(o) => {
+   921→          if (!o && !saving) setCreateOpen(false);
+   922→        }}
+   923→        title="Create user"
+   924→        description="Add an admin, volunteer, donor or beneficiary account."
+   925→        onSubmit={submitCreate}
+   926→        submitLabel="Create user"
+   927→        loading={saving}
+   928→        size="lg"
+   929→        dirty={createDirty}
+   930→      >
+   931→        <FormSection title="Account" description="Sign-in identity — the user can change the password later.">
+   932→          <FieldGrid>
+   933→            <TextField
+   934→              label="Full name"
+   935→              required
+   936→              value={createForm.name}
+   937→              onChange={(v) => setCreateForm({ ...createForm, name: v })}
+   938→              placeholder="e.g. Ananya Rao"
+   939→            />
+   940→            <TextField
+   941→              label="Email"
+   942→              required
+   943→              inputMode="email"
+   944→              value={createForm.email}
+   945→              onChange={(v) => setCreateForm({ ...createForm, email: v })}
+   946→              placeholder="user@example.org"
+   947→            />
+   948→            <TextField
+   949→              label="Password"
+   950→              required
+   951→              type="password"
+   952→              value={createForm.password}
+   953→              onChange={(v) => setCreateForm({ ...createForm, password: v })}
+   954→              placeholder="Min 6 characters"
+   955→            />
+   956→            <SelectField
+   957→              label="Role"
+   958→              required
+   959→              value={createForm.role as (typeof ROLES)[number]}
+   960→              onChange={(v) => setCreateForm({ ...createForm, role: v })}
+   961→              options={ROLES.map((r) => ({ value: r, label: titleCase(r) }))}
+   962→            />
+   963→          </FieldGrid>
+   964→        </FormSection>
+   965→        <FormSection title="Profile" description="Optional contact details.">
+   966→          <FieldGrid>
+   967→            <TextField
+   968→              label="City"
+   969→              value={createForm.city}
+   970→              onChange={(v) => setCreateForm({ ...createForm, city: v })}
+   971→              placeholder="e.g. Bengaluru"
+   972→            />
+   973→            <TextField
+   974→              label="Phone"
+   975→              inputMode="tel"
+   976→              value={createForm.phone}
+   977→              onChange={(v) => setCreateForm({ ...createForm, phone: v })}
+   978→              placeholder="9876543210"
+   979→            />
+   980→          </FieldGrid>
+   981→        </FormSection>
+   982→      </FormSheet>
+   983→
+   984→      {/* ------------------------------- Edit sheet ----------------------------- */}
+   985→      <FormSheet
+   986→        open={editOpen}
+   987→        onOpenChange={(o) => {
+   988→          if (!o && !saving) {
+   989→            setEditOpen(false);
+   990→            setEditTarget(null);
+   991→          }
+   992→        }}
+   993→        title={editTarget ? `Edit user — ${editTarget.name}` : "Edit user"}
+   994→        description={editTarget ? `${editTarget.email} · ${titleCase(editTarget.role)}` : ""}
+   995→        onSubmit={submitEdit}
+   996→        submitLabel="Save changes"
+   997→        loading={saving}
+   998→        dirty={editDirty}
+   999→        size="lg"
+  1000→      >
+  1001→        <FormSection title="Profile" description="Identity and contact details.">
+  1002→          <FieldGrid>
+  1003→            <TextField
+  1004→              label="Full name"
+  1005→              required
+  1006→              value={editForm.name}
+  1007→              onChange={(v) => setEditForm({ ...editForm, name: v })}
+  1008→            />
+  1009→            <TextField
+  1010→              label="Email"
+  1011→              required
+  1012→              inputMode="email"
+  1013→              value={editForm.email}
+  1014→              onChange={(v) => setEditForm({ ...editForm, email: v })}
+  1015→              hint="Changing the email affects how this user signs in."
+  1016→            />
+  1017→            <TextField
+  1018→              label="Phone"
+  1019→              inputMode="tel"
+  1020→              value={editForm.phone}
+  1021→              onChange={(v) => setEditForm({ ...editForm, phone: v })}
+  1022→            />
+  1023→            <TextField
+  1024→              label="City"
+  1025→              value={editForm.city}
+  1026→              onChange={(v) => setEditForm({ ...editForm, city: v })}
+  1027→            />
+  1028→            <TextField
+  1029→              label="PAN"
+  1030→              value={editForm.pan}
+  1031→              onChange={(v) => setEditForm({ ...editForm, pan: v.toUpperCase() })}
+  1032→              placeholder="ABCDE1234F"
+  1033→              hint="Used on 80G receipts for this donor."
+  1034→            />
+  1035→          </FieldGrid>
+  1036→          <TextareaField
+  1037→            label="About"
+  1038→            value={editForm.about}
+  1039→            onChange={(v) => setEditForm({ ...editForm, about: v })}
+  1040→            placeholder="Short bio or context"
+  1041→            rows={2}
+  1042→          />
+  1043→        </FormSection>
+  1044→
+  1045→        <FormSection title="Access" description="Role, status and sign-in control.">
+  1046→          <FieldGrid>
+  1047→            <SelectField
+  1048→              label="Role"
+  1049→              required
+  1050→              value={editForm.role as (typeof ROLES)[number]}
+  1051→              onChange={(v) => setEditForm({ ...editForm, role: v })}
+  1052→              options={ROLES.map((r) => ({ value: r, label: titleCase(r) }))}
+  1053→            />
+  1054→            <SelectField
+  1055→              label="Status"
+  1056→              required
+  1057→              value={editForm.status as (typeof STATUSES)[number]}
+  1058→              onChange={(v) => setEditForm({ ...editForm, status: v })}
+  1059→              options={STATUSES.map((s) => ({ value: s, label: titleCase(s) }))}
+  1060→              hint="SUSPENDED immediately blocks sign-in for this account."
+  1061→            />
+  1062→            <SwitchField
+  1063→              label="Account active"
+  1064→              hint="Inactive accounts cannot sign in."
+  1065→              checked={editForm.isActive}
+  1066→              onChange={(v) => setEditForm({ ...editForm, isActive: v })}
+  1067→            />
+  1068→            <TextField
+  1069→              label="New password"
+  1070→              type="password"
+  1071→              value={editForm.password}
+  1072→              onChange={(v) => setEditForm({ ...editForm, password: v })}
+  1073→              placeholder="Leave blank to keep current password"
+  1074→              hint="Minimum 6 characters if set."
+  1075→            />
+  1076→          </FieldGrid>
+  1077→        </FormSection>
+  1078→      </FormSheet>
+  1079→
+  1080→      {/* ------------------------------ Detail sheet ----------------------------- */}
+  1081→      <DetailSheet
+  1082→        open={!!viewTarget}
+  1083→        onOpenChange={(o) => !o && setViewTarget(null)}
+  1084→        eyebrow="Users & Roles"
+  1085→        title={viewTarget?.name ?? "User"}
+  1086→        description={viewTarget ? `${viewTarget.email} · ${titleCase(viewTarget.role)}` : ""}
+  1087→        status={viewTarget ? <StatusBadge status={viewTarget.status} /> : undefined}
+  1088→        actions={
+  1089→          viewTarget ? (
+  1090→            <Button
+  1091→              size="sm"
+  1092→              variant="outline"
+  1093→              onClick={() => {
+  1094→                setViewTarget(null);
+  1095→                openEdit(viewTarget);
+  1096→              }}
+  1097→              aria-label="Edit this user"
+  1098→            >
+  1099→              <Pencil className="size-4" /> Edit
+  1100→            </Button>
+  1101→          ) : undefined
+  1102→        }
+  1103→      >
+  1104→        {viewTarget ? (
+  1105→          <>
+  1106→            {viewTarget.status === "SUSPENDED" ? (
+  1107→              <div
+  1108→                className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
+  1109→                role="alert"
+  1110→              >
+  1111→                <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+  1112→                <div>
+  1113→                  <p className="font-semibold">This account is suspended</p>
+  1114→                  <p className="mt-0.5 text-xs leading-relaxed">
+  1115→                    Sign-in is blocked while the status is SUSPENDED. The person cannot access any
+  1116→                    portal — restore access by setting the status back to Active in the edit sheet.
+  1117→                  </p>
+  1118→                </div>
+  1119→              </div>
+  1120→            ) : null}
+  1121→
+  1122→            <DetailSection title="Account" description="Core identity and access fields.">
+  1123→              <DetailGrid cols={2}>
+  1124→                <DataField label="Name" value={viewTarget.name} />
+  1125→                <DataField label="Email" value={viewTarget.email} copy />
+  1126→                <DataField label="Role" value={titleCase(viewTarget.role)} />
+  1127→                <DataField label="Status" value={<StatusBadge status={viewTarget.status} />} />
+  1128→                <DataField label="Active" value={viewTarget.isActive ? "Yes" : "No"} />
+  1129→                <DataField label="User ID" value={viewTarget.id} mono copy />
+  1130→              </DetailGrid>
+  1131→            </DetailSection>
+  1132→
+  1133→            <DetailSection title="Profile" description="Contact details held on the account.">
+  1134→              <DetailGrid cols={2}>
+  1135→                <DataField label="Phone" value={viewTarget.phone} copy mono />
+  1136→                <DataField label="City" value={viewTarget.city} />
+  1137→                <DataField label="PAN" value={viewTarget.pan} mono copy />
+  1138→                <DataField label="About" value={viewTarget.about} className="sm:col-span-2" />
+  1139→                <DataField
+  1140→                  label="Joined"
+  1141→                  icon={<CalendarClock className="size-3" aria-hidden="true" />}
+  1142→                  value={formatDateTime(viewTarget.createdAt)}
+  1143→                />
+  1144→                {viewTarget.updatedAt ? (
+  1145→                  <DataField label="Last updated" value={formatDateTime(viewTarget.updatedAt)} />
+  1146→                ) : null}
+  1147→              </DetailGrid>
+  1148→            </DetailSection>
+  1149→
+  1150→            <DetailSection title="Activity" description="Audit-trail entries attributed to this account.">
+  1151→              <DetailGrid cols={2}>
+  1152→                <DataField
+  1153→                  label="Logged actions"
+  1154→                  value={
+  1155→                    activityCount === null ? (
+  1156→                      <Skeleton className="h-5 w-16" />
+  1157→                    ) : (
+  1158→                      <>
+  1159→                        {activityCount}
+  1160→                        {activityCount >= 500 ? "+" : ""}
+  1161→                      </>
+  1162→                    )
+  1163→                  }
+  1164→                />
+  1165→                <DataField label="Last login" value="Not tracked" />
+  1166→              </DetailGrid>
+  1167→              <p className="mt-2 text-xs text-muted-foreground">
+  1168→                Counts come from the latest 500 audit-log entries; login timestamps are not recorded.
+  1169→              </p>
+  1170→            </DetailSection>
+  1171→
+  1172→            {viewTarget.role === "DONOR" ? (
+  1173→              <DetailSection
+  1174→                title="Giving history"
+  1175→                description="Completed donations linked to this account (latest 500 records)."
+  1176→              >
+  1177→                {donorStats === null ? (
+  1178→                  <Skeleton className="h-12 w-full" />
+  1179→                ) : donorStats === "unavailable" ? (
+  1180→                  <p className="text-sm text-muted-foreground">
+  1181→                    Donation stats are unavailable right now — try again later.
+  1182→                  </p>
+  1183→                ) : (
+  1184→                  <DetailGrid cols={2}>
+  1185→                    <DataField label="Completed donations" value={String(donorStats.count)} />
+  1186→                    <DataField
+  1187→                      label="Total given"
+  1188→                      value={
+  1189→                        donorStats.count > 0
+  1190→                          ? `₹${donorStats.sum.toLocaleString("en-IN")}`
+  1191→                          : ""
+  1192→                      }
+  1193→                    />
+  1194→                  </DetailGrid>
+  1195→                )}
+  1196→              </DetailSection>
+  1197→            ) : null}
+  1198→
+  1199→            {viewTarget.role === "VOLUNTEER" ? (
+  1200→              <DetailSection title="Volunteer record" description="Linked volunteer profile.">
+  1201→                {linkedVolunteer === null ? (
+  1202→                  <p className="text-sm text-muted-foreground">No linked volunteer profile yet.</p>
+  1203→                ) : (
+  1204→                  <DetailGrid cols={2}>
+  1205→                    <DataField label="Volunteer ID" value={linkedVolunteer.id} mono copy />
+  1206→                    <DataField label="Status" value={<StatusBadge status={linkedVolunteer.status} />} />
+  1207→                    <DataField label="Assigned area" value={linkedVolunteer.assignedArea} />
+  1208→                    <DataField label="Joined" value={formatDateTime(linkedVolunteer.joinedAt)} />
+  1209→                  </DetailGrid>
+  1210→                )}
+  1211→              </DetailSection>
+  1212→            ) : null}
+  1213→
+  1214→            {viewTarget.role === "BENEFICIARY" ? (
+  1215→              <DetailSection title="Linked case" description="Linked beneficiary case.">
+  1216→                {linkedBeneficiary === null ? (
+  1217→                  <p className="text-sm text-muted-foreground">No linked beneficiary case yet.</p>
+  1218→                ) : (
+  1219→                  <DetailGrid cols={2}>
+  1220→                    <DataField label="Case name" value={linkedBeneficiary.name} />
+  1221→                    <DataField label="Category" value={titleCase(linkedBeneficiary.category)} />
+  1222→                    <DataField
+  1223→                      label="Case status"
+  1224→                      value={<StatusBadge status={linkedBeneficiary.caseStatus ?? "INTAKE"} />}
+  1225→                    />
+  1226→                    <DataField label="City" value={linkedBeneficiary.city} />
+  1227→                  </DetailGrid>
+  1228→                )}
+  1229→              </DetailSection>
+  1230→            ) : null}
+  1231→
+  1232→            <DetailSection
+  1233→              title="Security"
+  1234→              description="Access-control reference for this account."
+  1235→            >
+  1236→              <DetailGrid cols={2}>
+  1237→                <DataField
+  1238→                  label="Password"
+  1239→                  value={viewTarget.isActive ? "Set (hashed)" : "Set (hashed) — sign-in disabled"}
+  1240→                />
+  1241→                <DataField
+  1242→                  label="Account created"
+  1243→                  icon={<CalendarClock className="size-3" aria-hidden="true" />}
+  1244→                  value={formatDateTime(viewTarget.createdAt)}
+  1245→                />
+  1246→              </DetailGrid>
+  1247→            </DetailSection>
+  1248→          </>
+  1249→        ) : null}
+  1250→      </DetailSheet>
+  1251→
+  1252→      {/* ------------------------- Role change confirm -------------------------- */}
+  1253→      <ConfirmDialog
+  1254→        open={!!roleChange}
+  1255→        onOpenChange={(o) => !o && setRoleChange(null)}
+  1256→        title="Confirm role change"
+  1257→        confirmLabel="Change role"
+  1258→        recordName={
+  1259→          roleChange
+  1260→            ? `${roleChange.target.name} · ${titleCase(roleChange.target.role)} → ${titleCase(roleChange.role)}`
+  1261→            : ""
+  1262→        }
+  1263→        description={
+  1264→          roleChange && roleChange.target.id === user?.id
+  1265→            ? "You are changing your own role — this changes your portal access immediately."
+  1266→            : "This changes portal access and permissions immediately."
+  1267→        }
+  1268→        loading={saving}
+  1269→        onConfirm={confirmRoleChange}
+  1270→      />
+  1271→
+  1272→      {/* ----------------------------- Delete confirm --------------------------- */}
+  1273→      <ConfirmDialog
+  1274→        open={!!deleteTarget}
+  1275→        onOpenChange={(o) => !o && setDeleteTarget(null)}
+  1276→        title="Delete user?"
+  1277→        confirmLabel="Delete user"
+  1278→        recordName={deleteTarget ? `${deleteTarget.name} (${deleteTarget.email})` : ""}
+  1279→        description="The account will be permanently removed. Their donations and logs stay but become unlinked. This cannot be undone."
+  1280→        loading={saving}
+  1281→        onConfirm={confirmDelete}
+  1282→      />
+  1283→    </div>
+  1284→  );
+  1285→}
+  1286→

@@ -1,0 +1,733 @@
+    70→   169→  city?: string | null;
+    71→   170→  category: string;
+    72→   171→  urgencyLevel: string;
+    73→   172→  familyMembers: number;
+    74→   173→}
+    75→   174→
+    76→   175→interface CampaignLite {
+    77→   176→  id: string;
+    78→   177→  title: string;
+    79→   178→  status: string;
+    80→   179→  targetAmount: number;
+    81→   180→  raisedAmount: number;
+    82→   181→}
+    83→   182→
+    84→   183→interface VolunteerLite {
+    85→   184→  id: string;
+    86→   185→  status: string;
+    87→   186→  assignedArea?: string | null;
+    88→   187→  user: { name: string };
+    89→   188→}
+    90→   189→
+    91→   190→interface InventoryLite {
+    92→   191→  id: string;
+    93→   192→  name: string;
+    94→   193→  unit: string;
+    95→   194→  pricePerUnit?: number | null;
+    96→   195→}
+    97→   196→
+    98→   197→interface SchoolRow {
+    99→   198→  id: string;
+   100→   199→  schoolName: string;
+   101→   200→  city?: string | null;
+   102→   201→  totalGirls: number;
+   103→   202→  visitsCount: number;
+   104→   203→  isActive: boolean;
+   105→   204→  lastVisited?: string | null;
+   106→   205→}
+   107→   206→
+   108→   207→interface ItemRow {
+   109→   208→  name: string;
+   110→   209→  qty: string;
+   111→   210→  unit: string;
+   112→   211→}
+   113→   212→
+   114→   213→interface DistForm {
+   115→   214→  type: string;
+   116→   215→  beneficiaryId: string;
+   117→   216→  volunteerId: string;
+   118→   217→  campaignId: string;
+   119→   218→  quantity: string;
+   120→   219→  value: string;
+   121→   220→  location: string;
+   122→   221→  distributedAt: string;
+   123→   222→  items: ItemRow[];
+   124→   223→  notes: string;
+   125→   224→}
+   126→   225→
+   127→   226→interface PadForm {
+   128→   227→  schoolName: string;
+   129→   228→  area: string;
+   130→   229→  girlsCount: string;
+   131→   230→  padsDistributed: string;
+   132→   231→  awarenessSession: boolean;
+   133→   232→  sessionAttendees: string;
+   134→   233→  volunteerId: string;
+   135→   234→  volunteerName: string;
+   136→   235→  distributionDate: string;
+   137→   236→  notes: string;
+   138→   237→}
+   139→   238→
+   140→   239→interface SchoolForm {
+   141→   240→  schoolName: string;
+   142→   241→  city: string;
+   143→   242→  contactPerson: string;
+   144→   243→  contactPhone: string;
+   145→   244→  totalGirls: string;
+   146→   245→}
+   147→   246→
+   148→   247→type Errors = Record<string, string | null>;
+   149→   248→type DateRange = "30" | "90" | "fy" | "all";
+   150→   249→
+   151→   250→/* ------------------------------ chip styles ------------------------------- */
+   152→   251→
+   153→   252→const TYPE_META: Record<
+   154→   253→  string,
+   155→   254→  { label: string; cls: string; icon: React.ElementType }
+   156→   255→> = {
+   157→   256→  FOOD: {
+   158→   257→    label: "Food",
+   159→   258→    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   160→   259→    icon: UtensilsCrossed,
+   161→   260→  },
+   162→   261→  SANITARY_PADS: {
+   163→   262→    label: "Sanitary Pads",
+   164→   263→    cls: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400",
+   165→   264→    icon: Sparkles,
+   166→   265→  },
+   167→   266→  MEDICAL: {
+   168→   267→    label: "Medical",
+   169→   268→    cls: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+   170→   269→    icon: Stethoscope,
+   171→   270→  },
+   172→   271→  ANIMAL_FEED: {
+   173→   272→    label: "Animal Feed",
+   174→   273→    cls: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+   175→   274→    icon: PawPrint,
+   176→   275→  },
+   177→   276→  CLOTHING: {
+   178→   277→    label: "Clothing",
+   179→   278→    cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+   180→   279→    icon: Shirt,
+   181→   280→  },
+   182→   281→  EDUCATION_MATERIAL: {
+   183→   282→    label: "Education",
+   184→   283→    cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+   185→   284→    icon: GraduationCap,
+   186→   285→  },
+   187→   286→  CASH: {
+   188→   287→    label: "Cash Support",
+   189→   288→    cls: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+   190→   289→    icon: Banknote,
+   191→   290→  },
+   192→   291→  OTHER: {
+   193→   292→    label: "Other",
+   194→   293→    cls: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+   195→   294→    icon: Package,
+   196→   295→  },
+   197→   296→};
+   198→   297→
+   199→   298→const DISTRIBUTION_TYPES = Object.keys(TYPE_META);
+   200→   299→
+   201→   300→const URGENCY_TONE: Record<string, Tone> = {
+   202→   301→  CRITICAL: "danger",
+   203→   302→  HIGH: "warning",
+   204→   303→  MEDIUM: "progress",
+   205→   304→  LOW: "success",
+   206→   305→};
+   207→   306→
+   208→   307→/** Rough field estimates so numbers feel human — clearly labelled as approximations. */
+   209→   308→const IMPACT_PER_TYPE: Record<string, (qty: number) => string> = {
+   210→   309→  FOOD: (q) =>
+   211→   310→    `≈ ${q} ration kit${q === 1 ? "" : "s"} — a family of 4 eats for ~${q * 15} days on this`,
+   212→   311→  SANITARY_PADS: (q) => {
+   213→   312→    const months = Math.floor(q / 18);
+   214→   313→    return `≈ ${q} pad${q === 1 ? "" : "s"} — ${months} girl-month${months === 1 ? "" : "s"} of protection (18 pads ≈ 1 month)`;
+   215→   314→  },
+   216→   315→  MEDICAL: (q) =>
+   217→   316→    `≈ ${q} patient-month${q === 1 ? "" : "s"} of medicine support (₹1,000 covers a month of BP/diabetes meds)`,
+   218→   317→  EDUCATION_MATERIAL: (q) =>
+   219→   318→    `≈ ${q} student${q === 1 ? "" : "s"} equipped with supplies for a term`,
+   220→   319→  CLOTHING: (q) => `≈ ${q} garment${q === 1 ? "" : "s"} to someone who needed them today`,
+   221→   320→  ANIMAL_FEED: (q) =>
+   222→   321→    `≈ ${q} street dog${q === 1 ? "" : "s"} fed for a month (₹600 ≈ 1 dog-month of feed)`,
+   223→   322→  CASH: () => "Direct cash assistance handed to the family",
+   224→   323→  OTHER: (q) => `${q} unit${q === 1 ? "" : "s"} delivered to the field`,
+   225→   324→};
+   226→   325→
+   227→   326→const RATION_KIT_COST = 650;
+   228→   327→const PADS_PER_GIRL_MONTH = 18;
+   229→   328→
+   230→   329→const NATIVE_SELECT_CLS =
+   231→   330→  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+   232→   331→
+   233→   332→const RANGE_OPTIONS: Array<{ value: DateRange; label: string }> = [
+   234→   333→  { value: "30", label: "Last 30 days" },
+   235→   334→  { value: "90", label: "Last 90 days" },
+   236→   335→  { value: "fy", label: "This financial year" },
+   237→   336→  { value: "all", label: "All time" },
+   238→   337→];
+   239→   338→
+   240→   339→const EMPTY_ITEM: ItemRow = { name: "", qty: "1", unit: "" };
+   241→   340→
+   242→   341→const EMPTY_DIST_FORM: DistForm = {
+   243→   342→  type: "FOOD",
+   244→   343→  beneficiaryId: "",
+   245→   344→  volunteerId: "",
+   246→   345→  campaignId: "",
+   247→   346→  quantity: "1",
+   248→   347→  value: "",
+   249→   348→  location: "",
+   250→   349→  distributedAt: "",
+   251→   350→  items: [{ ...EMPTY_ITEM }],
+   252→   351→  notes: "",
+   253→   352→};
+   254→   353→
+   255→   354→const EMPTY_PAD_FORM: PadForm = {
+   256→   355→  schoolName: "",
+   257→   356→  area: "",
+   258→   357→  girlsCount: "",
+   259→   358→  padsDistributed: "",
+   260→   359→  awarenessSession: false,
+   261→   360→  sessionAttendees: "",
+   262→   361→  volunteerId: "",
+   263→   362→  volunteerName: "",
+   264→   363→  distributionDate: "",
+   265→   364→  notes: "",
+   266→   365→};
+   267→   366→
+   268→   367→const EMPTY_SCHOOL_FORM: SchoolForm = {
+   269→   368→  schoolName: "",
+   270→   369→  city: "",
+   271→   370→  contactPerson: "",
+   272→   371→  contactPhone: "",
+   273→   372→  totalGirls: "",
+   274→   373→};
+   275→   374→
+   276→   375→/* -------------------------------- utilities -------------------------------- */
+   277→   376→
+   278→   377→function pad2(n: number): string {
+   279→   378→  return String(n).padStart(2, "0");
+   280→   379→}
+   281→   380→
+   282→   381→/** Local-time value for <input type="datetime-local"> */
+   283→   382→function nowLocalInput(): string {
+   284→   383→  const d = new Date();
+   285→   384→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+   286→   385→}
+   287→   386→
+   288→   387→function toLocalInput(iso: string | null | undefined): string {
+   289→   388→  if (!iso) return "";
+   290→   389→  const d = new Date(iso);
+   291→   390→  if (Number.isNaN(d.getTime())) return "";
+   292→   391→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+   293→   392→}
+   294→   393→
+   295→   394→function todayIso(): string {
+   296→   395→  const d = new Date();
+   297→   396→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+   298→   397→}
+   299→   398→
+   300→   399→/** Financial-year window (Apr → Mar) as ISO strings for API filters. */
+   301→   400→function fyRange(): { from: string; to: string } {
+   302→   401→  const now = new Date();
+   303→   402→  const y = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+   304→   403→  return { from: `${y}-04-01T00:00:00`, to: `${y + 1}-03-31T23:59:59.999` };
+   305→   404→}
+   306→   405→
+   307→   406→function rangeToParams(range: DateRange): { from?: string; to?: string } {
+   308→   407→  if (range === "all") return {};
+   309→   408→  if (range === "fy") return fyRange();
+   310→   409→  const days = range === "30" ? 30 : 90;
+   311→   410→  const from = new Date(Date.now() - days * 86_400_000);
+   312→   411→  return {
+   313→   412→    from: `${from.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}T00:00:00`,
+   314→   413→  };
+   315→   414→}
+   316→   415→
+   317→   416→interface ParsedItem {
+   318→   417→  name?: string;
+   319→   418→  qty?: number | string;
+   320→   419→  unit?: string;
+   321→   420→}
+   322→   421→
+   323→   422→function parseItems(json: string | null | undefined): ParsedItem[] {
+   324→   423→  if (!json) return [];
+   325→   424→  try {
+   326→   425→    const parsed = JSON.parse(json);
+   327→   426→    return Array.isArray(parsed) ? (parsed as ParsedItem[]) : [];
+   328→   427→  } catch {
+   329→   428→    return [];
+   330→   429→  }
+   331→   430→}
+   332→   431→
+   333→   432→function itemsSummary(json: string | null | undefined): string {
+   334→   433→  const items = parseItems(json);
+   335→   434→  if (!items.length) return "—";
+   336→   435→  return items
+   337→   436→    .map((i) => {
+   338→   437→      const name = String(i?.name ?? i ?? "").trim();
+   339→   438→      const qty = i?.qty;
+   340→   439→      const unit = i?.unit ? ` ${i.unit}` : "";
+   341→   440→      return `${name} ×${qty ?? 1}${unit}`;
+   342→   441→    })
+   343→   442→    .join(", ");
+   344→   443→}
+   345→   444→
+   346→   445→/* ---------------------------------- view ----------------------------------- */
+   347→   446→
+   348→   447→export default function DistributionsView() {
+   349→   448→  const { user } = useAuth();
+   350→   449→  const isAdmin = user?.role === "ADMIN";
+   351→   450→
+   352→   451→  /* ------------------------------- list state ------------------------------ */
+   353→   452→  const [loading, setLoading] = useState(true);
+   354→   453→  const [distRows, setDistRows] = useState<DistributionRow[]>([]);
+   355→   454→  const [distTotals, setDistTotals] = useState<DistEnvelope | null>(null);
+   356→   455→  const [padRows, setPadRows] = useState<PadDrive[]>([]);
+   357→   456→  const [padTotals, setPadTotals] = useState<PadEnvelope | null>(null);
+   358→   457→
+   359→   458→  /* FY aggregates for the KPI strip */
+   360→   459→  const [kpi, setKpi] = useState<{
+   361→   460→    count: number;
+   362→   461→    sumValue: number;
+   363→   462→    beneficiaries: number;
+   364→   463→    avgItems: number;
+   365→   464→    pads: number;
+   366→   465→    girls: number;
+   367→   466→    sessions: number;
+   368→   467→  } | null>(null);
+   369→   468→  const [kpiLoading, setKpiLoading] = useState(true);
+   370→   469→
+   371→   470→  /* supporting data for forms/detail */
+   372→   471→  const [beneficiaries, setBeneficiaries] = useState<BeneficiaryLite[]>([]);
+   373→   472→  const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+   374→   473→  const [volunteers, setVolunteers] = useState<VolunteerLite[]>([]);
+   375→   474→  const [invItems, setInvItems] = useState<InventoryLite[]>([]);
+   376→   475→  const [schools, setSchools] = useState<SchoolRow[]>([]);
+   377→   476→
+   378→   477→  /* --------------------------------- tab ---------------------------------- */
+   379→   478→  const [tab, setTab] = useState<"general" | "pads">("general");
+   380→   479→
+   381→   480→  /* --------------------------- general tab filters ------------------------- */
+   382→   481→  const [query, setQuery] = useState("");
+   383→   482→  const [appliedQuery, setAppliedQuery] = useState("");
+   384→   483→  const [typeFilter, setTypeFilter] = useState<string[]>([]);
+   385→   484→  const [range, setRange] = useState<DateRange>("all");
+   386→   485→  const [volunteerFilter, setVolunteerFilter] = useState("");
+   387→   486→  const [viewDist, setViewDist] = useViewPref("distributions");
+   388→   487→  const [page, setPage] = useState(1);
+   389→   488→  const [pageSize, setPageSize] = useState(25);
+   390→   489→
+   391→   490→  /* ------------------------------ pads filters ----------------------------- */
+   392→   491→  const [padQuery, setPadQuery] = useState("");
+   393→   492→  const [appliedPadQuery, setAppliedPadQuery] = useState("");
+   394→   493→  const [padSession, setPadSession] = useState<"all" | "yes" | "no">("all");
+   395→   494→  const [padRange, setPadRange] = useState<DateRange>("all");
+   396→   495→  const [padVolunteer, setPadVolunteer] = useState("");
+   397→   496→  const [viewPad, setViewPad] = useViewPref("pad-drives");
+   398→   497→  const [padPage, setPadPage] = useState(1);
+   399→   498→  const [padPageSize, setPadPageSize] = useState(25);
+   400→   499→
+   401→   500→  /* --------------------------- general forms/sheets ------------------------ */
+   402→   501→  const [detail, setDetail] = useState<DistributionRow | null>(null);
+   403→   502→  const [distOpen, setDistOpen] = useState(false);
+   404→   503→  const [editingDist, setEditingDist] = useState<DistributionRow | null>(null);
+   405→   504→  const [distForm, setDistForm] = useState<DistForm>(EMPTY_DIST_FORM);
+   406→   505→  const [distSnapshot, setDistSnapshot] = useState<DistForm>(EMPTY_DIST_FORM);
+   407→   506→  const [distErrors, setDistErrors] = useState<Errors>({});
+   408→   507→  const [benQuery, setBenQuery] = useState("");
+   409→   508→  const [savingDist, setSavingDist] = useState(false);
+   410→   509→  const [deleteTarget, setDeleteTarget] = useState<DistributionRow | null>(null);
+   411→   510→  const [deletingDist, setDeletingDist] = useState(false);
+   412→   511→
+   413→   512→  /* ----------------------------- pad forms/sheets -------------------------- */
+   414→   513→  const [padDetail, setPadDetail] = useState<PadDrive | null>(null);
+   415→   514→  const [padOpen, setPadOpen] = useState(false);
+   416→   515→  const [editingPad, setEditingPad] = useState<PadDrive | null>(null);
+   417→   516→  const [padForm, setPadForm] = useState<PadForm>(EMPTY_PAD_FORM);
+   418→   517→  const [padSnapshot, setPadSnapshot] = useState<PadForm>(EMPTY_PAD_FORM);
+   419→   518→  const [padErrors, setPadErrors] = useState<Errors>({});
+   420→   519→  const [schoolDdOpen, setSchoolDdOpen] = useState(false);
+   421→   520→  const [savingPad, setSavingPad] = useState(false);
+   422→   521→  const [deletePad, setDeletePad] = useState<PadDrive | null>(null);
+   423→   522→  const [deletingPad, setDeletingPad] = useState(false);
+   424→   523→
+   425→   524→  /* ----------------------------- school registry --------------------------- */
+   426→   525→  const [schoolFormOpen, setSchoolFormOpen] = useState(false);
+   427→   526→  const [schoolForm, setSchoolForm] = useState<SchoolForm>(EMPTY_SCHOOL_FORM);
+   428→   527→  const [savingSchool, setSavingSchool] = useState(false);
+   429→   528→
+   430→   529→  /* ================================ loading ================================ */
+   431→   530→
+   432→   531→  const loadDist = useCallback(async () => {
+   433→   532→    const sp = new URLSearchParams();
+   434→   533→    if (appliedQuery.trim()) sp.set("q", appliedQuery.trim());
+   435→   534→    if (typeFilter.length) sp.set("type", typeFilter.join(","));
+   436→   535→    const r = rangeToParams(range);
+   437→   536→    if (r.from) sp.set("from", r.from);
+   438→   537→    if (r.to) sp.set("to", r.to);
+   439→   538→    if (volunteerFilter) sp.set("volunteerId", volunteerFilter);
+   440→   539→    sp.set("limit", "500");
+   441→   540→    sp.set("withTotals", "1");
+   442→   541→    try {
+   443→   542→      const data = await get<DistEnvelope>(`/api/distributions?${sp.toString()}`);
+   444→   543→      setDistRows(Array.isArray(data?.items) ? data.items : []);
+   445→   544→      setDistTotals(data ?? null);
+   446→   545→    } catch (e) {
+   447→   546→      toast.error(e instanceof Error ? e.message : "Failed to load distributions");
+   448→   547→    } finally {
+   449→   548→      setLoading(false);
+   450→   549→    }
+   451→   550→  }, [appliedQuery, typeFilter, range, volunteerFilter]);
+   452→   551→
+   453→   552→  const loadPads = useCallback(async () => {
+   454→   553→    const sp = new URLSearchParams();
+   455→   554→    if (appliedPadQuery.trim()) sp.set("q", appliedPadQuery.trim());
+   456→   555→    if (padSession !== "all") sp.set("session", padSession === "yes" ? "1" : "0");
+   457→   556→    const r = rangeToParams(padRange);
+   458→   557→    if (r.from) sp.set("from", r.from);
+   459→   558→    if (r.to) sp.set("to", r.to);
+   460→   559→    if (padVolunteer) sp.set("volunteerId", padVolunteer);
+   461→   560→    sp.set("limit", "500");
+   462→   561→    sp.set("withTotals", "1");
+   463→   562→    try {
+   464→   563→      const data = await get<PadEnvelope>(`/api/pad-distributions?${sp.toString()}`);
+   465→   564→      setPadRows(Array.isArray(data?.items) ? data.items : []);
+   466→   565→      setPadTotals(data ?? null);
+   467→   566→    } catch (e) {
+   468→   567→      toast.error(e instanceof Error ? e.message : "Failed to load pad drives");
+   469→   568→    } finally {
+   470→   569→      setLoading(false);
+   471→   570→    }
+   472→   571→  }, [appliedPadQuery, padSession, padRange, padVolunteer]);
+   473→   572→
+   474→   573→  const loadKpis = useCallback(async () => {
+   475→   574→    const { from, to } = fyRange();
+   476→   575→    const results = await Promise.allSettled([
+   477→   576→      get<DistEnvelope>(
+   478→   577→        `/api/distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+   479→   578→      ),
+   480→   579→      get<PadEnvelope>(
+   481→   580→        `/api/pad-distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+   482→   581→      ),
+   483→   582→    ]);
+   484→   583→    const d = results[0].status === "fulfilled" ? results[0].value : null;
+   485→   584→    const p = results[1].status === "fulfilled" ? results[1].value : null;
+   486→   585→    setKpi({
+   487→   586→      count: d?.count ?? 0,
+   488→   587→      sumValue: d?.sumValue ?? 0,
+   489→   588→      beneficiaries: d?.beneficiariesServed ?? 0,
+   490→   589→      avgItems: d?.avgItemsPerDrive ?? 0,
+   491→   590→      pads: p?.sumPads ?? 0,
+   492→   591→      girls: p?.sumGirls ?? 0,
+   493→   592→      sessions: p?.sessions ?? 0,
+   494→   593→    });
+   495→   594→    setKpiLoading(false);
+   496→   595→  }, []);
+   497→   596→
+   498→   597→  const loadSupport = useCallback(async () => {
+   499→   598→    get<BeneficiaryLite[]>("/api/beneficiaries")
+   500→   599→      .then((rows) => setBeneficiaries(Array.isArray(rows) ? rows : []))
+   501→   600→      .catch(() => setBeneficiaries([]));
+   502→   601→    get<CampaignLite[]>("/api/campaigns?all=1")
+   503→   602→      .then((rows) => setCampaigns(Array.isArray(rows) ? rows : []))
+   504→   603→      .catch(() => setCampaigns([]));
+   505→   604→    get<InventoryLite[]>("/api/inventory")
+   506→   605→      .then((rows) => setInvItems(Array.isArray(rows) ? rows : []))
+   507→   606→      .catch(() => setInvItems([]));
+   508→   607→    get<SchoolRow[]>("/api/school-coverages")
+   509→   608→      .then((rows) => setSchools(Array.isArray(rows) ? rows : []))
+   510→   609→      .catch(() => setSchools([]));
+   511→   610→    if (isAdmin) {
+   512→   611→      get<VolunteerLite[]>("/api/volunteers")
+   513→   612→        .then((rows) => setVolunteers(Array.isArray(rows) ? rows : []))
+   514→   613→        .catch(() => setVolunteers([]));
+   515→   614→    }
+   516→   615→  }, [isAdmin]);
+   517→   616→
+   518→   617→  useEffect(() => {
+   519→   618→    void loadSupport();
+   520→   619→  }, [loadSupport]);
+   521→   620→
+   522→   621→  useEffect(() => {
+   523→   622→    void loadDist();
+   524→   623→    void loadKpis();
+   525→   624→  }, [loadDist, loadKpis]);
+   526→   625→
+   527→   626→  useEffect(() => {
+   528→   627→    void loadPads();
+   529→   628→  }, [loadPads]);
+   530→   629→
+   531→   630→  /* debounce searches */
+   532→   631→  useEffect(() => {
+   533→   632→    const t = window.setTimeout(() => {
+   534→   633→      setAppliedQuery(query);
+   535→   634→      setPage(1);
+   536→   635→    }, 300);
+   537→   636→    return () => window.clearTimeout(t);
+   538→   637→  }, [query]);
+   539→   638→
+   540→   639→  useEffect(() => {
+   541→   640→    const t = window.setTimeout(() => {
+   542→   641→      setAppliedPadQuery(padQuery);
+   543→   642→      setPadPage(1);
+   544→   643→    }, 300);
+   545→   644→    return () => window.clearTimeout(t);
+   546→   645→  }, [padQuery]);
+   547→   646→
+   548→   647→  const refreshAll = useCallback(() => {
+   549→   648→    void loadDist();
+   550→   649→    void loadPads();
+   551→   650→    void loadKpis();
+   552→   651→  }, [loadDist, loadPads, loadKpis]);
+   553→   652→
+   554→   653→  /* ============================== derived data ============================= */
+   555→   654→
+   556→   655→  const pages = Math.max(1, Math.ceil(distRows.length / pageSize));
+   557→   656→  const pageSafe = Math.min(page, pages);
+   558→   657→  const pagedDist = distRows.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
+   559→   658→
+   560→   659→  const padPages = Math.max(1, Math.ceil(padRows.length / padPageSize));
+   561→   660→  const padPageSafe = Math.min(padPage, padPages);
+   562→   661→  const pagedPads = padRows.slice(
+   563→   662→    (padPageSafe - 1) * padPageSize,
+   564→   663→    padPageSafe * padPageSize
+   565→   664→  );
+   566→   665→
+   567→   666→  const benFiltered = useMemo(() => {
+   568→   667→    const q = benQuery.trim().toLowerCase();
+   569→   668→    if (!q) return beneficiaries.slice(0, 300);
+   570→   669→    return beneficiaries
+   571→   670→      .filter(
+   572→   671→        (b) =>
+   573→   672→          b.name.toLowerCase().includes(q) || (b.city ?? "").toLowerCase().includes(q)
+   574→   673→      )
+   575→   674→      .slice(0, 300);
+   576→   675→  }, [beneficiaries, benQuery]);
+   577→   676→
+   578→   677→  const selectedBeneficiary = useMemo(
+   579→   678→    () => beneficiaries.find((b) => b.id === distForm.beneficiaryId) ?? null,
+   580→   679→    [beneficiaries, distForm.beneficiaryId]
+   581→   680→  );
+   582→   681→
+   583→   682→  const matchInventory = useCallback(
+   584→   683→    (name: string): InventoryLite | null => {
+   585→   684→      const q = name.trim().toLowerCase();
+   586→   685→      if (q.length < 2) return null;
+   587→   686→      return (
+   588→   687→        invItems.find((i) => i.name.toLowerCase() === q) ??
+   589→   688→        invItems.find((i) => i.name.toLowerCase().includes(q)) ??
+   590→   689→        null
+   591→   690→      );
+   592→   691→    },
+   593→   692→    [invItems]
+   594→   693→  );
+   595→   694→
+   596→   695→  const itemTotals = useMemo(() => {
+   597→   696→    let lines = 0;
+   598→   697→    let units = 0;
+   599→   698→    let estValue = 0;
+   600→   699→    let priced = true;
+   601→   700→    for (const it of distForm.items) {
+   602→   701→      if (!it.name.trim()) continue;
+   603→   702→      lines += 1;
+   604→   703→      const q = Number(it.qty);
+   605→   704→      if (Number.isFinite(q) && q > 0) units += q;
+   606→   705→      const inv = matchInventory(it.name);
+   607→   706→      if (inv?.pricePerUnit != null && Number.isFinite(q) && q > 0) {
+   608→   707→        estValue += inv.pricePerUnit * q;
+   609→   708→      } else if (it.name.trim()) {
+   610→   709→        priced = false;
+   611→   710→      }
+   612→   711→    }
+   613→   712→    return { lines, units, estValue, priced };
+   614→   713→  }, [distForm.items, matchInventory]);
+   615→   714→
+   616→   715→  const distValNum = Number(distForm.value);
+   617→   716→  const distQtyNum = Math.trunc(Number(distForm.quantity)) || 0;
+   618→   717→  const perUnitHint =
+   619→   718→    distForm.value.trim() !== "" && Number.isFinite(distValNum) && distQtyNum > 0
+   620→   719→      ? `≈ ${formatINR(distValNum / distQtyNum)} per unit`
+   621→   720→      : "Estimated market value — feeds exports, reports and impact stats.";
+   622→   721→
+   623→   722→  const schoolMatches = useMemo(() => {
+   624→   723→    const active = schools.filter((s) => s.isActive);
+   625→   724→    const q = padForm.schoolName.trim().toLowerCase();
+   626→   725→    if (!q) return active.slice(0, 50);
+   627→   726→    const starts = active.filter((s) => s.schoolName.toLowerCase().startsWith(q));
+   628→   727→    const rest = active.filter(
+   629→   728→      (s) =>
+   630→   729→        !s.schoolName.toLowerCase().startsWith(q) &&
+   631→   730→        s.schoolName.toLowerCase().includes(q)
+   632→   731→    );
+   633→   732→    return [...starts, ...rest].slice(0, 50);
+   634→   733→  }, [schools, padForm.schoolName]);
+   635→   734→
+   636→   735→  const schoolKnown = useMemo(
+   637→   736→    () =>
+   638→   737→      schools.some(
+   639→   738→        (s) => s.schoolName.toLowerCase() === padForm.schoolName.trim().toLowerCase()
+   640→   739→      ),
+   641→   740→    [schools, padForm.schoolName]
+   642→   741→  );
+   643→   742→
+   644→   743→  const distDirty = useMemo(
+   645→   744→    () => JSON.stringify(distForm) !== JSON.stringify(distSnapshot),
+   646→   745→    [distForm, distSnapshot]
+   647→   746→  );
+   648→   747→  const padDirty = useMemo(
+   649→   748→    () => JSON.stringify(padForm) !== JSON.stringify(padSnapshot),
+   650→   749→    [padForm, padSnapshot]
+   651→   750→  );
+   652→   751→
+   653→   752→  const distFiltersActive =
+   654→   753→    appliedQuery.trim() !== "" ||
+   655→   754→    typeFilter.length > 0 ||
+   656→   755→    range !== "all" ||
+   657→   756→    volunteerFilter !== "";
+   658→   757→  const padFiltersActive =
+   659→   758→    appliedPadQuery.trim() !== "" || padSession !== "all" || padRange !== "all" || padVolunteer !== "";
+   660→   759→
+   661→   760→  /* ============================== mutations ================================ */
+   662→   761→
+   663→   762→  const openDistCreate = () => {
+   664→   763→    const form = { ...EMPTY_DIST_FORM, distributedAt: nowLocalInput() };
+   665→   764→    setDistForm(form);
+   666→   765→    setDistSnapshot(form);
+   667→   766→    setDistErrors({});
+   668→   767→    setEditingDist(null);
+   669→   768→    setBenQuery("");
+   670→   769→    setDistOpen(true);
+   671→   770→  };
+   672→   771→
+   673→   772→  const openDistEdit = (row: DistributionRow) => {
+   674→   773→    const items = parseItems(row.items);
+   675→   774→    const form: DistForm = {
+   676→   775→      type: DISTRIBUTION_TYPES.includes(row.type) ? row.type : "OTHER",
+   677→   776→      beneficiaryId: row.beneficiaryId ?? "",
+   678→   777→      volunteerId: row.volunteerId ?? "",
+   679→   778→      campaignId: row.campaignId ?? "",
+   680→   779→      quantity: String(row.quantity ?? 1),
+   681→   780→      value: row.value != null ? String(row.value) : "",
+   682→   781→      location: row.location ?? "",
+   683→   782→      distributedAt: toLocalInput(row.distributedAt) || nowLocalInput(),
+   684→   783→      items: items.length
+   685→   784→        ? items.map((i) => ({
+   686→   785→            name: String(i?.name ?? ""),
+   687→   786→            qty: String(i?.qty ?? 1),
+   688→   787→            unit: String(i?.unit ?? ""),
+   689→   788→          }))
+   690→   789→        : [{ ...EMPTY_ITEM }],
+   691→   790→      notes: row.notes ?? "",
+   692→   791→    };
+   693→   792→    setDistForm(form);
+   694→   793→    setDistSnapshot(form);
+   695→   794→    setDistErrors({});
+   696→   795→    setEditingDist(row);
+   697→   796→    setDetail(null);
+   698→   797→    setBenQuery("");
+   699→   798→    setDistOpen(true);
+   700→   799→  };
+   701→   800→
+   702→   801→  const validateDist = (): boolean => {
+   703→   802→    const errs: Errors = {};
+   704→   803→    if (!distForm.location.trim()) errs.location = "Location is required";
+   705→   804→    const qty = Math.trunc(Number(distForm.quantity));
+   706→   805→    if (!Number.isFinite(qty) || qty < 1)
+   707→   806→      errs.quantity = "Quantity must be a whole number of at least 1";
+   708→   807→    if (distForm.value.trim() !== "") {
+   709→   808→      const v = Number(distForm.value);
+   710→   809→      if (!Number.isFinite(v) || v < 0) errs.value = "Enter a valid amount (≥ 0)";
+   711→   810→    }
+   712→   811→    const dateErr = dateRule(true)(distForm.distributedAt);
+   713→   812→    if (dateErr) errs.distributedAt = dateErr;
+   714→   813→    distForm.items.forEach((it, i) => {
+   715→   814→      if (!it.name.trim() && it.qty.trim() === "") return;
+   716→   815→      if (!it.name.trim()) {
+   717→   816→        errs[`item-${i}`] = "Item name is required";
+   718→   817→        return;
+   719→   818→      }
+   720→   819→      const q = Number(it.qty);
+   721→   820→      if (!Number.isFinite(q) || q <= 0)
+   722→   821→        errs[`item-${i}`] = "Quantity must be a positive number";
+   723→   822→    });
+   724→   823→    setDistErrors(errs);
+   725→   824→    return Object.values(errs).every((v) => !v);
+   726→   825→  };
+   727→   826→
+   728→   827→  const saveDist = async () => {
+   729→   828→    if (!validateDist()) {
+   730→   829→      toast.error("Please fix the highlighted fields");
+   731→   830→      return;
+   732→   831→    }
+   733→   832→    setSavingDist(true);
+   734→   833→    try {
+   735→   834→      const items = distForm.items
+   736→   835→        .filter((i) => i.name.trim())
+   737→   836→        .map((i) => ({
+   738→   837→          name: i.name.trim(),
+   739→   838→          qty: Number(i.qty) || 1,
+   740→   839→          ...(i.unit.trim() ? { unit: i.unit.trim() } : {}),
+   741→   840→        }));
+   742→   841→      const payload = {
+   743→   842→        type: distForm.type,
+   744→   843→        beneficiaryId: distForm.beneficiaryId || undefined,
+   745→   844→        volunteerId: distForm.volunteerId || undefined,
+   746→   845→        campaignId: distForm.campaignId || undefined,
+   747→   846→        quantity: Math.trunc(Number(distForm.quantity)),
+   748→   847→        items,
+   749→   848→        value: distForm.value === "" ? undefined : Number(distForm.value),
+   750→   849→        location: distForm.location.trim(),
+   751→   850→        distributedAt: distForm.distributedAt || undefined,
+   752→   851→        notes: distForm.notes.trim() || undefined,
+   753→   852→      };
+   754→   853→      if (editingDist) {
+   755→   854→        await patch(`/api/distributions/${editingDist.id}`, payload);
+   756→   855→        toast.success("Distribution updated");
+   757→   856→      } else {
+   758→   857→        await post("/api/distributions", payload);
+   759→   858→        toast.success("Distribution recorded");
+   760→   859→      }
+   761→   860→      setDistOpen(false);
+   762→   861→      refreshAll();
+   763→   862→    } catch (e) {
+   764→   863→      toast.error(e instanceof Error ? e.message : "Save failed");
+   765→   864→    } finally {
+   766→   865→      setSavingDist(false);
+   767→   866→    }
+   768→   867→  };
+   769→   868→
+   770→   869→  const removeDist = async () => {
+   771→   870→    if (!deleteTarget) return;
+   772→   871→    setDeletingDist(true);
+   773→   872→    const id = deleteTarget.id;
+   774→   873→    // optimistic removal
+   775→   874→    setDistRows((rows) => rows.filter((r) => r.id !== id));
+   776→   875→    setDetail(null);
+   777→   876→    try {
+   778→   877→      await del(`/api/distributions/${id}`);
+   779→   878→      toast.success("Distribution deleted");
+   780→   879→      setDeleteTarget(null);
+   781→   880→    } catch (e) {
+   782→   881→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   783→   882→    } finally {
+   784→   883→      setDeletingDist(false);
+   785→   884→      refreshAll();
+   786→   885→    }
+   787→   886→  };
+   788→   887→
+   789→   888→  const openPadCreate = () => {
+   790→   889→    const form = { ...EMPTY_PAD_FORM, distributionDate: todayIso() };
+   791→   890→    setPadForm(form);
+   792→   891→    setPadSnapshot(form);
+   793→   892→    setPadErrors({});
+   794→   893→    setEditingPad(null);
+   795→   894→    setSchoolDdOpen(false);
+   796→   895→    setPadOpen(true);
+   797→   896→  };
+   798→   897→
+   799→   898→  const openPadEdit = (row: PadDrive) => {
+   800→   899→    const form: PadForm = {
+   801→
+   802→[showing lines 100-899 of 3055; use offset=900 with limit to continue reading]

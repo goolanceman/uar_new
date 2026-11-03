@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import {
-  Activity, Ambulance, BadgeCheck, Boxes, ChevronDown, ClipboardList,
+  Activity, Ambulance, BadgeCheck, Boxes, ChartColumn, ChevronDown, ClipboardList,
   ExternalLink, FileBarChart, HeartHandshake, LayoutDashboard,
   LogIn, LogOut, Menu, Package, PawPrint, Pill, RefreshCw, Settings, ShieldCheck,
-  Sprout, TrendingUp, Users, X,
+  Sprout, TrendingUp, UserRound, Users, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -38,6 +38,8 @@ import MastersView from "@/components/admin/masters-view";
 import ReportsView from "@/components/admin/reports-view";
 import ActivityView from "@/components/admin/activity-view";
 import SettingsView from "@/components/admin/settings-view";
+import { UserProfileView } from "@/components/shared/user-profile-view";
+import { UserAnalyticsView } from "@/components/shared/user-analytics-view";
 
 const NAV = [
   {
@@ -91,6 +93,12 @@ const NAV = [
 ];
 
 type NavItem = { key: string; label: string; icon: React.ComponentType<{ className?: string }> };
+
+/** Dropdown-only destinations — never in the sidebar NAV. */
+const SPECIAL_TITLES: Record<string, string> = {
+  profile: "My profile",
+  "my-analytics": "My analytics",
+};
 
 function AdminNav({
   view,
@@ -232,7 +240,7 @@ export default function AdminApp() {
             <Menu className="size-5" />
           </Button>
           <h1 className="truncate text-sm font-semibold sm:text-base">
-            {current?.label ?? "Dashboard"}
+            {current?.label ?? SPECIAL_TITLES[view] ?? "Dashboard"}
           </h1>
           <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             <ThemeToggle align="end" />
@@ -277,6 +285,13 @@ export default function AdminApp() {
                   </span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/admin/profile")}>
+                  <UserRound className="size-4" aria-hidden="true" /> My profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/admin/my-analytics")}>
+                  <ChartColumn className="size-4" aria-hidden="true" /> My analytics
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => navigate("/")}>
                   <ExternalLink className="size-4" aria-hidden="true" /> View public site
                 </DropdownMenuItem>
@@ -313,6 +328,8 @@ export default function AdminApp() {
           {view === "reports" && <ReportsView />}
           {view === "activity" && <ActivityView />}
           {view === "settings" && <SettingsView />}
+          {view === "profile" && <UserProfileView />}
+          {view === "my-analytics" && <UserAnalyticsView />}
         </main>
 
         <footer className="mt-auto border-t bg-background px-4 py-3 text-center text-xs text-muted-foreground sm:px-6">

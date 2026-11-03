@@ -1,0 +1,702 @@
+     1→     1→   700→              </article>
+     2→     2→   701→            ))}
+     3→     3→   702→          </div>
+     4→     4→   703→        ) : (
+     5→     5→   704→          <ul className="space-y-2" aria-label="Ambulances list">
+     6→     6→   705→            {filtered.map((a) => (
+     7→     7→   706→              <li key={a.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+     8→     8→   707→                <button
+     9→     9→   708→                  type="button"
+    10→    10→   709→                  onClick={() => openDetail(a)}
+    11→    11→   710→                  className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
+    12→    12→   711→                  aria-label={`View ambulance ${a.code}`}
+    13→    13→   712→                >
+    14→    14→   713→                  <span
+    15→    15→   714→                    aria-hidden="true"
+    16→    16→   715→                    className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+    17→    17→   716→                  >
+    18→    18→   717→                    <AmbulanceIcon className="size-4" />
+    19→    19→   718→                  </span>
+    20→    20→   719→                  <span className="min-w-0 flex-1">
+    21→    21→   720→                    <span className="block truncate font-mono text-sm font-semibold">
+    22→    22→   721→                      {a.code}
+    23→    23→   722→                    </span>
+    24→    24→   723→                    <span className="block truncate text-xs text-muted-foreground">
+    25→    25→   724→                      {a.base} · {a.driverName}
+    26→    26→   725→                    </span>
+    27→    27→   726→                  </span>
+    28→    28→   727→                  <StatusBadge status={a.status} className="shrink-0" />
+    29→    29→   728→                </button>
+    30→    30→   729→                <div className="flex shrink-0 gap-0.5">{actionButtons(a)}</div>
+    31→    31→   730→              </li>
+    32→    32→   731→            ))}
+    33→    33→   732→          </ul>
+    34→    34→   733→        )}
+    35→    35→   734→      </SectionCard>
+    36→    36→   735→
+    37→    37→   736→      {/* --------------------------- ambulance form --------------------------- */}
+    38→    38→   737→      <FormSheet
+    39→    39→   738→        open={formOpen}
+    40→    40→   739→        onOpenChange={setFormOpen}
+    41→    41→   740→        title={editing ? `Edit ambulance ${editing.code}` : "Add ambulance"}
+    42→    42→   741→        description="Roster entry for the emergency fleet."
+    43→    43→   742→        submitLabel={editing ? "Save changes" : "Add ambulance"}
+    44→    44→   743→        onSubmit={save}
+    45→    45→   744→        loading={saving}
+    46→    46→   745→        dirty={dirty}
+    47→    47→   746→        size="md"
+    48→    48→   747→      >
+    49→    49→   748→        <FormSection title="Unit">
+    50→    50→   749→          <FieldGrid>
+    51→    51→   750→            <TextField
+    52→    52→   751→              label="Code"
+    53→    53→   752→              required
+    54→    54→   753→              value={form.code}
+    55→    55→   754→              onChange={(v) => setForm({ ...form, code: v.toUpperCase() })}
+    56→    56→   755→              placeholder="KA-01-UAR-101"
+    57→    57→   756→              hint="Format: KA-01-UAR-101 (state-district-UAR-unit)"
+    58→    58→   757→              error={errors.code}
+    59→    59→   758→              disabled={!!editing}
+    60→    60→   759→              className="font-mono"
+    61→    61→   760→            />
+    62→    62→   761→            <SelectField
+    63→    63→   762→              label="Type"
+    64→    64→   763→              required
+    65→    65→   764→              value={form.type}
+    66→    66→   765→              onChange={(v) => setForm({ ...form, type: v })}
+    67→    67→   766→              options={typeOptions.options}
+    68→    68→   767→            />
+    69→    69→   768→          </FieldGrid>
+    70→    70→   769→          <TextField
+    71→    71→   770→            label="Base"
+    72→    72→   771→            required
+    73→    73→   772→            value={form.base}
+    74→    74→   773→            onChange={(v) => setForm({ ...form, base: v })}
+    75→    75→   774→            placeholder="Hebbal station, Bengaluru"
+    76→    76→   775→            error={errors.base}
+    77→    77→   776→          />
+    78→    78→   777→          <FieldGrid>
+    79→    79→   778→            <TextField
+    80→    80→   779→              label="Driver name"
+    81→    81→   780→              required
+    82→    82→   781→              value={form.driverName}
+    83→    83→   782→              onChange={(v) => setForm({ ...form, driverName: v })}
+    84→    84→   783→              placeholder="Manoj Kumar"
+    85→    85→   784→              error={errors.driverName}
+    86→    86→   785→            />
+    87→    87→   786→            <TextField
+    88→    88→   787→              label="Driver phone"
+    89→    89→   788→              value={form.driverPhone}
+    90→    90→   789→              onChange={(v) => setForm({ ...form, driverPhone: v })}
+    91→    91→   790→              placeholder="9876543210"
+    92→    92→   791→              inputMode="tel"
+    93→    93→   792→              error={errors.driverPhone}
+    94→    94→   793→            />
+    95→    95→   794→          </FieldGrid>
+    96→    96→   795→        </FormSection>
+    97→    97→   796→        <FormSection
+    98→    98→   797→          title="Crew & equipment"
+    99→    99→   798→          description="Comma-separated lists — kept on the roster for dispatch context."
+   100→   100→   799→        >
+   101→   101→   800→          <TextField
+   102→   102→   801→            label="Crew"
+   103→   103→   802→            value={form.crew}
+   104→   104→   803→            onChange={(v) => setForm({ ...form, crew: v })}
+   105→   105→   804→            placeholder="Paramedic: Sunita, EMT: Rahul"
+   106→   106→   805→            hint="Separate crew members with commas."
+   107→   107→   806→          />
+   108→   108→   807→          <TextField
+   109→   109→   808→            label="Equipment"
+   110→   110→   809→            value={form.equipment}
+   111→   111→   810→            onChange={(v) => setForm({ ...form, equipment: v })}
+   112→   112→   811→            placeholder="defibrillator, oxygen, stretcher, ventilator"
+   113→   113→   812→            hint="Separate items with commas."
+   114→   114→   813→          />
+   115→   115→   814→        </FormSection>
+   116→   116→   815→      </FormSheet>
+   117→   117→   816→
+   118→   118→   817→      {/* -------------------------- ambulance detail -------------------------- */}
+   119→   119→   818→      <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+   120→   120→   819→        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
+   121→   121→   820→          {detail && (
+   122→   122→   821→            <div className="space-y-5 p-5">
+   123→   123→   822→              <SheetHeader className="p-0 text-left">
+   124→   124→   823→                <SheetTitle className="flex items-center gap-2">
+   125→   125→   824→                  <span className="font-mono">{detail.code}</span>
+   126→   126→   825→                  <StatusBadge status={detail.status} className="ml-auto" />
+   127→   127→   826→                </SheetTitle>
+   128→   128→   827→                <SheetDescription>
+   129→   129→   828→                  {labelOf(typeOptions.options, detail.type)} · {detail.base}
+   130→   130→   829→                </SheetDescription>
+   131→   131→   830→              </SheetHeader>
+   132→   132→   831→
+   133→   133→   832→              <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   134→   134→   833→                <DataField label="Code" value={detail.code} mono />
+   135→   135→   834→                <DataField label="Type" value={labelOf(typeOptions.options, detail.type)} />
+   136→   136→   835→                <DataField label="Base" value={detail.base} />
+   137→   137→   836→                <DataField label="Status" value={<StatusBadge status={detail.status} />} />
+   138→   138→   837→                <DataField label="Driver" value={detail.driverName} />
+   139→   139→   838→                <DataField label="Driver phone" value={detail.driverPhone} mono copy />
+   140→   140→   839→              </div>
+   141→   141→   840→
+   142→   142→   841→              <SectionCard title="Crew & equipment">
+   143→   143→   842→                <div className="space-y-3">
+   144→   144→   843→                  <DataField label="Crew" value={detail.crew} />
+   145→   145→   844→                  <DataField label="Equipment" value={detail.equipment} />
+   146→   146→   845→                </div>
+   147→   147→   846→              </SectionCard>
+   148→   148→   847→
+   149→   149→   848→              <SectionCard
+   150→   150→   849→                title="Mission history"
+   151→   151→   850→                description="Recent missions served by this unit"
+   152→   152→   851→                icon={<Route className="size-4" aria-hidden="true" />}
+   153→   153→   852→              >
+   154→   154→   853→                {historyLoading ? (
+   155→   155→   854→                  <div className="space-y-2" aria-busy="true">
+   156→   156→   855→                    {[0, 1].map((i) => (
+   157→   157→   856→                      <Skeleton key={i} className="h-16 rounded-lg" />
+   158→   158→   857→                    ))}
+   159→   159→   858→                  </div>
+   160→   160→   859→                ) : !history || history.length === 0 ? (
+   161→   161→   860→                  <EmptyState
+   162→   162→   861→                    icon={<Route className="size-6" aria-hidden="true" />}
+   163→   163→   862→                    title="No missions yet"
+   164→   164→   863→                    hint="This unit hasn't been dispatched recently."
+   165→   165→   864→                  />
+   166→   166→   865→                ) : (
+   167→   167→   866→                  <ul
+   168→   168→   867→                    className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+   169→   169→   868→                    aria-label="Missions served by this ambulance"
+   170→   170→   869→                  >
+   171→   171→   870→                    {history.map((m) => (
+   172→   172→   871→                      <li key={m.id} className="rounded-lg border p-3">
+   173→   173→   872→                        <div className="flex flex-wrap items-center gap-2">
+   174→   174→   873→                          <span className="font-mono text-xs font-semibold">
+   175→   175→   874→                            {m.requestRef}
+   176→   176→   875→                          </span>
+   177→   177→   876→                          <StatusBadge status={m.status} className="ml-auto" />
+   178→   178→   877→                        </div>
+   179→   179→   878→                        <p className="mt-1 flex items-center gap-1 truncate text-xs">
+   180→   180→   879→                          {m.patientName} · {m.pickup}
+   181→   181→   880→                          <ArrowRight className="size-3 shrink-0" aria-hidden="true" />
+   182→   182→   881→                          {m.destination}
+   183→   183→   882→                        </p>
+   184→   184→   883→                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+   185→   185→   884→                          {m.createdAt ? formatDateTime(m.createdAt) : "—"} · {m.progress}%
+   186→   186→   885→                        </p>
+   187→   187→   886→                      </li>
+   188→   188→   887→                    ))}
+   189→   189→   888→                  </ul>
+   190→   190→   889→                )}
+   191→   191→   890→              </SectionCard>
+   192→   192→   891→            </div>
+   193→   193→   892→          )}
+   194→   194→   893→        </SheetContent>
+   195→   195→   894→      </Sheet>
+   196→   196→   895→
+   197→   197→   896→      <ConfirmDialog
+   198→   198→   897→        open={!!deleteTarget}
+   199→   199→   898→        onOpenChange={(o) => !o && setDeleteTarget(null)}
+   200→   200→   899→        title="Remove ambulance?"
+   201→   201→   900→        recordName={deleteTarget ? `${deleteTarget.code} · ${deleteTarget.base}` : null}
+   202→   202→   901→        description="The unit is taken off the roster permanently. Missions it served keep their history."
+   203→   203→   902→        confirmLabel="Delete ambulance"
+   204→   204→   903→        loading={deleting}
+   205→   205→   904→        onConfirm={remove}
+   206→   206→   905→      />
+   207→   207→   906→    </div>
+   208→   208→   907→  );
+   209→   209→   908→}
+   210→   210→   909→
+   211→   211→   910→/* ============================== MISSIONS TAB =============================== */
+   212→   212→   911→
+   213→   213→   912→const missionsCsv: CsvColumn<Mission>[] = [
+   214→   214→   913→  { header: "Request ref", value: (m) => m.requestRef },
+   215→   215→   914→  { header: "Patient", value: (m) => m.patientName },
+   216→   216→   915→  { header: "Emergency type", value: (m) => m.emergencyType },
+   217→   217→   916→  { header: "Priority", value: (m) => m.priority },
+   218→   218→   917→  { header: "Pickup", value: (m) => m.pickup },
+   219→   219→   918→  { header: "Destination", value: (m) => m.destination },
+   220→   220→   919→  { header: "Ambulance", value: (m) => m.ambulance?.code ?? "" },
+   221→   221→   920→  { header: "ETA (min)", value: (m) => m.etaMin ?? "" },
+   222→   222→   921→  { header: "Status", value: (m) => m.status },
+   223→   223→   922→  { header: "Vehicles alerted", value: (m) => m.vehiclesAlerted },
+   224→   224→   923→  { header: "Time saved (sec)", value: (m) => m.timeSavedSec },
+   225→   225→   924→  { header: "Created", value: (m) => m.createdAt ?? "" },
+   226→   226→   925→];
+   227→   227→   926→
+   228→   228→   927→function MissionsTab() {
+   229→   229→   928→  const [missions, setMissions] = useState<Mission[]>([]);
+   230→   230→   929→  const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
+   231→   231→   930→  const [loading, setLoading] = useState(true);
+   232→   232→   931→  const [filter, setFilter] = useState("ALL");
+   233→   233→   932→  const [view, setView] = useViewPref("ambulance-missions");
+   234→   234→   933→
+   235→   235→   934→  /* create + dispatch form */
+   236→   236→   935→  const [formOpen, setFormOpen] = useState(false);
+   237→   237→   936→  const [form, setForm] = useState<MissionForm>(EMPTY_MISSION_FORM);
+   238→   238→   937→  const [initialForm, setInitialForm] = useState<MissionForm>(EMPTY_MISSION_FORM);
+   239→   239→   938→  const [missionAmbId, setMissionAmbId] = useState("");
+   240→   240→   939→  const [errors, setErrors] = useState<RuleErr>({});
+   241→   241→   940→  const [saving, setSaving] = useState(false);
+   242→   242→   941→
+   243→   243→   942→  /* dispatch existing */
+   244→   244→   943→  const [dispatchTarget, setDispatchTarget] = useState<Mission | null>(null);
+   245→   245→   944→  const [dispatchAmbId, setDispatchAmbId] = useState("");
+   246→   246→   945→  const [dispatchError, setDispatchError] = useState<string | null>(null);
+   247→   247→   946→  const [dispatching, setDispatching] = useState(false);
+   248→   248→   947→
+   249→   249→   948→  /* cancel */
+   250→   250→   949→  const [cancelTarget, setCancelTarget] = useState<Mission | null>(null);
+   251→   251→   950→  const [cancelling, setCancelling] = useState(false);
+   252→   252→   951→
+   253→   253→   952→  /* detail */
+   254→   254→   953→  const [detail, setDetail] = useState<Mission | null>(null);
+   255→   255→   954→  const [events, setEvents] = useState<CorridorEventRow[]>([]);
+   256→   256→   955→  const [eventsLoading, setEventsLoading] = useState(false);
+   257→   257→   956→
+   258→   258→   957→  const emergencyOptions = useMasters("EMERGENCY_TYPE");
+   259→   259→   958→
+   260→   260→   959→  const load = useCallback(async () => {
+   261→   261→   960→    try {
+   262→   262→   961→      const [mis, amb] = await Promise.all([
+   263→   263→   962→        get<Mission[]>("/api/missions"),
+   264→   264→   963→        get<Ambulance[]>("/api/ambulances"),
+   265→   265→   964→      ]);
+   266→   266→   965→      setMissions(Array.isArray(mis) ? mis : []);
+   267→   267→   966→      setAmbulances(Array.isArray(amb) ? amb : []);
+   268→   268→   967→    } catch (e) {
+   269→   269→   968→      toast.error(e instanceof Error ? e.message : "Failed to load missions");
+   270→   270→   969→    } finally {
+   271→   271→   970→      setLoading(false);
+   272→   272→   971→    }
+   273→   273→   972→  }, []);
+   274→   274→   973→
+   275→   275→   974→  useEffect(() => {
+   276→   276→   975→    load();
+   277→   277→   976→  }, [load]);
+   278→   278→   977→
+   279→   279→   978→  const filteredMissions = useMemo(
+   280→   280→   979→    () => (filter === "ALL" ? missions : missions.filter((m) => m.status === filter)),
+   281→   281→   980→    [missions, filter]
+   282→   282→   981→  );
+   283→   283→   982→
+   284→   284→   983→  const availableAmbulances = useMemo(
+   285→   285→   984→    () => ambulances.filter((a) => a.status === "AVAILABLE"),
+   286→   286→   985→    [ambulances]
+   287→   287→   986→  );
+   288→   288→   987→
+   289→   289→   988→  const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
+   290→   290→   989→
+   291→   291→   990→  /* ------------------------------- actions -------------------------------- */
+   292→   292→   991→
+   293→   293→   992→  const openCreate = () => {
+   294→   294→   993→    setForm(EMPTY_MISSION_FORM);
+   295→   295→   994→    setInitialForm(EMPTY_MISSION_FORM);
+   296→   296→   995→    setMissionAmbId("");
+   297→   297→   996→    setErrors({});
+   298→   298→   997→    setFormOpen(true);
+   299→   299→   998→  };
+   300→   300→   999→
+   301→   301→  1000→  const openDispatch = (m: Mission) => {
+   302→   302→  1001→    setDispatchTarget(m);
+   303→   303→  1002→    setDispatchAmbId("");
+   304→   304→  1003→    setDispatchError(null);
+   305→   305→  1004→  };
+   306→   306→  1005→
+   307→   307→  1006→  const saveMission = async () => {
+   308→   308→  1007→    const errs = collectErrors(
+   309→   309→  1008→      ["patientName", required("Patient name")(form.patientName)],
+   310→   310→  1009→      ["contact", phoneRule()(form.contact)],
+   311→   311→  1010→      ["pickup", required("Pickup location")(form.pickup)],
+   312→   312→  1011→      ["destination", required("Destination")(form.destination)]
+   313→   313→  1012→    );
+   314→   314→  1013→    if (errs) {
+   315→   315→  1014→      setErrors(errs);
+   316→   316→  1015→      return;
+   317→   317→  1016→    }
+   318→   318→  1017→    setErrors({});
+   319→   319→  1018→    setSaving(true);
+   320→   320→  1019→    try {
+   321→   321→  1020→      const created = await post<{ id: string; requestRef: string }>("/api/missions", {
+   322→   322→  1021→        patientName: form.patientName.trim(),
+   323→   323→  1022→        contact: form.contact.trim(),
+   324→   324→  1023→        emergencyType: form.emergencyType,
+   325→   325→  1024→        priority: form.priority,
+   326→   326→  1025→        pickup: form.pickup.trim(),
+   327→   327→  1026→        destination: form.destination.trim(),
+   328→   328→  1027→        route: form.route
+   329→   329→  1028→          .filter((s) => s.name.trim())
+   330→   330→  1029→          .map((s) => ({
+   331→   331→  1030→            name: s.name.trim(),
+   332→   332→  1031→            congestion: s.congestion,
+   333→   333→  1032→            lengthKm: Number(s.lengthKm) || 0,
+   334→   334→  1033→          })),
+   335→   335→  1034→      });
+   336→   336→  1035→      if (missionAmbId) {
+   337→   337→  1036→        await patch(`/api/missions/${created.id}`, {
+   338→   338→  1037→          action: "dispatch",
+   339→   339→  1038→          ambulanceId: missionAmbId,
+   340→   340→  1039→        });
+   341→   341→  1040→        const amb = ambulances.find((a) => a.id === missionAmbId);
+   342→   342→  1041→        toast.success(`${created.requestRef} created & dispatched with ${amb?.code ?? "ambulance"} — green corridor armed`);
+   343→   343→  1042→      } else {
+   344→   344→  1043→        toast.success(`${created.requestRef} logged — awaiting dispatch`);
+   345→   345→  1044→      }
+   346→   346→  1045→      setFormOpen(false);
+   347→   347→  1046→      load();
+   348→   348→  1047→    } catch (e) {
+   349→   349→  1048→      toast.error(e instanceof Error ? e.message : "Create failed");
+   350→   350→  1049→    } finally {
+   351→   351→  1050→      setSaving(false);
+   352→   352→  1051→    }
+   353→   353→  1052→  };
+   354→   354→  1053→
+   355→   355→  1054→  const dispatchExisting = async () => {
+   356→   356→  1055→    if (!dispatchTarget) return;
+   357→   357→  1056→    if (!dispatchAmbId) {
+   358→   358→  1057→      setDispatchError("Select an available ambulance");
+   359→   359→  1058→      return;
+   360→   360→  1059→    }
+   361→   361→  1060→    setDispatching(true);
+   362→   362→  1061→    try {
+   363→   363→  1062→      await patch(`/api/missions/${dispatchTarget.id}`, {
+   364→   364→  1063→        action: "dispatch",
+   365→   365→  1064→        ambulanceId: dispatchAmbId,
+   366→   366→  1065→      });
+   367→   367→  1066→      const amb = ambulances.find((a) => a.id === dispatchAmbId);
+   368→   368→  1067→      toast.success(
+   369→   369→  1068→        `${dispatchTarget.requestRef} dispatched with ${amb?.code ?? "ambulance"} — green corridor armed`
+   370→   370→  1069→      );
+   371→   371→  1070→      setDispatchTarget(null);
+   372→   372→  1071→      setDetail(null);
+   373→   373→  1072→      load();
+   374→   374→  1073→    } catch (e) {
+   375→   375→  1074→      toast.error(e instanceof Error ? e.message : "Dispatch failed");
+   376→   376→  1075→    } finally {
+   377→   377→  1076→      setDispatching(false);
+   378→   378→  1077→    }
+   379→   379→  1078→  };
+   380→   380→  1079→
+   381→   381→  1080→  const runAction = async (m: Mission, action: "advance" | "complete") => {
+   382→   382→  1081→    try {
+   383→   383→  1082→      await patch(`/api/missions/${m.id}`, { action });
+   384→   384→  1083→      toast.success(
+   385→   385→  1084→        action === "advance"
+   386→   386→  1085→          ? `${m.requestRef} advanced along the corridor`
+   387→   387→  1086→          : `${m.requestRef} completed — ambulance released`
+   388→   388→  1087→      );
+   389→   389→  1088→      if (detail?.id === m.id) setDetail(null);
+   390→   390→  1089→      load();
+   391→   391→  1090→    } catch (e) {
+   392→   392→  1091→      toast.error(e instanceof Error ? e.message : "Action failed");
+   393→   393→  1092→    }
+   394→   394→  1093→  };
+   395→   395→  1094→
+   396→   396→  1095→  const cancelMission = async () => {
+   397→   397→  1096→    if (!cancelTarget) return;
+   398→   398→  1097→    setCancelling(true);
+   399→   399→  1098→    try {
+   400→   400→  1099→      await patch(`/api/missions/${cancelTarget.id}`, { action: "cancel" });
+   401→   401→  1100→      toast.success(`${cancelTarget.requestRef} cancelled — corridor disarmed`);
+   402→   402→  1101→      setCancelTarget(null);
+   403→   403→  1102→      setDetail(null);
+   404→   404→  1103→      load();
+   405→   405→  1104→    } catch (e) {
+   406→   406→  1105→      toast.error(e instanceof Error ? e.message : "Cancel failed");
+   407→   407→  1106→    } finally {
+   408→   408→  1107→      setCancelling(false);
+   409→   409→  1108→    }
+   410→   410→  1109→  };
+   411→   411→  1110→
+   412→   412→  1111→  const openDetail = (m: Mission) => {
+   413→   413→  1112→    setDetail(m);
+   414→   414→  1113→    setEventsLoading(true);
+   415→   415→  1114→    get<CorridorEventRow[]>(`/api/corridor-events?missionId=${m.id}`)
+   416→   416→  1115→      .then((rows) => setEvents(Array.isArray(rows) ? rows : []))
+   417→   417→  1116→      .catch(() => setEvents([]))
+   418→   418→  1117→      .finally(() => setEventsLoading(false));
+   419→   419→  1118→  };
+   420→   420→  1119→
+   421→   421→  1120→  /* primary next-step action for a mission */
+   422→   422→  1121→  const primaryAction = (
+   423→   423→  1122→    m: Mission
+   424→   424→  1123→  ): { label: string; run: () => void; className?: string } | null => {
+   425→   425→  1124→    if (m.status === "REQUESTED")
+   426→   426→  1125→      return { label: "Dispatch", run: () => openDispatch(m) };
+   427→   427→  1126→    if (m.status === "DISPATCHED" || m.status === "EN_ROUTE")
+   428→   428→  1127→      return { label: "Advance", run: () => void runAction(m, "advance"), className: "" };
+   429→   429→  1128→    if (m.status === "ARRIVED")
+   430→   430→  1129→      return {
+   431→   431→  1130→        label: "Complete",
+   432→   432→  1131→        run: () => void runAction(m, "complete"),
+   433→   433→  1132→        className: "bg-emerald-600 text-white hover:bg-emerald-700",
+   434→   434→  1133→      };
+   435→   435→  1134→    return null;
+   436→   436→  1135→  };
+   437→   437→  1136→
+   438→   438→  1137→  const detailRoute = useMemo(() => parseRoute(detail?.route), [detail]);
+   439→   439→  1138→
+   440→   440→  1139→  /* ------------------------------- renders -------------------------------- */
+   441→   441→  1140→
+   442→   442→  1141→  const missionCard = (m: Mission) => {
+   443→   443→  1142→    const primary = primaryAction(m);
+   444→   444→  1143→    const closed = ["COMPLETED", "CANCELLED"].includes(m.status);
+   445→   445→  1144→    return (
+   446→   446→  1145→      <article key={m.id} className="rounded-xl border p-4">
+   447→   447→  1146→        <div className="flex flex-wrap items-center gap-2">
+   448→   448→  1147→          <span className="font-mono text-sm font-semibold">{m.requestRef}</span>
+   449→   449→  1148→          <StatusBadge status={m.priority} tone={PRIORITY_TONE[m.priority] ?? "neutral"} />
+   450→   450→  1149→          <StatusBadge status={m.status} />
+   451→   451→  1150→          {m.corridorActive && (
+   452→   452→  1151→            <Badge
+   453→   453→  1152→              variant="outline"
+   454→   454→  1153→              className="border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400"
+   455→   455→  1154→            >
+   456→   456→  1155→              <Zap className="size-3" aria-hidden="true" /> Corridor active
+   457→   457→  1156→            </Badge>
+   458→   458→  1157→          )}
+   459→   459→  1158→          <span className="ml-auto text-xs text-muted-foreground">
+   460→   460→  1159→            {m.ambulance ? `${m.ambulance.code} · ${m.ambulance.driverName}` : "Unassigned"}
+   461→   461→  1160→          </span>
+   462→   462→  1161→        </div>
+   463→   463→  1162→        <p className="mt-2 text-sm font-medium">
+   464→   464→  1163→          {m.patientName} · {labelOf(emergencyOptions.options, m.emergencyType)}
+   465→   465→  1164→        </p>
+   466→   466→  1165→        <p className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+   467→   467→  1166→          {m.pickup} <ArrowRight className="inline size-3" aria-hidden="true" /> {m.destination}
+   468→   468→  1167→        </p>
+   469→   469→  1168→        <div className="mt-3 flex items-center gap-3">
+   470→   470→  1169→          <Progress
+   471→   471→  1170→            value={m.progress}
+   472→   472→  1171→            className="h-2 flex-1 [&>div]:bg-red-500"
+   473→   473→  1172→            aria-label={`Mission progress ${m.progress}%`}
+   474→   474→  1173→          />
+   475→   475→  1174→          <span className="text-xs font-medium">{m.progress}%</span>
+   476→   476→  1175→        </div>
+   477→   477→  1176→        <div className="mt-3 flex flex-wrap gap-1.5">
+   478→   478→  1177→          <Button variant="outline" size="sm" onClick={() => openDetail(m)}>
+   479→   479→  1178→            View
+   480→   480→  1179→          </Button>
+   481→   481→  1180→          {primary && (
+   482→   482→  1181→            <Button
+   483→   483→  1182→              size="sm"
+   484→   484→  1183→              variant={primary.className ? "default" : "outline"}
+   485→   485→  1184→              className={primary.className}
+   486→   486→  1185→              onClick={primary.run}
+   487→   487→  1186→            >
+   488→   488→  1187→              {primary.label}
+   489→   489→  1188→            </Button>
+   490→   490→  1189→          )}
+   491→   491→  1190→          {!closed && (
+   492→   492→  1191→            <Button
+   493→   493→  1192→              size="sm"
+   494→   494→  1193→              variant="outline"
+   495→   495→  1194→              className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+   496→   496→  1195→              onClick={() => setCancelTarget(m)}
+   497→   497→  1196→              aria-label={`Cancel mission ${m.requestRef}`}
+   498→   498→  1197→            >
+   499→   499→  1198→              <Ban className="size-3.5" aria-hidden="true" /> Cancel
+   500→   500→  1199→            </Button>
+   501→   501→  1200→          )}
+   502→   502→  1201→        </div>
+   503→   503→  1202→      </article>
+   504→   504→  1203→    );
+   505→   505→  1204→  };
+   506→   506→  1205→
+   507→   507→  1206→  return (
+   508→   508→  1207→    <div className="space-y-4">
+   509→   509→  1208→      {/* status pill filters */}
+   510→   510→  1209→      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter missions by status">
+   511→   511→  1210→        {MISSION_FILTERS.map((f) => (
+   512→   512→  1211→          <button
+   513→   513→  1212→            key={f}
+   514→   514→  1213→            type="button"
+   515→   515→  1214→            onClick={() => setFilter(f)}
+   516→   516→  1215→            aria-pressed={filter === f}
+   517→   517→  1216→            className={cn(
+   518→   518→  1217→              "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
+   519→   519→  1218→              filter === f
+   520→   520→  1219→                ? "border-primary bg-primary text-primary-foreground"
+   521→   521→  1220→                : "border-border text-muted-foreground hover:bg-accent"
+   522→   522→  1221→            )}
+   523→   523→  1222→          >
+   524→   524→  1223→            {f === "ALL" ? "All" : titleCase(f)}
+   525→   525→  1224→          </button>
+   526→   526→  1225→        ))}
+   527→   527→  1226→      </div>
+   528→   528→  1227→
+   529→   529→  1228→      <SectionCard
+   530→   530→  1229→        title="Emergency missions"
+   531→   531→  1230→        description="Live green-corridor runs with congestion-aware alerts."
+   532→   532→  1231→        icon={<Siren className="size-4" aria-hidden="true" />}
+   533→   533→  1232→        actions={
+   534→   534→  1233→          <div className="flex flex-wrap items-center gap-2">
+   535→   535→  1234→            <ViewSwitcher value={view} onChange={setView} options={["table", "list"]} />
+   536→   536→  1235→            <ExportMenu
+   537→   537→  1236→              columns={missionsCsv}
+   538→   538→  1237→              rows={filteredMissions}
+   539→   539→  1238→              filename="uar-missions"
+   540→   540→  1239→              disabled={filteredMissions.length === 0}
+   541→   541→  1240→            />
+   542→   542→  1241→            <Button size="sm" onClick={openCreate}>
+   543→   543→  1242→              <Siren className="size-4" aria-hidden="true" /> New mission
+   544→   544→  1243→            </Button>
+   545→   545→  1244→          </div>
+   546→   546→  1245→        }
+   547→   547→  1246→      >
+   548→   548→  1247→        {loading ? (
+   549→   549→  1248→          <div className="space-y-2" aria-busy="true">
+   550→   550→  1249→            {[0, 1, 2].map((i) => (
+   551→   551→  1250→              <Skeleton key={i} className="h-24 rounded-xl" />
+   552→   552→  1251→            ))}
+   553→   553→  1252→          </div>
+   554→   554→  1253→        ) : filteredMissions.length === 0 ? (
+   555→   555→  1254→          <EmptyState
+   556→   556→  1255→            icon={<Route className="size-8" aria-hidden="true" />}
+   557→   557→  1256→            title={missions.length === 0 ? "No missions yet" : "No missions match this filter"}
+   558→   558→  1257→            hint={
+   559→   559→  1258→              missions.length === 0
+   560→   560→  1259→                ? "Create a mission when an emergency request arrives, then dispatch the nearest ambulance."
+   561→   561→  1260→                : "Try another status filter."
+   562→   562→  1261→            }
+   563→   563→  1262→          >
+   564→   564→  1263→            {missions.length === 0 && (
+   565→   565→  1264→              <Button onClick={openCreate}>
+   566→   566→  1265→                <Siren className="size-4" aria-hidden="true" /> New mission
+   567→   567→  1266→              </Button>
+   568→   568→  1267→            )}
+   569→   569→  1268→          </EmptyState>
+   570→   570→  1269→        ) : view === "table" ? (
+   571→   571→  1270→          <div className="overflow-x-auto rounded-lg border">
+   572→   572→  1271→            <Table>
+   573→   573→  1272→              <TableHeader>
+   574→   574→  1273→                <TableRow>
+   575→   575→  1274→                  <TableHead>Request ref</TableHead>
+   576→   576→  1275→                  <TableHead>Patient</TableHead>
+   577→   577→  1276→                  <TableHead>Type / priority</TableHead>
+   578→   578→  1277→                  <TableHead className="min-w-44">Route</TableHead>
+   579→   579→  1278→                  <TableHead>Ambulance</TableHead>
+   580→   580→  1279→                  <TableHead>ETA</TableHead>
+   581→   581→  1280→                  <TableHead>Status</TableHead>
+   582→   582→  1281→                  <TableHead className="text-right">Actions</TableHead>
+   583→   583→  1282→                </TableRow>
+   584→   584→  1283→              </TableHeader>
+   585→   585→  1284→              <TableBody>
+   586→   586→  1285→                {filteredMissions.map((m) => {
+   587→   587→  1286→                  const primary = primaryAction(m);
+   588→   588→  1287→                  const closed = ["COMPLETED", "CANCELLED"].includes(m.status);
+   589→   589→  1288→                  return (
+   590→   590→  1289→                    <TableRow key={m.id}>
+   591→   591→  1290→                      <TableCell className="font-mono text-xs font-semibold">
+   592→   592→  1291→                        {m.requestRef}
+   593→   593→  1292→                      </TableCell>
+   594→   594→  1293→                      <TableCell>
+   595→   595→  1294→                        {m.patientName}
+   596→   596→  1295→                        <span className="block text-xs text-muted-foreground">{m.contact}</span>
+   597→   597→  1296→                      </TableCell>
+   598→   598→  1297→                      <TableCell>
+   599→   599→  1298→                        <div className="flex flex-wrap items-center gap-1.5">
+   600→   600→  1299→                          <Badge
+   601→   601→  1300→                            variant="outline"
+   602→   602→  1301→                            className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+   603→   603→  1302→                          >
+   604→   604→  1303→                            {labelOf(emergencyOptions.options, m.emergencyType)}
+   605→   605→  1304→                          </Badge>
+   606→   606→  1305→                          <StatusBadge
+   607→   607→  1306→                            status={m.priority}
+   608→   608→  1307→                            tone={PRIORITY_TONE[m.priority] ?? "neutral"}
+   609→   609→  1308→                          />
+   610→   610→  1309→                        </div>
+   611→   611→  1310→                      </TableCell>
+   612→   612→  1311→                      <TableCell className="max-w-52">
+   613→   613→  1312→                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+   614→   614→  1313→                          <span className="truncate">{m.pickup}</span>
+   615→   615→  1314→                          <ArrowRight className="size-3 shrink-0" aria-hidden="true" />
+   616→   616→  1315→                          <span className="truncate">{m.destination}</span>
+   617→   617→  1316→                        </span>
+   618→   618→  1317→                      </TableCell>
+   619→   619→  1318→                      <TableCell className="whitespace-nowrap font-mono text-xs">
+   620→   620→  1319→                        {m.ambulance ? m.ambulance.code : "—"}
+   621→   621→  1320→                      </TableCell>
+   622→   622→  1321→                      <TableCell className="whitespace-nowrap text-xs">
+   623→   623→  1322→                        {m.etaMin ? `${m.etaMin} min` : "—"}
+   624→   624→  1323→                      </TableCell>
+   625→   625→  1324→                      <TableCell>
+   626→   626→  1325→                        <span className="flex items-center gap-1">
+   627→   627→  1326→                          <StatusBadge status={m.status} />
+   628→   628→  1327→                          {m.corridorActive && (
+   629→   629→  1328→                            <span title="Green corridor active">
+   630→   630→  1329→                              <Zap
+   631→   631→  1330→                                className="size-3.5 text-red-600 dark:text-red-400"
+   632→   632→  1331→                                aria-label="Green corridor active"
+   633→   633→  1332→                              />
+   634→   634→  1333→                            </span>
+   635→   635→  1334→                          )}
+   636→   636→  1335→                        </span>
+   637→   637→  1336→                      </TableCell>
+   638→   638→  1337→                      <TableCell className="text-right">
+   639→   639→  1338→                        <div className="flex justify-end gap-1">
+   640→   640→  1339→                          {primary && (
+   641→   641→  1340→                            <Button
+   642→   642→  1341→                              size="sm"
+   643→   643→  1342→                              variant={primary.className ? "default" : "outline"}
+   644→   644→  1343→                              className={cn("h-8", primary.className)}
+   645→   645→  1344→                              onClick={primary.run}
+   646→   646→  1345→                            >
+   647→   647→  1346→                              {primary.label}
+   648→   648→  1347→                            </Button>
+   649→   649→  1348→                          )}
+   650→   650→  1349→                          <DropdownMenu>
+   651→   651→  1350→                            <DropdownMenuTrigger asChild>
+   652→   652→  1351→                              <Button
+   653→   653→  1352→                                size="icon"
+   654→   654→  1353→                                variant="ghost"
+   655→   655→  1354→                                className="size-11 md:size-8"
+   656→   656→  1355→                                aria-label={`Actions for ${m.requestRef}`}
+   657→   657→  1356→                              >
+   658→   658→  1357→                                <MoreHorizontal className="size-4" />
+   659→   659→  1358→                              </Button>
+   660→   660→  1359→                            </DropdownMenuTrigger>
+   661→   661→  1360→                            <DropdownMenuContent align="end">
+   662→   662→  1361→                              <DropdownMenuItem onSelect={() => openDetail(m)}>
+   663→   663→  1362→                                View details
+   664→   664→  1363→                              </DropdownMenuItem>
+   665→   665→  1364→                              {m.status === "REQUESTED" && (
+   666→   666→  1365→                                <DropdownMenuItem onSelect={() => openDispatch(m)}>
+   667→   667→  1366→                                  Dispatch…
+   668→   668→  1367→                                </DropdownMenuItem>
+   669→   669→  1368→                              )}
+   670→   670→  1369→                              {(m.status === "DISPATCHED" || m.status === "EN_ROUTE") && (
+   671→   671→  1370→                                <DropdownMenuItem onSelect={() => void runAction(m, "advance")}>
+   672→   672→  1371→                                  Advance
+   673→   673→  1372→                                </DropdownMenuItem>
+   674→   674→  1373→                              )}
+   675→   675→  1374→                              {m.status === "ARRIVED" && (
+   676→   676→  1375→                                <DropdownMenuItem onSelect={() => void runAction(m, "complete")}>
+   677→   677→  1376→                                  Complete
+   678→   678→  1377→                                </DropdownMenuItem>
+   679→   679→  1378→                              )}
+   680→   680→  1379→                              {!closed && (
+   681→   681→  1380→                                <>
+   682→   682→  1381→                                  <DropdownMenuSeparator />
+   683→   683→  1382→                                  <DropdownMenuItem
+   684→   684→  1383→                                    className="text-red-600 focus:text-red-700 dark:text-red-400"
+   685→   685→  1384→                                    onSelect={() => setCancelTarget(m)}
+   686→   686→  1385→                                  >
+   687→   687→  1386→                                    Cancel mission
+   688→   688→  1387→                                  </DropdownMenuItem>
+   689→   689→  1388→                                </>
+   690→   690→  1389→                              )}
+   691→   691→  1390→                            </DropdownMenuContent>
+   692→   692→  1391→                          </DropdownMenu>
+   693→   693→  1392→                        </div>
+   694→   694→  1393→                      </TableCell>
+   695→   695→  1394→                    </TableRow>
+   696→   696→  1395→                  );
+   697→   697→  1396→                })}
+   698→   698→  1397→              </TableBody>
+   699→   699→  1398→            </Table>
+   700→   700→  1399→          </div>
+   701→   701→
+   702→   702→[showing lines 700-1399 of 2116; use offset=1400 with limit to continue reading]

@@ -1,0 +1,642 @@
+  2415→                  value={
+  2416→                    padDetail.girlsCount > 0
+  2417→                      ? (Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)
+  2418→                      : null
+  2419→                  }
+  2420→                  mono
+  2421→                />
+  2422→                <DataField
+  2423→                  label="Session attendees"
+  2424→                  value={
+  2425→                    padDetail.awarenessSession
+  2426→                      ? padDetail.sessionAttendees != null
+  2427→                        ? padDetail.sessionAttendees.toLocaleString("en-IN")
+  2428→                        : "Held — count not recorded"
+  2429→                      : null
+  2430→                  }
+  2431→                />
+  2432→              </DetailGrid>
+  2433→            </DetailSection>
+  2434→
+  2435→            <DetailSection
+  2436→              title="Impact estimate"
+  2437→              description="Protection math based on 18 pads per girl-month."
+  2438→            >
+  2439→              <div className="space-y-2">
+  2440→                <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+  2441→                  <Calculator className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+  2442→                  {padDetail.padsDistributed.toLocaleString("en-IN")} pads ≈{" "}
+  2443→                  {Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH).toLocaleString("en-IN")}{" "}
+  2444→                  girl-month{Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH) === 1 ? "" : "s"} of protection
+  2445→                  {padDetail.girlsCount > 0
+  2446→                    ? ` — about ${(Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)} months per girl reached`
+  2447→                    : ""}
+  2448→                </p>
+  2449→                {padDetail.awarenessSession ? (
+  2450→                  <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+  2451→                    <Users className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+  2452→                    Menstrual-health awareness session delivered
+  2453→                    {padDetail.sessionAttendees != null
+  2454→                      ? ` to ${padDetail.sessionAttendees.toLocaleString("en-IN")} attendee${padDetail.sessionAttendees === 1 ? "" : "s"}`
+  2455→                      : ""}
+  2456→                    .
+  2457→                  </p>
+  2458→                ) : null}
+  2459→              </div>
+  2460→            </DetailSection>
+  2461→
+  2462→            {padDetail.notes ? (
+  2463→              <DetailSection title="Notes">
+  2464→                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+  2465→                  {padDetail.notes}
+  2466→                </p>
+  2467→              </DetailSection>
+  2468→            ) : null}
+  2469→          </>
+  2470→        ) : null}
+  2471→      </DetailSheet>
+  2472→
+  2473→      {/* ======================= RECORD DISTRIBUTION (FormSheet) ====================== */}
+  2474→      <FormSheet
+  2475→        open={distOpen}
+  2476→        onOpenChange={setDistOpen}
+  2477→        title={editingDist ? "Edit distribution" : "Record distribution"}
+  2478→        description={
+  2479→          editingDist
+  2480→            ? "Update the field record — changes apply immediately."
+  2481→            : "Log what was distributed, to whom, by whom, and what it was worth."
+  2482→        }
+  2483→        badge={editingDist ? <Badge variant="outline">Editing</Badge> : null}
+  2484→        onSubmit={saveDist}
+  2485→        submitLabel={editingDist ? "Save changes" : "Record distribution"}
+  2486→        loading={savingDist}
+  2487→        dirty={distDirty}
+  2488→        size="full"
+  2489→      >
+  2490→        {/* 1 — What & for whom */}
+  2491→        <FormSection title="What & for whom" description="Type, beneficiary and quantity.">
+  2492→          <FieldGrid>
+  2493→            <SelectField
+  2494→              label="Type"
+  2495→              required
+  2496→              value={distForm.type}
+  2497→              onChange={(v) => setDistForm((f) => ({ ...f, type: v }))}
+  2498→              options={DISTRIBUTION_TYPES.map((t) => ({
+  2499→                value: t,
+  2500→                label: (TYPE_META[t] ?? TYPE_META.OTHER).label,
+  2501→              }))}
+  2502→            />
+  2503→            <TextField
+  2504→              label="Quantity (units / kits)"
+  2505→              required
+  2506→              type="number"
+  2507→              min="1"
+  2508→              value={distForm.quantity}
+  2509→              onChange={(v) => setDistForm((f) => ({ ...f, quantity: v }))}
+  2510→              error={distErrors.quantity ?? null}
+  2511→            />
+  2512→          </FieldGrid>
+  2513→
+  2514→          {distForm.type === "SANITARY_PADS" ? (
+  2515→            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-pink-500/30 bg-pink-500/10 px-3 py-2.5 text-xs text-pink-700 dark:text-pink-400">
+  2516→              <Info className="size-4 shrink-0" aria-hidden="true" />
+  2517→              <span className="min-w-0 flex-1">
+  2518→                Running a school or community pad drive with an awareness session? The
+  2519→                pads tracker records girls count and sessions.
+  2520→              </span>
+  2521→              <Button
+  2522→                type="button"
+  2523→                variant="outline"
+  2524→                size="sm"
+  2525→                className="border-pink-500/40 text-pink-700 hover:bg-pink-500/10 dark:text-pink-400"
+  2526→                onClick={() => {
+  2527→                  setDistOpen(false);
+  2528→                  setTab("pads");
+  2529→                  openPadCreate();
+  2530→                }}
+  2531→              >
+  2532→                Log as Pad Drive instead
+  2533→              </Button>
+  2534→            </div>
+  2535→          ) : null}
+  2536→
+  2537→          <Field
+  2538→            label="Beneficiary"
+  2539→            hint={
+  2540→              beneficiaries.length > 0
+  2541→                ? `${beneficiaries.length} on file — filter by name or city. Leave empty for a community hand-out.`
+  2542→                : "Directory unavailable — the record will be saved as a community hand-out."
+  2543→            }
+  2544→          >
+  2545→            <div className="space-y-2">
+  2546→              <Input
+  2547→                value={benQuery}
+  2548→                onChange={(e) => setBenQuery(e.target.value)}
+  2549→                placeholder="Filter beneficiaries by name or city…"
+  2550→                aria-label="Filter beneficiary list"
+  2551→              />
+  2552→              <select
+  2553→                aria-label="Select beneficiary"
+  2554→                value={distForm.beneficiaryId}
+  2555→                onChange={(e) =>
+  2556→                  setDistForm((f) => ({ ...f, beneficiaryId: e.target.value }))
+  2557→                }
+  2558→                className={NATIVE_SELECT_CLS}
+  2559→              >
+  2560→                <option value="">Community hand-out (none)</option>
+  2561→                {benFiltered.map((b) => (
+  2562→                  <option key={b.id} value={b.id}>
+  2563→                    {b.name}
+  2564→                    {b.city ? ` — ${b.city}` : ""} · {titleCase(b.category)} ·{" "}
+  2565→                    {titleCase(b.urgencyLevel)} urgency
+  2566→                  </option>
+  2567→                ))}
+  2568→              </select>
+  2569→              {selectedBeneficiary ? (
+  2570→                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+  2571→                  <Users className="size-3.5 text-muted-foreground" aria-hidden="true" />
+  2572→                  <span className="font-medium">{selectedBeneficiary.name}</span>
+  2573→                  {urgencyBadge(selectedBeneficiary.urgencyLevel)}
+  2574→                  <span className="text-muted-foreground">
+  2575→                    {titleCase(selectedBeneficiary.category)} · family of{" "}
+  2576→                    {selectedBeneficiary.familyMembers}
+  2577→                    {selectedBeneficiary.city ? ` · ${selectedBeneficiary.city}` : ""}
+  2578→                  </span>
+  2579→                </div>
+  2580→              ) : null}
+  2581→            </div>
+  2582→          </Field>
+  2583→
+  2584→          <TextField
+  2585→            label="Estimated value (₹)"
+  2586→            prefix="₹"
+  2587→            type="number"
+  2588→            min="0"
+  2589→            value={distForm.value}
+  2590→            onChange={(v) => setDistForm((f) => ({ ...f, value: v }))}
+  2591→            error={distErrors.value ?? null}
+  2592→            hint={
+  2593→              itemTotals.estValue > 0 && distForm.value === ""
+  2594→                ? `Inventory estimate: ${formatINR(itemTotals.estValue)} — type it above to persist.`
+  2595→                : perUnitHint
+  2596→            }
+  2597→          />
+  2598→        </FormSection>
+  2599→
+  2600→        {/* 2 — Items */}
+  2601→        <FormSection
+  2602→          title="Items in this distribution"
+  2603→          description="Item-level tracking — names auto-match inventory to estimate value."
+  2604→        >
+  2605→          <div className="space-y-2">
+  2606→            <div className="flex items-center justify-between">
+  2607→              <p className="text-xs font-medium text-muted-foreground">
+  2608→                {itemTotals.lines} item line{itemTotals.lines === 1 ? "" : "s"} ·{" "}
+  2609→                {itemTotals.units.toLocaleString("en-IN")} total units
+  2610→              </p>
+  2611→              <Button
+  2612→                type="button"
+  2613→                variant="ghost"
+  2614→                size="sm"
+  2615→                onClick={() =>
+  2616→                  setDistForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))
+  2617→                }
+  2618→                aria-label="Add item row"
+  2619→              >
+  2620→                <Plus className="size-3.5" aria-hidden="true" /> Add item
+  2621→              </Button>
+  2622→            </div>
+  2623→            {distForm.items.map((item, i) => {
+  2624→              const inv = matchInventory(item.name);
+  2625→              const q = Number(item.qty);
+  2626→              const priceKnown = inv?.pricePerUnit != null && Number.isFinite(q) && q > 0;
+  2627→              return (
+  2628→                <div key={i} className="space-y-1">
+  2629→                  <div className="grid grid-cols-[1fr_76px_88px_36px] items-center gap-2">
+  2630→                    <Input
+  2631→                      value={item.name}
+  2632→                      onChange={(e) => {
+  2633→                        const v = e.target.value;
+  2634→                        setDistForm((f) => ({
+  2635→                          ...f,
+  2636→                          items: f.items.map((it, j) => (j === i ? { ...it, name: v } : it)),
+  2637→                        }));
+  2638→                      }}
+  2639→                      placeholder="Rice (5kg bags)"
+  2640→                      aria-label={`Item ${i + 1} name`}
+  2641→                    />
+  2642→                    <Input
+  2643→                      type="number"
+  2644→                      min={0}
+  2645→                      step="any"
+  2646→                      value={item.qty}
+  2647→                      onChange={(e) => {
+  2648→                        const v = e.target.value;
+  2649→                        setDistForm((f) => ({
+  2650→                          ...f,
+  2651→                          items: f.items.map((it, j) => (j === i ? { ...it, qty: v } : it)),
+  2652→                        }));
+  2653→                      }}
+  2654→                      aria-label={`Item ${i + 1} quantity`}
+  2655→                    />
+  2656→                    <Input
+  2657→                      value={item.unit}
+  2658→                      onChange={(e) => {
+  2659→                        const v = e.target.value;
+  2660→                        setDistForm((f) => ({
+  2661→                          ...f,
+  2662→                          items: f.items.map((it, j) => (j === i ? { ...it, unit: v } : it)),
+  2663→                        }));
+  2664→                      }}
+  2665→                      placeholder="kg, kits…"
+  2666→                      aria-label={`Item ${i + 1} unit`}
+  2667→                    />
+  2668→                    <Button
+  2669→                      type="button"
+  2670→                      variant="ghost"
+  2671→                      size="icon"
+  2672→                      onClick={() =>
+  2673→                        setDistForm((f) => ({
+  2674→                          ...f,
+  2675→                          items: f.items.filter((_, j) => j !== i),
+  2676→                        }))
+  2677→                      }
+  2678→                      aria-label={`Remove item ${i + 1}`}
+  2679→                      disabled={distForm.items.length <= 1}
+  2680→                    >
+  2681→                      <Trash2 className="size-4" aria-hidden="true" />
+  2682→                    </Button>
+  2683→                  </div>
+  2684→                  {itemError(distErrors, i) ? (
+  2685→                    <p className="text-xs font-medium text-destructive" role="alert">
+  2686→                      {itemError(distErrors, i)}
+  2687→                    </p>
+  2688→                  ) : null}
+  2689→                  {priceKnown ? (
+  2690→                    <p className="text-[11px] text-muted-foreground">
+  2691→                      Inventory match: {inv?.name} @ {formatINR(inv?.pricePerUnit ?? 0)}/{inv?.unit} · est{" "}
+  2692→                      {formatINR((inv?.pricePerUnit ?? 0) * q)} for {q}
+  2693→                    </p>
+  2694→                  ) : null}
+  2695→                </div>
+  2696→              );
+  2697→            })}
+  2698→          </div>
+  2699→        </FormSection>
+  2700→
+  2701→        {/* 3 — People & place */}
+  2702→        <FormSection title="People & place" description="Volunteer assignment, campaign linkage and location.">
+  2703→          {isAdmin ? (
+  2704→            <FieldGrid>
+  2705→              <SelectField
+  2706→                label="Volunteer"
+  2707→                value={distForm.volunteerId || "NONE"}
+  2708→                onChange={(v) =>
+  2709→                  setDistForm((f) => ({ ...f, volunteerId: v === "NONE" ? "" : v }))
+  2710→                }
+  2711→                options={[
+  2712→                  { value: "NONE", label: "— Not assigned —" },
+  2713→                  ...volunteers.map((v) => ({
+  2714→                    value: v.id,
+  2715→                    label: `${v.user.name}${v.assignedArea ? ` — ${v.assignedArea}` : ""}${v.status !== "ACTIVE" ? ` (${titleCase(v.status)})` : ""}`,
+  2716→                  })),
+  2717→                ]}
+  2718→              />
+  2719→              <SelectField
+  2720→                label="Campaign"
+  2721→                value={distForm.campaignId || "NONE"}
+  2722→                onChange={(v) =>
+  2723→                  setDistForm((f) => ({ ...f, campaignId: v === "NONE" ? "" : v }))
+  2724→                }
+  2725→                options={[
+  2726→                  { value: "NONE", label: "— No campaign —" },
+  2727→                  ...campaigns.map((c) => ({
+  2728→                    value: c.id,
+  2729→                    label: `${c.title}${c.status ? ` (${titleCase(c.status)})` : ""}`,
+  2730→                  })),
+  2731→                ]}
+  2732→              />
+  2733→            </FieldGrid>
+  2734→          ) : (
+  2735→            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+  2736→              <Users className="size-4 shrink-0" aria-hidden="true" />
+  2737→              This record will be attributed to your volunteer profile automatically.
+  2738→            </div>
+  2739→          )}
+  2740→          <TextField
+  2741→            label="Location"
+  2742→            required
+  2743→            value={distForm.location}
+  2744→            onChange={(v) => setDistForm((f) => ({ ...f, location: v }))}
+  2745→            error={distErrors.location ?? null}
+  2746→            placeholder="Ambedkar Nagar community hall, Bengaluru"
+  2747→          />
+  2748→        </FormSection>
+  2749→
+  2750→        {/* 4 — Notes & timing */}
+  2751→        <FormSection title="Notes & timing" description="When it happened and anything worth remembering.">
+  2752→          <TextField
+  2753→            label="Distributed on"
+  2754→            type="datetime-local"
+  2755→            value={distForm.distributedAt}
+  2756→            onChange={(v) => setDistForm((f) => ({ ...f, distributedAt: v }))}
+  2757→            error={distErrors.distributedAt ?? null}
+  2758→          />
+  2759→          <TextareaField
+  2760→            label="Notes"
+  2761→            rows={3}
+  2762→            value={distForm.notes}
+  2763→            onChange={(v) => setDistForm((f) => ({ ...f, notes: v }))}
+  2764→            placeholder="Follow-ups, community feedback, photos pending…"
+  2765→          />
+  2766→        </FormSection>
+  2767→      </FormSheet>
+  2768→
+  2769→      {/* ========================= RECORD PAD DRIVE (FormSheet) ======================== */}
+  2770→      <FormSheet
+  2771→        open={padOpen}
+  2772→        onOpenChange={setPadOpen}
+  2773→        title={editingPad ? "Edit pad drive" : "Record pad drive"}
+  2774→        description="School or community visit with pads distributed and an optional awareness session."
+  2775→        badge={editingPad ? <Badge variant="outline">Editing</Badge> : null}
+  2776→        onSubmit={savePad}
+  2777→        submitLabel={editingPad ? "Save changes" : "Record drive"}
+  2778→        loading={savingPad}
+  2779→        dirty={padDirty}
+  2780→        size="full"
+  2781→      >
+  2782→        <FormSection title="Where & when" description="Drive location and date.">
+  2783→          <FieldGrid>
+  2784→            <TextField
+  2785→              label="Area"
+  2786→              required
+  2787→              value={padForm.area}
+  2788→              onChange={(v) => setPadForm((f) => ({ ...f, area: v }))}
+  2789→              error={padErrors.area ?? null}
+  2790→              placeholder="Yelahanka, Bengaluru"
+  2791→            />
+  2792→            <TextField
+  2793→              label="Drive date"
+  2794→              type="date"
+  2795→              value={padForm.distributionDate}
+  2796→              onChange={(v) => setPadForm((f) => ({ ...f, distributionDate: v }))}
+  2797→              error={padErrors.distributionDate ?? null}
+  2798→            />
+  2799→          </FieldGrid>
+  2800→          <Field
+  2801→            label="School"
+  2802→            hint={
+  2803→              padForm.schoolName.trim() && !schoolKnown
+  2804→                ? `“${padForm.schoolName.trim()}” is new — it will be registered in the coverage registry on save.`
+  2805→                : "Type to search registered schools, or enter a new school name."
+  2806→            }
+  2807→          >
+  2808→            <div className="relative">
+  2809→              <Input
+  2810→                value={padForm.schoolName}
+  2811→                onChange={(e) => {
+  2812→                  const v = e.target.value;
+  2813→                  setPadForm((f) => ({ ...f, schoolName: v }));
+  2814→                  setSchoolDdOpen(true);
+  2815→                }}
+  2816→                onFocus={() => setSchoolDdOpen(true)}
+  2817→                onBlur={() => {
+  2818→                  window.setTimeout(() => setSchoolDdOpen(false), 120);
+  2819→                }}
+  2820→                placeholder="Type to search or add a new school"
+  2821→                aria-label="School name"
+  2822→                role="combobox"
+  2823→                aria-expanded={schoolDdOpen && schoolMatches.length > 0}
+  2824→                aria-controls="school-listbox"
+  2825→                autoComplete="off"
+  2826→              />
+  2827→              {schoolDdOpen && schoolMatches.length > 0 ? (
+  2828→                <ul
+  2829→                  id="school-listbox"
+  2830→                  role="listbox"
+  2831→                  aria-label="School suggestions"
+  2832→                  className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-md border bg-popover p-1 shadow-md scrollbar-thin"
+  2833→                >
+  2834→                  {schoolMatches.map((s) => (
+  2835→                    <li key={s.id}>
+  2836→                      <button
+  2837→                        type="button"
+  2838→                        role="option"
+  2839→                        aria-selected={padForm.schoolName === s.schoolName}
+  2840→                        onMouseDown={(e) => e.preventDefault()}
+  2841→                        onClick={() => {
+  2842→                          setPadForm((f) => ({
+  2843→                            ...f,
+  2844→                            schoolName: s.schoolName,
+  2845→                            area: f.area || (s.city ? `${s.city}` : f.area),
+  2846→                          }));
+  2847→                          setSchoolDdOpen(false);
+  2848→                        }}
+  2849→                        className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+  2850→                      >
+  2851→                        <span className="min-w-0 truncate">{s.schoolName}</span>
+  2852→                        <span className="shrink-0 text-[11px] text-muted-foreground">
+  2853→                          {s.visitsCount} visit{s.visitsCount === 1 ? "" : "s"}
+  2854→                        </span>
+  2855→                      </button>
+  2856→                    </li>
+  2857→                  ))}
+  2858→                </ul>
+  2859→              ) : null}
+  2860→            </div>
+  2861→          </Field>
+  2862→        </FormSection>
+  2863→
+  2864→        <FormSection title="Reach & session" description="Girls reached, pads handed out and awareness session.">
+  2865→          <FieldGrid>
+  2866→            <TextField
+  2867→              label="Girls reached"
+  2868→              required
+  2869→              type="number"
+  2870→              min="0"
+  2871→              value={padForm.girlsCount}
+  2872→              onChange={(v) => setPadForm((f) => ({ ...f, girlsCount: v }))}
+  2873→              error={padErrors.girlsCount ?? null}
+  2874→            />
+  2875→            <TextField
+  2876→              label="Pads distributed"
+  2877→              required
+  2878→              type="number"
+  2879→              min="0"
+  2880→              value={padForm.padsDistributed}
+  2881→              onChange={(v) => setPadForm((f) => ({ ...f, padsDistributed: v }))}
+  2882→              error={padErrors.padsDistributed ?? null}
+  2883→              hint={
+  2884→                padPerGirl != null
+  2885→                  ? `≈ ${padPerGirl} pads per girl (30 pads ≈ 2 months of protection)`
+  2886→                  : undefined
+  2887→              }
+  2888→            />
+  2889→          </FieldGrid>
+  2890→          {padGirlsNum > 0 && padPadsNum > 0 && padPadsNum < padGirlsNum ? (
+  2891→            <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+  2892→              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+  2893→              Fewer pads than girls — that&apos;s under {PADS_PER_GIRL_MONTH} pads per
+  2894→              girl. Double-check the counts before saving.
+  2895→            </p>
+  2896→          ) : null}
+  2897→          <SwitchField
+  2898→            label="Awareness session conducted"
+  2899→            hint="Menstrual health & hygiene talk."
+  2900→            checked={padForm.awarenessSession}
+  2901→            onChange={(v) => setPadForm((f) => ({ ...f, awarenessSession: v }))}
+  2902→          />
+  2903→          {padForm.awarenessSession ? (
+  2904→            <TextField
+  2905→              label="Session attendees"
+  2906→              type="number"
+  2907→              min="0"
+  2908→              value={padForm.sessionAttendees}
+  2909→              onChange={(v) => setPadForm((f) => ({ ...f, sessionAttendees: v }))}
+  2910→              error={padErrors.sessionAttendees ?? null}
+  2911→            />
+  2912→          ) : null}
+  2913→          {isAdmin ? (
+  2914→            <FieldGrid>
+  2915→              <SelectField
+  2916→                label="Volunteer"
+  2917→                value={padForm.volunteerId || "NONE"}
+  2918→                onChange={(v) =>
+  2919→                  setPadForm((f) => ({ ...f, volunteerId: v === "NONE" ? "" : v }))
+  2920→                }
+  2921→                options={[
+  2922→                  { value: "NONE", label: "— Not assigned —" },
+  2923→                  ...volunteers.map((v) => ({
+  2924→                    value: v.id,
+  2925→                    label: `${v.user.name}${v.assignedArea ? ` — ${v.assignedArea}` : ""}`,
+  2926→                  })),
+  2927→                ]}
+  2928→              />
+  2929→              <TextField
+  2930→                label="On-site volunteer name (optional)"
+  2931→                value={padForm.volunteerName}
+  2932→                onChange={(v) => setPadForm((f) => ({ ...f, volunteerName: v }))}
+  2933→                placeholder="For drives led by non-profile volunteers"
+  2934→              />
+  2935→            </FieldGrid>
+  2936→          ) : (
+  2937→            <>
+  2938→              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+  2939→                <Users className="size-4 shrink-0" aria-hidden="true" />
+  2940→                This drive will be attributed to your volunteer profile automatically.
+  2941→              </div>
+  2942→              <TextField
+  2943→                label="On-site volunteer name (optional)"
+  2944→                value={padForm.volunteerName}
+  2945→                onChange={(v) => setPadForm((f) => ({ ...f, volunteerName: v }))}
+  2946→                placeholder="If someone else led the drive on the ground"
+  2947→              />
+  2948→            </>
+  2949→          )}
+  2950→        </FormSection>
+  2951→
+  2952→        <FormSection title="Notes" description="Anything worth remembering about the visit.">
+  2953→          <TextareaField
+  2954→            label="Notes"
+  2955→            rows={3}
+  2956→            value={padForm.notes}
+  2957→            onChange={(v) => setPadForm((f) => ({ ...f, notes: v }))}
+  2958→            placeholder="School feedback, follow-up plans, session topics…"
+  2959→          />
+  2960→        </FormSection>
+  2961→      </FormSheet>
+  2962→
+  2963→      {/* ======================= REGISTER SCHOOL (FormSheet) ====================== */}
+  2964→      <FormSheet
+  2965→        open={schoolFormOpen}
+  2966→        onOpenChange={setSchoolFormOpen}
+  2967→        title="Register school"
+  2968→        description="Adds the school to the coverage registry so it appears in the drive form picker."
+  2969→        onSubmit={saveSchool}
+  2970→        submitLabel="Register"
+  2971→        loading={savingSchool}
+  2972→        dirty={schoolForm.schoolName.trim() !== "" || schoolForm.city.trim() !== ""}
+  2973→        size="sm"
+  2974→      >
+  2975→        <FormSection title="School" description="Existing schools are updated with a bumped visit count.">
+  2976→          <TextField
+  2977→            label="School name"
+  2978→            required
+  2979→            value={schoolForm.schoolName}
+  2980→            onChange={(v) => setSchoolForm({ ...schoolForm, schoolName: v })}
+  2981→            placeholder="Govt. High School, Yelahanka"
+  2982→          />
+  2983→          <FieldGrid>
+  2984→            <TextField
+  2985→              label="City"
+  2986→              value={schoolForm.city}
+  2987→              onChange={(v) => setSchoolForm({ ...schoolForm, city: v })}
+  2988→              placeholder="Bengaluru"
+  2989→            />
+  2990→            <TextField
+  2991→              label="Total girls"
+  2992→              type="number"
+  2993→              min="0"
+  2994→              value={schoolForm.totalGirls}
+  2995→              onChange={(v) => setSchoolForm({ ...schoolForm, totalGirls: v })}
+  2996→              placeholder="0"
+  2997→            />
+  2998→          </FieldGrid>
+  2999→          <FieldGrid>
+  3000→            <TextField
+  3001→              label="Contact person"
+  3002→              value={schoolForm.contactPerson}
+  3003→              onChange={(v) => setSchoolForm({ ...schoolForm, contactPerson: v })}
+  3004→              placeholder="Headmistress"
+  3005→            />
+  3006→            <TextField
+  3007→              label="Contact phone"
+  3008→              value={schoolForm.contactPhone}
+  3009→              onChange={(v) => setSchoolForm({ ...schoolForm, contactPhone: v })}
+  3010→              inputMode="tel"
+  3011→              placeholder="10-digit mobile"
+  3012→            />
+  3013→          </FieldGrid>
+  3014→        </FormSection>
+  3015→      </FormSheet>
+  3016→
+  3017→      {/* ============================ DELETE CONFIRMS =========================== */}
+  3018→      <ConfirmDialog
+  3019→        open={!!deleteTarget}
+  3020→        onOpenChange={(o) => !o && setDeleteTarget(null)}
+  3021→        title="Delete this distribution?"
+  3022→        recordName={
+  3023→          deleteTarget
+  3024→            ? `${(TYPE_META[deleteTarget.type] ?? TYPE_META.OTHER).label} × ${deleteTarget.quantity} · ${deleteTarget.location ?? "unknown location"}`
+  3025→            : null
+  3026→        }
+  3027→        description="Removes the record from beneficiary history, reports and impact stats. This cannot be undone."
+  3028→        confirmLabel="Delete"
+  3029→        loading={deletingDist}
+  3030→        onConfirm={removeDist}
+  3031→      />
+  3032→
+  3033→      <ConfirmDialog
+  3034→        open={!!deletePad}
+  3035→        onOpenChange={(o) => !o && setDeletePad(null)}
+  3036→        title="Delete this pad drive?"
+  3037→        recordName={
+  3038→          deletePad
+  3039→            ? `${deletePad.area} — ${deletePad.padsDistributed} pads, ${deletePad.girlsCount} girls`
+  3040→            : null
+  3041→        }
+  3042→        description="Removes the drive from programme totals. This cannot be undone."
+  3043→        confirmLabel="Delete"
+  3044→        loading={deletingPad}
+  3045→        onConfirm={removePad}
+  3046→      />
+  3047→    </div>
+  3048→  );
+  3049→}
+  3050→
+  3051→/** Per-item error lookup helper. */
+  3052→function itemError(errors: Errors, i: number): string | null {
+  3053→  return errors[`item-${i}`] ?? null;
+  3054→}
+
+[showing lines 2415-3054 of 3055; use offset=3055 with limit to continue reading]

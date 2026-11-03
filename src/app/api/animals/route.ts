@@ -10,7 +10,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET /api/animals?species=&status=&q= (public)
+const SPECIES = ["DOG", "CAT", "COW", "BIRD", "OTHER"];
+const GENDERS = ["MALE", "FEMALE", "UNKNOWN"];
+
+// GET /api/animals?species=&status=&q= (public) — includes each animal's pledges
 export async function GET(req: Request) {
   try {
     const sp = new URL(req.url).searchParams;
@@ -22,11 +25,20 @@ export async function GET(req: Request) {
     if (species) where.species = species;
     if (status) where.status = status;
     if (q)
-      where.OR = [{ name: { contains: q } }, { location: { contains: q } }];
+      where.OR = [
+        { name: { contains: q } },
+        { location: { contains: q } },
+        { breed: { contains: q } },
+      ];
 
     const animals = await db.animal.findMany({
       where,
       orderBy: { createdAt: "desc" },
+      include: {
+        pledges: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
     });
     return json(animals);
   } catch (e) {
@@ -52,10 +64,13 @@ export async function POST(req: Request) {
     if (!location) throw new ApiError("location is required", 400);
     if (!Number.isFinite(ageMonths) || ageMonths < 0)
       throw new ApiError("ageMonths must be 0 or more", 400);
-    if (!["DOG", "CAT", "COW", "BIRD", "OTHER"].includes(species))
-      throw new ApiError("Invalid species", 400);
-    if (!["MALE", "FEMALE", "UNKNOWN"].includes(gender))
-      throw new ApiError("Invalid gender", 400);
+    if (!SPECIES.includes(species)) throw new ApiError("Invalid species", 400);
+    if (!GENDERS.includes(gender)) throw new ApiError("Invalid gender", 400);
+    if (body.status) {
+      const status = String(body.status).trim().toUpperCase();
+      if (!["AVAILABLE", "FOSTERED", "ADOPTED", "CRITICAL"].includes(status))
+        throw new ApiError("Invalid status", 400);
+    }
 
     const animal = await db.animal.create({
       data: {
@@ -69,8 +84,11 @@ export async function POST(req: Request) {
         vaccinated: Boolean(body.vaccinated),
         sterilized: Boolean(body.sterilized),
         location,
+        status:
+          body.status ? String(body.status).trim().toUpperCase() : "AVAILABLE",
         monthlyFood: Number(body.monthlyFood ?? 0) || 0,
       },
+      include: { pledges: true },
     });
 
     await logActivity(

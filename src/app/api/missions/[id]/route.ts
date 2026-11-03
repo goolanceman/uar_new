@@ -15,16 +15,118 @@ type RouteSegment = { name: string; congestion: string; lengthKm: number };
 const randInt = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
-// PATCH /api/missions/:id (ADMIN | VOLUNTEER) — {action: dispatch|advance|complete|cancel, ambulanceId?}
+/** Canonical status flow (CANCELLED is a side-state allowed from any open state). */
+const FLOW = ["REQUESTED", "DISPATCHED", "EN_ROUTE", "ARRIVED", "COMPLETED"];
+const PROGRESS: Record<string, number> = {
+  REQUESTED: 10,
+  DISPATCHED: 40,
+  EN_ROUTE: 70,
+  ARRIVED: 95,
+  COMPLETED: 100,
+};
+
+// PATCH /api/missions/:id (ADMIN | VOLUNTEER)
+// Two compatible bodies:
+//  1. {status, progress?}            — status-stepper advance (auto progress 10/40/70/95/100)
+//  2. {action: dispatch|advance|complete|cancel, ambulanceId?} — legacy simulation flow
+//     ("dispatch" generates the 4-segment corridor + alert events, arms the corridor
+//      and flips the ambulance to ON_MISSION).
 export async function PATCH(req: Request, { params }: Ctx) {
   try {
     const session = await requireRole("ADMIN", "VOLUNTEER");
     const { id } = await params;
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const action = String(body.action ?? "").trim().toLowerCase();
 
     const mission = await db.mission.findUnique({ where: { id } });
     if (!mission) throw new ApiError("Mission not found", 404);
+
+    // ── status-stepper flow ────────────────────────────────────────────────
+    const rawStatus =
+      body.status === undefined || body.status === null
+        ? null
+        : String(body.status).trim().toUpperCase();
+
+    if (rawStatus) {
+      if (!FLOW.includes(rawStatus) && rawStatus !== "CANCELLED")
+        throw new ApiError(
+          `status must be one of ${FLOW.join(", ")} or CANCELLED`,
+          400
+        );
+      if (["COMPLETED", "CANCELLED"].includes(mission.status))
+        throw new ApiError("Mission already closed", 409);
+
+      if (rawStatus === mission.status)
+        return json({ mission: { ...mission } });
+
+      if (rawStatus === "CANCELLED") {
+        const updated = await db.mission.update({
+          where: { id },
+          data: { status: "CANCELLED", corridorActive: false },
+          include: { ambulance: true },
+        });
+        if (mission.ambulanceId) {
+          await db.ambulance.update({
+            where: { id: mission.ambulanceId },
+            data: { status: "AVAILABLE" },
+          });
+        }
+        await logActivity(
+          session.name,
+          "MISSION_CANCEL",
+          "Mission",
+          mission.requestRef,
+          session.userId
+        );
+        return json({ mission: updated });
+      }
+
+      // forward-only along the flow
+      const from = FLOW.indexOf(mission.status);
+      const to = FLOW.indexOf(rawStatus);
+      if (to !== from + 1)
+        throw new ApiError(
+          `Cannot move mission from ${mission.status} to ${rawStatus}`,
+          409
+        );
+      if (rawStatus === "DISPATCHED" && !mission.ambulanceId)
+        throw new ApiError(
+          "Assign an ambulance before dispatch (use action:dispatch)",
+          409
+        );
+
+      let progress = PROGRESS[rawStatus] ?? 0;
+      if (body.progress !== undefined) {
+        const p = Math.trunc(Number(body.progress));
+        if (Number.isFinite(p)) progress = Math.min(100, Math.max(0, p));
+      }
+
+      const updated = await db.mission.update({
+        where: { id },
+        data: {
+          status: rawStatus,
+          progress,
+          ...(rawStatus === "DISPATCHED" ? { corridorActive: true } : {}),
+        },
+        include: { ambulance: true },
+      });
+      if (rawStatus === "COMPLETED" && mission.ambulanceId) {
+        await db.ambulance.update({
+          where: { id: mission.ambulanceId },
+          data: { status: "AVAILABLE" },
+        });
+      }
+      await logActivity(
+        session.name,
+        "MISSION_STATUS",
+        "Mission",
+        `${mission.requestRef} → ${rawStatus} (${progress}%)`,
+        session.userId
+      );
+      return json({ mission: updated });
+    }
+
+    // ── legacy action flow ─────────────────────────────────────────────────
+    const action = String(body.action ?? "").trim().toLowerCase();
 
     if (action === "dispatch") {
       if (mission.status !== "REQUESTED")

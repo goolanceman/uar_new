@@ -1,14 +1,38 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+/**
+ * Ambulance & Green Corridor — the trust's emergency-response module.
+ *
+ * Tabs:
+ *  1. Fleet            — ambulance roster (DataTable + grid/list, DetailSheet,
+ *                        FormSheet with code auto-suggest, ConfirmDialog, CSV)
+ *  2. Missions         — emergency missions with status stepper, dispatch
+ *                        simulation (route + corridor events), DetailSheet with
+ *                        route timeline + alert feed
+ *  3. Corridor Events  — the V2X → cell-broadcast → mesh → FM → siren alert log
+ *  4. Analytics        — KPIs + Recharts: by emergency type, 8-week trend,
+ *                        alert fallback chain, congestion profile, top
+ *                        segments by time saved, fleet utilisation
+ *
+ * Accent: red (green-corridor programme colour) via /10 opacity variants.
+ */
+
+import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
+  Activity,
   Ambulance as AmbulanceIcon,
   ArrowRight,
   Ban,
+  BarChart3,
+  Check,
   CheckCircle2,
+  ChevronRight,
   Eye,
   Flag,
+  Gauge,
+  MapPin,
   MoreHorizontal,
+  Navigation,
   Pencil,
   Plus,
   Radio,
@@ -16,31 +40,67 @@ import {
   Route,
   Search,
   Siren,
+  Sparkles,
+  Timer,
   Trash2,
+  TrendingUp,
+  Users,
+  Waypoints,
   Zap,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import { labelOf, useMasters } from "@/hooks/use-masters";
-import { formatDateTime, formatDuration, titleCase } from "@/lib/format";
+import {
+  formatDate,
+  formatDateTime,
+  formatDuration,
+  titleCase,
+} from "@/lib/format";
+import { cn, formatNumber, timeAgo } from "@/lib/utils";
 import { phoneRule, required } from "@/lib/validators";
-import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
+import { StatusBadge, type Tone } from "@/components/shared/status-badge";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormSheet } from "@/components/shared/form-sheet";
 import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import {
+  Field,
   FieldGrid,
   FormSection,
   SelectField,
   TextField,
 } from "@/components/shared/form-fields";
-import { StatusBadge, type Tone } from "@/components/shared/status-badge";
-import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
-import { ViewSwitcher, useViewPref } from "@/components/shared/view-switcher";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
+import {
+  PaginationBar,
+  useViewPref,
+  ViewSwitcher,
+} from "@/components/shared/view-switcher";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,21 +121,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -146,6 +191,7 @@ interface SegForm {
 interface AmbForm {
   code: string;
   type: string;
+  status: string;
   base: string;
   driverName: string;
   driverPhone: string;
@@ -163,6 +209,36 @@ interface MissionForm {
   route: SegForm[];
 }
 
+/** Payload of GET /api/corridor-stats (extended; legacy keys preserved). */
+interface CorridorStats {
+  missions: { total: number; completed: number; active: number };
+  vehiclesAlerted: number;
+  timeSavedMin: number;
+  avgSavedSec: number;
+  completionRate: number;
+  byMethod: { method: string; count: number; savedSec: number }[];
+  bySegment: { segment: string; count: number; savedSec: number }[];
+  topSegments: { segment: string; count: number; savedSec: number }[];
+  byEmergencyType: { type: string; count: number }[];
+  congestionDistribution: { congestion: string; count: number }[];
+  weekly: { label: string; count: number }[];
+  fleet: {
+    total: number;
+    available: number;
+    onMission: number;
+    maintenance: number;
+    availabilityPct: number;
+  };
+  fleetUtilization: {
+    id: string;
+    code: string;
+    type: string;
+    missions: number;
+    completed: number;
+    savedSec: number;
+  }[];
+}
+
 type RuleErr = Record<string, string | undefined>;
 
 /* ------------------------------ maps & helpers ----------------------------- */
@@ -174,13 +250,30 @@ const CONGESTION_TONE: Record<string, Tone> = {
   GRIDLOCK: "danger",
 };
 
-const METHOD_TONE: Record<string, Tone> = {
-  V2X_5G: "info",
-  CELL_BROADCAST: "progress",
-  BLE_MESH: "success",
-  FM_RDS: "warning",
-  SIREN: "danger",
+/** The 5-layer fallback chain — order is part of the product story. */
+const METHODS = ["V2X_5G", "CELL_BROADCAST", "BLE_MESH", "FM_RDS", "SIREN"];
+
+const METHOD_LABEL: Record<string, string> = {
+  V2X_5G: "V2X · 5G",
+  CELL_BROADCAST: "Cell Broadcast",
+  BLE_MESH: "BLE Mesh",
+  FM_RDS: "FM / RDS",
+  SIREN: "Siren",
 };
+
+const METHOD_CHIP: Record<string, string> = {
+  V2X_5G:
+    "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+  CELL_BROADCAST:
+    "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  BLE_MESH:
+    "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  FM_RDS:
+    "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  SIREN: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
+};
+
+const CONGESTIONS = ["LOW", "MODERATE", "HEAVY", "GRIDLOCK"];
 
 const PRIORITY_TONE: Record<string, Tone> = {
   CRITICAL: "danger",
@@ -188,18 +281,39 @@ const PRIORITY_TONE: Record<string, Tone> = {
   MEDIUM: "info",
 };
 
-const METHODS = ["V2X_5G", "CELL_BROADCAST", "BLE_MESH", "FM_RDS", "SIREN"];
-const CONGESTIONS = ["LOW", "MODERATE", "HEAVY", "GRIDLOCK"];
-
-const MISSION_FILTERS = [
-  "ALL",
+const MISSION_FLOW = [
   "REQUESTED",
   "DISPATCHED",
   "EN_ROUTE",
   "ARRIVED",
   "COMPLETED",
-  "CANCELLED",
-];
+] as const;
+
+const STEP_LABEL: Record<string, string> = {
+  REQUESTED: "Requested",
+  DISPATCHED: "Dispatched",
+  EN_ROUTE: "En route",
+  ARRIVED: "Arrived",
+  COMPLETED: "Completed",
+};
+
+/** Auto progress per status (mirrors PATCH /api/missions/:id). */
+const STATUS_PROGRESS: Record<string, number> = {
+  REQUESTED: 10,
+  DISPATCHED: 40,
+  EN_ROUTE: 70,
+  ARRIVED: 95,
+  COMPLETED: 100,
+};
+
+const NEXT_STEP: Record<
+  string,
+  { label: string; status: string }
+> = {
+  DISPATCHED: { label: "Start en route", status: "EN_ROUTE" },
+  EN_ROUTE: { label: "Mark arrived", status: "ARRIVED" },
+  ARRIVED: { label: "Complete mission", status: "COMPLETED" },
+};
 
 const SEGMENT_POOL = [
   "Hebbal Flyover",
@@ -215,6 +329,7 @@ const SEGMENT_POOL = [
 const EMPTY_AMB_FORM: AmbForm = {
   code: "",
   type: "BLS",
+  status: "AVAILABLE",
   base: "",
   driverName: "",
   driverPhone: "",
@@ -245,6 +360,69 @@ const CONGESTION_OPTIONS = [
   { value: "GRIDLOCK", label: "Gridlock" },
 ];
 
+const STATUS_OPTIONS = [
+  { value: "AVAILABLE", label: "Available" },
+  { value: "ON_MISSION", label: "On mission" },
+  { value: "MAINTENANCE", label: "Maintenance" },
+];
+
+const MISSION_FILTERS = [
+  "ALL",
+  "REQUESTED",
+  "DISPATCHED",
+  "EN_ROUTE",
+  "ARRIVED",
+  "COMPLETED",
+  "CANCELLED",
+];
+
+const EMERGENCY_SHORT: Record<string, string> = {
+  CARDIAC: "Cardiac",
+  ACCIDENT: "Accident",
+  MATERNITY: "Maternity",
+  BURN: "Burn",
+  RESPIRATORY: "Respiratory",
+  TRANSFER: "Transfer",
+};
+
+/* chart palette — red-led corridor accents, no indigo/blue */
+const C_RED = "#ef4444";
+const C_ROSE = "#f43f5e";
+const C_ORANGE = "#f97316";
+const C_AMBER = "#f59e0b";
+const C_TEAL = "#14b8a6";
+const C_EMERALD = "#10b981";
+
+const CONGESTION_COLOR: Record<string, string> = {
+  LOW: C_EMERALD,
+  MODERATE: C_AMBER,
+  HEAVY: C_ORANGE,
+  GRIDLOCK: C_ROSE,
+};
+
+const METHOD_COLOR: Record<string, string> = {
+  V2X_5G: C_TEAL,
+  CELL_BROADCAST: C_EMERALD,
+  BLE_MESH: C_AMBER,
+  FM_RDS: C_ORANGE,
+  SIREN: C_RED,
+};
+
+const AXIS_TICK = { fontSize: 11, fill: "var(--muted-foreground)" };
+
+const TOOLTIP_PROPS = {
+  contentStyle: {
+    background: "var(--card)",
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    fontSize: 12,
+    color: "var(--card-foreground)",
+  },
+  labelStyle: { color: "var(--muted-foreground)", fontSize: 11 },
+  itemStyle: { color: "var(--foreground)", fontSize: 12 },
+  cursor: { fill: "var(--muted)", opacity: 0.55 },
+} as const;
+
 function parseRoute(json: string | null | undefined): RouteSeg[] {
   if (!json) return [];
   try {
@@ -265,6 +443,25 @@ function parseRoute(json: string | null | undefined): RouteSeg[] {
   }
 }
 
+/** Comma list → trimmed chips ("Defibrillator, Oxygen" → ["Defibrillator","Oxygen"]). */
+function parseList(s?: string | null): string[] {
+  if (!s) return [];
+  return s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/** Next "KA-01-UAR-10x" style code from the current roster. */
+function suggestCode(existing: { code: string }[]): string {
+  let max = 100;
+  for (const a of existing) {
+    const m = /UAR-0*(\d+)/.exec(a.code ?? "");
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `KA-01-UAR-${max + 1}`;
+}
+
 function collectErrors(
   ...pairs: [string, string | null][]
 ): RuleErr | null {
@@ -279,33 +476,373 @@ function collectErrors(
   return any ? out : null;
 }
 
-const fmtNum = (n: number | null | undefined) =>
-  (n ?? 0).toLocaleString("en-IN");
+function paginate<T>(rows: T[], page: number, pageSize: number): T[] {
+  return rows.slice((page - 1) * pageSize, page * pageSize);
+}
+
+function pageCount(total: number, pageSize: number): number {
+  return Math.max(1, Math.ceil(total / pageSize));
+}
+
+function trunc(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/* ------------------------- small presentational bits ----------------------- */
+
+function MethodChip({ method }: { method: string }) {
+  return (
+    <StatusBadge
+      status={method}
+      tone="neutral"
+      className={cn("font-mono text-[11px]", METHOD_CHIP[method])}
+    >
+      {METHOD_LABEL[method] ?? method}
+    </StatusBadge>
+  );
+}
+
+function CongestionChip({ level }: { level: string }) {
+  return (
+    <StatusBadge
+      status={level}
+      tone={CONGESTION_TONE[level] ?? "neutral"}
+    >
+      {titleCase(level)}
+    </StatusBadge>
+  );
+}
+
+/** The fallback chain — V2X_5G → CELL_BROADCAST → BLE_MESH → FM_RDS → SIREN. */
+function MethodChainStrip({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn("flex flex-wrap items-center gap-1.5", className)}
+      aria-label="Alert fallback chain: V2X 5G, cell broadcast, BLE mesh, FM RDS, siren"
+    >
+      {METHODS.map((m, i) => (
+        <Fragment key={m}>
+          {i > 0 && (
+            <ChevronRight
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
+          <span
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+              METHOD_CHIP[m]
+            )}
+          >
+            {METHOD_LABEL[m]}
+          </span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** Visual route timeline with congestion chips per segment. */
+function RouteTimeline({ route }: { route: RouteSeg[] }) {
+  if (route.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Route is generated when the mission is dispatched.
+      </p>
+    );
+  }
+  const totalKm = route.reduce((s, x) => s + (x.lengthKm || 0), 0);
+  return (
+    <div>
+      <ol className="relative flex flex-col">
+        {route.map((seg, i) => (
+          <li
+            key={`${seg.name}-${i}`}
+            className="relative flex items-start gap-3 pb-4 last:pb-0"
+          >
+            {i < route.length - 1 && (
+              <span
+                aria-hidden="true"
+                className="absolute left-[9px] top-5 h-[calc(100%-0.75rem)] w-px bg-border"
+              />
+            )}
+            <span
+              aria-hidden="true"
+              className="z-[1] mt-0.5 grid size-[19px] shrink-0 place-items-center rounded-full border-2 border-red-500/60 bg-card text-[9px] font-bold text-red-600 dark:text-red-400"
+            >
+              {i + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">
+                {seg.name}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {seg.lengthKm} km
+              </span>
+            </span>
+            <CongestionChip level={seg.congestion} />
+          </li>
+        ))}
+      </ol>
+      <p className="mt-3 border-t pt-2.5 text-xs text-muted-foreground">
+        {route.length} segment{route.length === 1 ? "" : "s"} ·{" "}
+        {totalKm.toFixed(1)} km planned corridor
+      </p>
+    </div>
+  );
+}
+
+/** REQUESTED → DISPATCHED → EN_ROUTE → ARRIVED → COMPLETED (CANCELLED side-state). */
+function StatusStepper({ status }: { status: string }) {
+  const cancelled = status === "CANCELLED";
+  const idx = MISSION_FLOW.indexOf(status as (typeof MISSION_FLOW)[number]);
+  return (
+    <div>
+      <ol
+        className="flex items-start"
+        aria-label={`Mission status: ${titleCase(status)}`}
+      >
+        {MISSION_FLOW.map((s, i) => {
+          const done = !cancelled && idx > i;
+          const current = !cancelled && i === idx;
+          return (
+            <li
+              key={s}
+              className="relative flex flex-1 flex-col items-center gap-1.5"
+            >
+              {i < MISSION_FLOW.length - 1 && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute left-1/2 top-[13px] h-0.5 w-full",
+                    done ? "bg-emerald-500/70" : "bg-border"
+                  )}
+                />
+              )}
+              <span
+                aria-current={current ? "step" : undefined}
+                className={cn(
+                  "relative z-[1] grid size-7 place-items-center rounded-full border-2 bg-card text-[10px] font-bold",
+                  done && "border-emerald-500 bg-emerald-500 text-white",
+                  current &&
+                    "border-red-500 bg-red-500/10 text-red-600 dark:text-red-400",
+                  !done &&
+                    !current &&
+                    "border-border text-muted-foreground"
+                )}
+              >
+                {done ? <Check className="size-3.5" aria-hidden="true" /> : i + 1}
+              </span>
+              <span
+                className={cn(
+                  "px-0.5 text-center text-[10px] font-semibold uppercase tracking-wide",
+                  current ? "text-foreground" : "text-muted-foreground"
+                )}
+              >
+                {STEP_LABEL[s]}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {cancelled && (
+        <div
+          role="status"
+          className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-700 dark:text-rose-400"
+        >
+          <Ban className="size-3.5" aria-hidden="true" />
+          Mission cancelled — the green corridor was disarmed and the unit
+          released.
+        </div>
+      )}
+      {!cancelled && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Step {idx + 1} of {MISSION_FLOW.length} · progress{" "}
+          {STATUS_PROGRESS[status] ?? 0}%
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Corridor-event feed rows (segment, method, congestion, vehicles, saved, note, when). */
+function EventFeed({
+  events,
+  loading,
+  emptyHint,
+}: {
+  events: CorridorEventRow[];
+  loading: boolean;
+  emptyHint: string;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-2" aria-busy="true">
+        {[0, 1].map((i) => (
+          <Skeleton key={i} className="h-14 rounded-lg" />
+        ))}
+      </div>
+    );
+  }
+  if (events.length === 0) {
+    return <p className="text-sm text-muted-foreground">{emptyHint}</p>;
+  }
+  return (
+    <ol
+      className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+      aria-label="Corridor events feed"
+    >
+      {events.map((ev) => (
+        <li key={ev.id} className="rounded-lg border p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <MethodChip method={ev.method} />
+            <CongestionChip level={ev.congestion} />
+            <span className="ml-auto text-xs text-muted-foreground">
+              {timeAgo(ev.createdAt)}
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm font-medium">{ev.segment}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {formatNumber(ev.vehiclesAlerted)} vehicles alerted ·{" "}
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {formatDuration(ev.timeSavedSec)} saved
+            </span>
+          </p>
+          {ev.note && (
+            <p className="mt-1 text-xs italic text-muted-foreground">
+              {ev.note}
+            </p>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Free-text base with MDM CITY suggestions (datalist = options + custom). */
+function BaseField({
+  value,
+  onChange,
+  error,
+  cities,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  error?: string | null;
+  cities: string[];
+}) {
+  const id = useId();
+  const listId = `${id}-cities`;
+  return (
+    <Field
+      label="Base"
+      required
+      error={error}
+      htmlFor={id}
+      hint="Pick a city or type the exact base / station."
+    >
+      <Input
+        id={id}
+        list={listId}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Hebbal station, Bengaluru"
+        aria-invalid={!!error}
+        className={cn(error && "border-destructive focus-visible:ring-destructive")}
+      />
+      <datalist id={listId}>
+        {cities.map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+    </Field>
+  );
+}
 
 /* ---------------------------------- view ----------------------------------- */
 
 export default function AmbulanceView() {
+  const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [events, setEvents] = useState<CorridorEventRow[]>([]);
+  const [stats, setStats] = useState<CorridorStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const load = useCallback(async (initial: boolean) => {
+    if (initial) setLoading(true);
+    try {
+      const [amb, mis, ev, st] = await Promise.all([
+        get<Ambulance[]>("/api/ambulances"),
+        get<Mission[]>("/api/missions?limit=300"),
+        get<CorridorEventRow[]>("/api/corridor-events?limit=300"),
+        get<CorridorStats>("/api/corridor-stats"),
+      ]);
+      setAmbulances(Array.isArray(amb) ? amb : []);
+      setMissions(Array.isArray(mis) ? mis : []);
+      setEvents(Array.isArray(ev) ? ev : []);
+      setStats(st ?? null);
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Failed to load ambulance module"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(reloadKey === 0);
+  }, [load, reloadKey]);
+
+  const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Ambulance & Green Corridor"
-        description="Fleet roster, emergency missions and the V2X corridor alert log."
+        description="Fleet roster, emergency missions, the V2X alert log and corridor analytics."
         icon={<AmbulanceIcon className="size-5" aria-hidden="true" />}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refresh}
+            aria-label="Refresh ambulance data"
+          >
+            <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+          </Button>
+        }
       />
       <Tabs defaultValue="fleet" className="space-y-4">
-        <TabsList>
+        <TabsList aria-label="Ambulance module sections">
           <TabsTrigger value="fleet">Fleet</TabsTrigger>
           <TabsTrigger value="missions">Missions</TabsTrigger>
-          <TabsTrigger value="corridor">Corridor log</TabsTrigger>
+          <TabsTrigger value="corridor">Corridor Events</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
-        <TabsContent value="fleet">
-          <FleetTab />
+        <TabsContent value="fleet" className="space-y-4">
+          <FleetTab
+            ambulances={ambulances}
+            missions={missions}
+            loading={loading}
+            refresh={refresh}
+          />
         </TabsContent>
-        <TabsContent value="missions">
-          <MissionsTab />
+        <TabsContent value="missions" className="space-y-4">
+          <MissionsTab
+            missions={missions}
+            ambulances={ambulances}
+            events={events}
+            loading={loading}
+            refresh={refresh}
+          />
         </TabsContent>
-        <TabsContent value="corridor">
-          <CorridorTab />
+        <TabsContent value="corridor" className="space-y-4">
+          <CorridorTab events={events} loading={loading} />
+        </TabsContent>
+        <TabsContent value="analytics" className="space-y-4">
+          <AnalyticsTab stats={stats} loading={loading} />
         </TabsContent>
       </Tabs>
     </div>
@@ -325,53 +862,89 @@ const fleetCsv: CsvColumn<Ambulance>[] = [
   { header: "Equipment", value: (a) => a.equipment ?? "" },
 ];
 
-function FleetTab() {
-  const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
-  const [loading, setLoading] = useState(true);
+function FleetTab({
+  ambulances,
+  missions,
+  loading,
+  refresh,
+}: {
+  ambulances: Ambulance[];
+  missions: Mission[];
+  loading: boolean;
+  refresh: () => void;
+}) {
   const [q, setQ] = useState("");
   const [view, setView] = useViewPref("ambulance-fleet");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /* form */
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<Ambulance | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AmbForm>(EMPTY_AMB_FORM);
   const [initialForm, setInitialForm] = useState<AmbForm>(EMPTY_AMB_FORM);
   const [errors, setErrors] = useState<RuleErr>({});
   const [saving, setSaving] = useState(false);
 
-  /* delete */
-  const [deleteTarget, setDeleteTarget] = useState<Ambulance | null>(null);
+  /* delete + detail */
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  /* detail */
-  const [detail, setDetail] = useState<Ambulance | null>(null);
-  const [history, setHistory] = useState<Mission[] | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const typeOptions = useMasters("AMBULANCE_TYPE");
+  const cityOptions = useMasters("CITY");
 
-  const load = useCallback(async () => {
-    try {
-      const rows = await get<Ambulance[]>("/api/ambulances");
-      setAmbulances(Array.isArray(rows) ? rows : []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load fleet");
-    } finally {
-      setLoading(false);
+  const editing = useMemo(
+    () => ambulances.find((a) => a.id === editingId) ?? null,
+    [ambulances, editingId]
+  );
+  const deleteTarget = useMemo(
+    () => ambulances.find((a) => a.id === deleteId) ?? null,
+    [ambulances, deleteId]
+  );
+  const detail = useMemo(
+    () => ambulances.find((a) => a.id === detailId) ?? null,
+    [ambulances, detailId]
+  );
+
+  /* per-unit service record computed from the missions list */
+  const service = useMemo(() => {
+    const map = new Map<
+      string,
+      { run: number; completed: number; last?: string; savedSec: number }
+    >();
+    for (const m of missions) {
+      if (!m.ambulanceId) continue;
+      const cur = map.get(m.ambulanceId) ?? {
+        run: 0,
+        completed: 0,
+        savedSec: 0,
+      };
+      cur.run += 1;
+      if (m.status === "COMPLETED") cur.completed += 1;
+      cur.savedSec += m.timeSavedSec ?? 0;
+      if (m.createdAt && (!cur.last || new Date(m.createdAt) > new Date(cur.last)))
+        cur.last = m.createdAt;
+      map.set(m.ambulanceId, cur);
     }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+    return map;
+  }, [missions]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return ambulances;
     return ambulances.filter((a) =>
-      `${a.code} ${a.base} ${a.driverName} ${a.type}`.toLowerCase().includes(needle)
+      `${a.code} ${a.base} ${a.driverName} ${a.type} ${a.status}`
+        .toLowerCase()
+        .includes(needle)
     );
   }, [ambulances, q]);
+
+  const safePage = Math.min(page, pageCount(filtered.length, pageSize));
+  const pageRows = useMemo(
+    () => paginate(filtered, safePage, pageSize),
+    [filtered, safePage, pageSize]
+  );
 
   const counts = useMemo(
     () => ({
@@ -385,21 +958,23 @@ function FleetTab() {
 
   const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
 
-  /* ------------------------------- actions -------------------------------- */
+  /* ------------------------------- actions ------------------------------- */
 
   const openCreate = () => {
-    setEditing(null);
-    setForm(EMPTY_AMB_FORM);
-    setInitialForm(EMPTY_AMB_FORM);
+    setEditingId(null);
+    const f = { ...EMPTY_AMB_FORM, code: suggestCode(ambulances) };
+    setForm(f);
+    setInitialForm(f);
     setErrors({});
     setFormOpen(true);
   };
 
   const openEdit = (a: Ambulance) => {
-    setEditing(a);
+    setEditingId(a.id);
     const f: AmbForm = {
       code: a.code ?? "",
       type: a.type ?? "BLS",
+      status: a.status ?? "AVAILABLE",
       base: a.base ?? "",
       driverName: a.driverName ?? "",
       driverPhone: a.driverPhone ?? "",
@@ -429,6 +1004,7 @@ function FleetTab() {
       const body = {
         code: form.code.trim().toUpperCase(),
         type: form.type,
+        status: form.status,
         base: form.base.trim(),
         driverName: form.driverName.trim(),
         driverPhone: form.driverPhone.trim() || undefined,
@@ -443,7 +1019,7 @@ function FleetTab() {
         toast.success(`Ambulance ${body.code} added to the fleet`);
       }
       setFormOpen(false);
-      load();
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -457,8 +1033,8 @@ function FleetTab() {
     try {
       await del(`/api/ambulances/${deleteTarget.id}`);
       toast.success(`Ambulance ${deleteTarget.code} removed`);
-      setDeleteTarget(null);
-      load();
+      setDeleteId(null);
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     } finally {
@@ -466,52 +1042,57 @@ function FleetTab() {
     }
   };
 
-  const openDetail = (a: Ambulance) => {
-    setDetail(a);
-    setHistory(null);
-    setHistoryLoading(true);
-    get<Mission[]>("/api/missions")
-      .then((rows) =>
-        setHistory(
-          (Array.isArray(rows) ? rows : []).filter((m) => m.ambulanceId === a.id)
-        )
-      )
-      .catch(() => setHistory([]))
-      .finally(() => setHistoryLoading(false));
-  };
+  /* ------------------------------- renders ------------------------------- */
 
-  /* ------------------------------- renders -------------------------------- */
+  const fleetColumns: DataTableColumn<Ambulance>[] = [
+    { key: "code", header: "Code", mono: true },
+    { key: "type", header: "Type", hideBelow: "md" },
+    { key: "base", header: "Base", hideBelow: "sm" },
+    { key: "driver", header: "Driver" },
+    { key: "status", header: "Status" },
+    { key: "missions", header: "Missions", align: "right", hideBelow: "lg" },
+    { key: "actions", header: "Actions", align: "right" },
+  ];
 
-  const actionButtons = (a: Ambulance) => (
-    <>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-11 md:size-8"
-        aria-label={`View ${a.code}`}
-        onClick={() => openDetail(a)}
-      >
-        <Eye className="size-4" />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-11 md:size-8"
-        aria-label={`Edit ${a.code}`}
-        onClick={() => openEdit(a)}
-      >
-        <Pencil className="size-4" />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-11 text-red-600 hover:bg-red-500/10 hover:text-red-700 md:size-8 dark:text-red-400"
-        aria-label={`Delete ${a.code}`}
-        onClick={() => setDeleteTarget(a)}
-      >
-        <Trash2 className="size-4" />
-      </Button>
-    </>
+  const rowActions = (a: Ambulance) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-11 md:size-8"
+          aria-label={`Actions for ambulance ${a.code}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuItem onSelect={() => setDetailId(a.id)}>
+          <Eye className="size-4" aria-hidden="true" /> View details
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openEdit(a)}>
+          <Pencil className="size-4" aria-hidden="true" /> Edit
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-red-600 focus:text-red-700 dark:text-red-400"
+          onSelect={() => setDeleteId(a.id)}
+        >
+          <Trash2 className="size-4" aria-hidden="true" /> Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  const typeBadge = (a: Ambulance) => (
+    <Badge
+      variant="outline"
+      className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+      title={labelOf(typeOptions.options, a.type)}
+    >
+      {a.type}
+    </Badge>
   );
 
   return (
@@ -529,6 +1110,11 @@ function FleetTab() {
           value={counts.available}
           accent="emerald"
           icon={<CheckCircle2 className="size-5" aria-hidden="true" />}
+          hint={
+            counts.total
+              ? `${Math.round((counts.available / counts.total) * 100)}% of the roster`
+              : undefined
+          }
           loading={loading}
         />
         <StatCard
@@ -542,7 +1128,7 @@ function FleetTab() {
           label="Maintenance"
           value={counts.maintenance}
           accent="amber"
-          icon={<Route className="size-5" aria-hidden="true" />}
+          icon={<Waypoints className="size-5" aria-hidden="true" />}
           loading={loading}
         />
       </div>
@@ -560,7 +1146,10 @@ function FleetTab() {
               />
               <Input
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search code, base, driver…"
                 className="h-9 w-full pl-8 sm:w-48"
                 aria-label="Search ambulances"
@@ -599,137 +1188,172 @@ function FleetTab() {
                 : "Try a different search term."
             }
           >
-            {ambulances.length === 0 && (
+            {ambulances.length === 0 ? (
               <Button variant="outline" onClick={openCreate}>
                 <Plus className="size-4" aria-hidden="true" /> Add ambulance
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => setQ("")}
+                aria-label="Clear search"
+              >
+                <RefreshCw className="size-4" aria-hidden="true" /> Clear search
               </Button>
             )}
           </EmptyState>
         ) : view === "table" ? (
-          <>
-            {/* desktop table */}
-            <div className="hidden overflow-x-auto rounded-lg border md:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Base</TableHead>
-                    <TableHead>Driver</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono font-medium">{a.code}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
-                        >
-                          {labelOf(typeOptions.options, a.type)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{a.base}</TableCell>
-                      <TableCell>
-                        {a.driverName}
-                        {a.driverPhone ? (
-                          <span className="block text-xs text-muted-foreground">
-                            {a.driverPhone}
-                          </span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={a.status} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">{actionButtons(a)}</div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            {/* mobile cards */}
-            <ul className="space-y-2 md:hidden">
-              {filtered.map((a) => (
-                <li key={a.id} className="rounded-lg border p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-semibold">{a.code}</span>
-                    <StatusBadge status={a.status} className="ml-auto" />
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {labelOf(typeOptions.options, a.type)} · {a.base} · {a.driverName}
-                  </p>
-                  <div className="mt-2 flex gap-1">{actionButtons(a)}</div>
-                </li>
-              ))}
-            </ul>
-          </>
+          <DataTable
+            columns={fleetColumns}
+            rows={pageRows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => setDetailId(r.id)}
+            height="max-h-[34rem]"
+            page={safePage}
+            pages={pageCount(filtered.length, pageSize)}
+            total={filtered.length}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+            itemLabel="ambulances"
+          >
+            {(row, col) => {
+              switch (col.key) {
+                case "code":
+                  return <span className="font-semibold">{row.code}</span>;
+                case "type":
+                  return typeBadge(row);
+                case "base":
+                  return (
+                    <span className="text-muted-foreground">{row.base}</span>
+                  );
+                case "driver":
+                  return (
+                    <span>
+                      {row.driverName}
+                      {row.driverPhone ? (
+                        <span className="block text-xs text-muted-foreground">
+                          {row.driverPhone}
+                        </span>
+                      ) : null}
+                    </span>
+                  );
+                case "status":
+                  return <StatusBadge status={row.status} />;
+                case "missions":
+                  return (
+                    <span className="tabular-nums">
+                      {service.get(row.id)?.run ?? 0}
+                    </span>
+                  );
+                case "actions":
+                  return <div className="flex justify-end">{rowActions(row)}</div>;
+                default:
+                  return null;
+              }
+            }}
+          </DataTable>
         ) : view === "grid" ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((a) => (
-              <article key={a.id} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-start gap-2.5">
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {pageRows.map((a) => (
+                <article
+                  key={a.id}
+                  className="flex flex-col gap-3 rounded-xl border bg-card p-4 transition-colors hover:bg-muted/40"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setDetailId(a.id)}
+                    className="flex items-start justify-between gap-2 text-left"
+                    aria-label={`View details of ambulance ${a.code}`}
+                  >
+                    <span className="flex min-w-0 items-start gap-2.5">
+                      <span
+                        aria-hidden="true"
+                        className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+                      >
+                        <AmbulanceIcon className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-mono text-sm font-semibold">
+                          {a.code}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {a.base}
+                        </span>
+                      </span>
+                    </span>
+                    <StatusBadge status={a.status} />
+                  </button>
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    {typeBadge(a)}
+                    <span className="truncate">Driver · {a.driverName}</span>
+                    <span className="ml-auto tabular-nums">
+                      {service.get(a.id)?.run ?? 0} mission
+                      {(service.get(a.id)?.run ?? 0) === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mt-auto flex gap-0.5 border-t pt-3">
+                    {rowActions(a)}
+                  </div>
+                </article>
+              ))}
+            </div>
+            <PaginationBar
+              page={safePage}
+              pages={pageCount(filtered.length, pageSize)}
+              total={filtered.length}
+              onPage={setPage}
+              itemLabel="ambulances"
+              className="mt-3"
+            />
+          </>
+        ) : (
+          <>
+            <ul className="space-y-2" aria-label="Ambulances list">
+              {pageRows.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex items-center gap-2 rounded-lg border px-3 py-2"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setDetailId(a.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
+                    aria-label={`View ambulance ${a.code}`}
+                  >
                     <span
                       aria-hidden="true"
-                      className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
                     >
                       <AmbulanceIcon className="size-4" />
                     </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-sm font-semibold">{a.code}</p>
-                      <p className="truncate text-xs text-muted-foreground">{a.base}</p>
-                    </div>
-                  </div>
-                  <StatusBadge status={a.status} />
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                  <Badge
-                    variant="outline"
-                    className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
-                  >
-                    {labelOf(typeOptions.options, a.type)}
-                  </Badge>
-                  <span className="truncate">Driver · {a.driverName}</span>
-                </div>
-                <div className="mt-auto flex gap-1 border-t pt-3">{actionButtons(a)}</div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <ul className="space-y-2" aria-label="Ambulances list">
-            {filtered.map((a) => (
-              <li key={a.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
-                <button
-                  type="button"
-                  onClick={() => openDetail(a)}
-                  className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
-                  aria-label={`View ambulance ${a.code}`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
-                  >
-                    <AmbulanceIcon className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-sm font-semibold">
-                      {a.code}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-mono text-sm font-semibold">
+                        {a.code}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {a.base} · {a.driverName}
+                      </span>
                     </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {a.base} · {a.driverName}
-                    </span>
-                  </span>
-                  <StatusBadge status={a.status} className="shrink-0" />
-                </button>
-                <div className="flex shrink-0 gap-0.5">{actionButtons(a)}</div>
-              </li>
-            ))}
-          </ul>
+                    <StatusBadge status={a.status} className="shrink-0" />
+                  </button>
+                  <div className="flex shrink-0 gap-0.5">{rowActions(a)}</div>
+                </li>
+              ))}
+            </ul>
+            <PaginationBar
+              page={safePage}
+              pages={pageCount(filtered.length, pageSize)}
+              total={filtered.length}
+              onPage={setPage}
+              itemLabel="ambulances"
+              className="mt-3"
+            />
+          </>
         )}
       </SectionCard>
 
@@ -738,7 +1362,7 @@ function FleetTab() {
         open={formOpen}
         onOpenChange={setFormOpen}
         title={editing ? `Edit ambulance ${editing.code}` : "Add ambulance"}
-        description="Roster entry for the emergency fleet."
+        description="Roster entry for the emergency fleet — every field is editable and persisted."
         submitLabel={editing ? "Save changes" : "Add ambulance"}
         onSubmit={save}
         loading={saving}
@@ -746,18 +1370,31 @@ function FleetTab() {
         size="md"
       >
         <FormSection title="Unit">
-          <FieldGrid>
+          <div className="flex items-end gap-2">
             <TextField
               label="Code"
               required
               value={form.code}
               onChange={(v) => setForm({ ...form, code: v.toUpperCase() })}
-              placeholder="KA-01-UAR-101"
-              hint="Format: KA-01-UAR-101 (state-district-UAR-unit)"
+              placeholder="KA-01-UAR-106"
+              hint="Format: KA-01-UAR-10x (state-district-UAR-unit)."
               error={errors.code}
-              disabled={!!editing}
-              className="font-mono"
+              className="flex-1 font-mono"
             />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mb-5 h-9 shrink-0"
+              onClick={() =>
+                setForm((f) => ({ ...f, code: suggestCode(ambulances) }))
+              }
+              aria-label="Suggest the next free ambulance code"
+            >
+              <Sparkles className="size-4" aria-hidden="true" /> Suggest
+            </Button>
+          </div>
+          <FieldGrid>
             <SelectField
               label="Type"
               required
@@ -765,15 +1402,23 @@ function FleetTab() {
               onChange={(v) => setForm({ ...form, type: v })}
               options={typeOptions.options}
             />
+            <SelectField
+              label="Status"
+              required
+              value={form.status}
+              onChange={(v) => setForm({ ...form, status: v })}
+              options={STATUS_OPTIONS}
+            />
           </FieldGrid>
-          <TextField
-            label="Base"
-            required
+          <BaseField
             value={form.base}
             onChange={(v) => setForm({ ...form, base: v })}
-            placeholder="Hebbal station, Bengaluru"
             error={errors.base}
+            cities={cityOptions.options.map((o) => o.value)}
           />
+        </FormSection>
+
+        <FormSection title="Driver">
           <FieldGrid>
             <TextField
               label="Driver name"
@@ -793,6 +1438,7 @@ function FleetTab() {
             />
           </FieldGrid>
         </FormSection>
+
         <FormSection
           title="Crew & equipment"
           description="Comma-separated lists — kept on the roster for dispatch context."
@@ -808,66 +1454,158 @@ function FleetTab() {
             label="Equipment"
             value={form.equipment}
             onChange={(v) => setForm({ ...form, equipment: v })}
-            placeholder="defibrillator, oxygen, stretcher, ventilator"
+            placeholder="Defibrillator, Oxygen, Stretcher, Ventilator"
             hint="Separate items with commas."
           />
         </FormSection>
       </FormSheet>
 
       {/* -------------------------- ambulance detail -------------------------- */}
-      <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
-          {detail && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  <span className="font-mono">{detail.code}</span>
-                  <StatusBadge status={detail.status} className="ml-auto" />
-                </SheetTitle>
-                <SheetDescription>
-                  {labelOf(typeOptions.options, detail.type)} · {detail.base}
-                </SheetDescription>
-              </SheetHeader>
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                <DataField label="Code" value={detail.code} mono />
-                <DataField label="Type" value={labelOf(typeOptions.options, detail.type)} />
-                <DataField label="Base" value={detail.base} />
-                <DataField label="Status" value={<StatusBadge status={detail.status} />} />
-                <DataField label="Driver" value={detail.driverName} />
-                <DataField label="Driver phone" value={detail.driverPhone} mono copy />
-              </div>
-
-              <SectionCard title="Crew & equipment">
-                <div className="space-y-3">
-                  <DataField label="Crew" value={detail.crew} />
-                  <DataField label="Equipment" value={detail.equipment} />
-                </div>
-              </SectionCard>
-
-              <SectionCard
-                title="Mission history"
-                description="Recent missions served by this unit"
-                icon={<Route className="size-4" aria-hidden="true" />}
+      <DetailSheet
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetailId(null)}
+        eyebrow="Fleet · Ambulance & Green Corridor"
+        title={detail?.code ?? ""}
+        description={
+          detail
+            ? `${labelOf(typeOptions.options, detail.type)} · ${detail.base}`
+            : undefined
+        }
+        status={detail ? <StatusBadge status={detail.status} /> : undefined}
+        footer={
+          detail ? (
+            <div className="flex w-full flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => openEdit(detail)}>
+                <Pencil className="size-4" aria-hidden="true" /> Edit
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                onClick={() => setDeleteId(detail.id)}
               >
-                {historyLoading ? (
-                  <div className="space-y-2" aria-busy="true">
-                    {[0, 1].map((i) => (
-                      <Skeleton key={i} className="h-16 rounded-lg" />
-                    ))}
+                <Trash2 className="size-4" aria-hidden="true" /> Delete
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={() => setDetailId(null)}
+              >
+                Close
+              </Button>
+            </div>
+          ) : undefined
+        }
+      >
+        {detail && (
+          <>
+            <DetailSection title="Roster">
+              <DetailGrid cols={2}>
+                <DataField label="Code" value={detail.code} mono />
+                <DataField
+                  label="Type"
+                  value={labelOf(typeOptions.options, detail.type)}
+                />
+                <DataField label="Base" value={detail.base} />
+                <DataField
+                  label="Status"
+                  value={<StatusBadge status={detail.status} />}
+                />
+                <DataField label="Driver" value={detail.driverName} />
+                <DataField
+                  label="Driver phone"
+                  value={detail.driverPhone ?? undefined}
+                  mono
+                  copy
+                />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection
+              title="Crew & equipment"
+              description="Parsed from the comma-separated roster lists."
+            >
+              <div className="space-y-4">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Crew members
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {parseList(detail.crew).length === 0 ? (
+                      <span className="text-sm text-muted-foreground">—</span>
+                    ) : (
+                      parseList(detail.crew).map((c) => (
+                        <Badge key={c} variant="outline" className="gap-1">
+                          <Users className="size-3" aria-hidden="true" />
+                          {c}
+                        </Badge>
+                      ))
+                    )}
                   </div>
-                ) : !history || history.length === 0 ? (
-                  <EmptyState
-                    icon={<Route className="size-6" aria-hidden="true" />}
-                    title="No missions yet"
-                    hint="This unit hasn't been dispatched recently."
-                  />
-                ) : (
-                  <ul
-                    className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
-                    aria-label="Missions served by this ambulance"
-                  >
-                    {history.map((m) => (
+                </div>
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Equipment on board
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {parseList(detail.equipment).length === 0 ? (
+                      <span className="text-sm text-muted-foreground">—</span>
+                    ) : (
+                      parseList(detail.equipment).map((eq) => (
+                        <Badge key={eq} variant="outline">
+                          {eq}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </DetailSection>
+
+            <DetailSection
+              title="Service record"
+              description="Computed from this unit's mission history."
+            >
+              <DetailGrid cols={4}>
+                <DataField
+                  label="Missions run"
+                  value={formatNumber(service.get(detail.id)?.run ?? 0)}
+                />
+                <DataField
+                  label="Completed"
+                  value={formatNumber(service.get(detail.id)?.completed ?? 0)}
+                />
+                <DataField
+                  label="Last mission"
+                  value={formatDate(service.get(detail.id)?.last)}
+                />
+                <DataField
+                  label="Time saved attributed"
+                  value={formatDuration(service.get(detail.id)?.savedSec ?? 0)}
+                />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection
+              title="Mission history"
+              description="Recent missions served by this unit"
+            >
+              {missions.filter((m) => m.ambulanceId === detail.id).length ===
+              0 ? (
+                <EmptyState
+                  icon={<Route className="size-6" aria-hidden="true" />}
+                  title="No missions yet"
+                  hint="This unit hasn't been dispatched recently."
+                />
+              ) : (
+                <ul
+                  className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+                  aria-label="Missions served by this ambulance"
+                >
+                  {missions
+                    .filter((m) => m.ambulanceId === detail.id)
+                    .map((m) => (
                       <li key={m.id} className="rounded-lg border p-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-mono text-xs font-semibold">
@@ -877,27 +1615,33 @@ function FleetTab() {
                         </div>
                         <p className="mt-1 flex items-center gap-1 truncate text-xs">
                           {m.patientName} · {m.pickup}
-                          <ArrowRight className="size-3 shrink-0" aria-hidden="true" />
+                          <ArrowRight
+                            className="size-3 shrink-0"
+                            aria-hidden="true"
+                          />
                           {m.destination}
                         </p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          {m.createdAt ? formatDateTime(m.createdAt) : "—"} · {m.progress}%
+                          {m.createdAt ? formatDateTime(m.createdAt) : "—"} ·{" "}
+                          {m.progress}% ·{" "}
+                          {formatDuration(m.timeSavedSec)} saved
                         </p>
                       </li>
                     ))}
-                  </ul>
-                )}
-              </SectionCard>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+                </ul>
+              )}
+            </DetailSection>
+          </>
+        )}
+      </DetailSheet>
 
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        onOpenChange={(o) => !o && setDeleteId(null)}
         title="Remove ambulance?"
-        recordName={deleteTarget ? `${deleteTarget.code} · ${deleteTarget.base}` : null}
+        recordName={
+          deleteTarget ? `${deleteTarget.code} · ${deleteTarget.base}` : null
+        }
         description="The unit is taken off the roster permanently. Missions it served keep their history."
         confirmLabel="Delete ambulance"
         loading={deleting}
@@ -912,6 +1656,7 @@ function FleetTab() {
 const missionsCsv: CsvColumn<Mission>[] = [
   { header: "Request ref", value: (m) => m.requestRef },
   { header: "Patient", value: (m) => m.patientName },
+  { header: "Contact", value: (m) => m.contact },
   { header: "Emergency type", value: (m) => m.emergencyType },
   { header: "Priority", value: (m) => m.priority },
   { header: "Pickup", value: (m) => m.pickup },
@@ -919,65 +1664,85 @@ const missionsCsv: CsvColumn<Mission>[] = [
   { header: "Ambulance", value: (m) => m.ambulance?.code ?? "" },
   { header: "ETA (min)", value: (m) => m.etaMin ?? "" },
   { header: "Status", value: (m) => m.status },
+  { header: "Progress", value: (m) => m.progress },
+  { header: "Corridor active", value: (m) => (m.corridorActive ? "yes" : "no") },
   { header: "Vehicles alerted", value: (m) => m.vehiclesAlerted },
   { header: "Time saved (sec)", value: (m) => m.timeSavedSec },
   { header: "Created", value: (m) => m.createdAt ?? "" },
 ];
 
-function MissionsTab() {
-  const [missions, setMissions] = useState<Mission[]>([]);
-  const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
-  const [loading, setLoading] = useState(true);
+function MissionsTab({
+  missions,
+  ambulances,
+  events,
+  loading,
+  refresh,
+}: {
+  missions: Mission[];
+  ambulances: Ambulance[];
+  events: CorridorEventRow[];
+  loading: boolean;
+  refresh: () => void;
+}) {
   const [filter, setFilter] = useState("ALL");
+  const [q, setQ] = useState("");
   const [view, setView] = useViewPref("ambulance-missions");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /* create + dispatch form */
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<MissionForm>(EMPTY_MISSION_FORM);
-  const [initialForm, setInitialForm] = useState<MissionForm>(EMPTY_MISSION_FORM);
+  const [initialForm, setInitialForm] =
+    useState<MissionForm>(EMPTY_MISSION_FORM);
   const [missionAmbId, setMissionAmbId] = useState("");
   const [errors, setErrors] = useState<RuleErr>({});
   const [saving, setSaving] = useState(false);
 
   /* dispatch existing */
-  const [dispatchTarget, setDispatchTarget] = useState<Mission | null>(null);
+  const [dispatchId, setDispatchId] = useState<string | null>(null);
   const [dispatchAmbId, setDispatchAmbId] = useState("");
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
 
-  /* cancel */
-  const [cancelTarget, setCancelTarget] = useState<Mission | null>(null);
+  /* cancel + status + detail */
+  const [cancelId, setCancelId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-
-  /* detail */
-  const [detail, setDetail] = useState<Mission | null>(null);
-  const [events, setEvents] = useState<CorridorEventRow[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const emergencyOptions = useMasters("EMERGENCY_TYPE");
 
-  const load = useCallback(async () => {
-    try {
-      const [mis, amb] = await Promise.all([
-        get<Mission[]>("/api/missions"),
-        get<Ambulance[]>("/api/ambulances"),
-      ]);
-      setMissions(Array.isArray(mis) ? mis : []);
-      setAmbulances(Array.isArray(amb) ? amb : []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load missions");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const dispatchTarget = useMemo(
+    () => missions.find((m) => m.id === dispatchId) ?? null,
+    [missions, dispatchId]
+  );
+  const cancelTarget = useMemo(
+    () => missions.find((m) => m.id === cancelId) ?? null,
+    [missions, cancelId]
+  );
+  const detail = useMemo(
+    () => missions.find((m) => m.id === detailId) ?? null,
+    [missions, detailId]
+  );
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const filteredMissions = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return missions.filter((m) => {
+      if (filter !== "ALL" && m.status !== filter) return false;
+      if (needle) {
+        const hay =
+          `${m.requestRef} ${m.patientName} ${m.pickup} ${m.destination} ${m.ambulance?.code ?? ""}`.toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [missions, filter, q]);
 
-  const filteredMissions = useMemo(
-    () => (filter === "ALL" ? missions : missions.filter((m) => m.status === filter)),
-    [missions, filter]
+  const safePage = Math.min(page, pageCount(filteredMissions.length, pageSize));
+  const pageRows = useMemo(
+    () => paginate(filteredMissions, safePage, pageSize),
+    [filteredMissions, safePage, pageSize]
   );
 
   const availableAmbulances = useMemo(
@@ -987,7 +1752,12 @@ function MissionsTab() {
 
   const dirty = JSON.stringify(form) !== JSON.stringify(initialForm);
 
-  /* ------------------------------- actions -------------------------------- */
+  const detailEvents = useMemo(
+    () => (detail ? events.filter((e) => e.missionId === detail.id) : []),
+    [events, detail]
+  );
+
+  /* ------------------------------- actions ------------------------------- */
 
   const openCreate = () => {
     setForm(EMPTY_MISSION_FORM);
@@ -998,7 +1768,7 @@ function MissionsTab() {
   };
 
   const openDispatch = (m: Mission) => {
-    setDispatchTarget(m);
+    setDispatchId(m.id);
     setDispatchAmbId("");
     setDispatchError(null);
   };
@@ -1017,33 +1787,38 @@ function MissionsTab() {
     setErrors({});
     setSaving(true);
     try {
-      const created = await post<{ id: string; requestRef: string }>("/api/missions", {
-        patientName: form.patientName.trim(),
-        contact: form.contact.trim(),
-        emergencyType: form.emergencyType,
-        priority: form.priority,
-        pickup: form.pickup.trim(),
-        destination: form.destination.trim(),
-        route: form.route
-          .filter((s) => s.name.trim())
-          .map((s) => ({
-            name: s.name.trim(),
-            congestion: s.congestion,
-            lengthKm: Number(s.lengthKm) || 0,
-          })),
-      });
+      const created = await post<{ id: string; requestRef: string }>(
+        "/api/missions",
+        {
+          patientName: form.patientName.trim(),
+          contact: form.contact.trim(),
+          emergencyType: form.emergencyType,
+          priority: form.priority,
+          pickup: form.pickup.trim(),
+          destination: form.destination.trim(),
+          route: form.route
+            .filter((s) => s.name.trim())
+            .map((s) => ({
+              name: s.name.trim(),
+              congestion: s.congestion,
+              lengthKm: Number(s.lengthKm) || 0,
+            })),
+        }
+      );
       if (missionAmbId) {
         await patch(`/api/missions/${created.id}`, {
           action: "dispatch",
           ambulanceId: missionAmbId,
         });
         const amb = ambulances.find((a) => a.id === missionAmbId);
-        toast.success(`${created.requestRef} created & dispatched with ${amb?.code ?? "ambulance"} — green corridor armed`);
+        toast.success(
+          `${created.requestRef} created & dispatched with ${amb?.code ?? "ambulance"} — green corridor armed`
+        );
       } else {
         toast.success(`${created.requestRef} logged — awaiting dispatch`);
       }
       setFormOpen(false);
-      load();
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Create failed");
     } finally {
@@ -1067,9 +1842,8 @@ function MissionsTab() {
       toast.success(
         `${dispatchTarget.requestRef} dispatched with ${amb?.code ?? "ambulance"} — green corridor armed`
       );
-      setDispatchTarget(null);
-      setDetail(null);
-      load();
+      setDispatchId(null);
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Dispatch failed");
     } finally {
@@ -1077,30 +1851,33 @@ function MissionsTab() {
     }
   };
 
-  const runAction = async (m: Mission, action: "advance" | "complete") => {
-    try {
-      await patch(`/api/missions/${m.id}`, { action });
-      toast.success(
-        action === "advance"
-          ? `${m.requestRef} advanced along the corridor`
-          : `${m.requestRef} completed — ambulance released`
-      );
-      if (detail?.id === m.id) setDetail(null);
-      load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed");
-    }
-  };
+  /** Status-stepper advance: PATCH {status} — server auto-sets progress. */
+  const setStatus = useCallback(
+    async (m: Mission, status: string, msg?: string) => {
+      setBusyId(m.id);
+      try {
+        await patch(`/api/missions/${m.id}`, { status });
+        toast.success(msg ?? `${m.requestRef} → ${titleCase(status)}`);
+        refresh();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Update failed");
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [refresh]
+  );
 
   const cancelMission = async () => {
     if (!cancelTarget) return;
     setCancelling(true);
     try {
-      await patch(`/api/missions/${cancelTarget.id}`, { action: "cancel" });
-      toast.success(`${cancelTarget.requestRef} cancelled — corridor disarmed`);
-      setCancelTarget(null);
-      setDetail(null);
-      load();
+      await patch(`/api/missions/${cancelTarget.id}`, { status: "CANCELLED" });
+      toast.success(
+        `${cancelTarget.requestRef} cancelled — corridor disarmed`
+      );
+      setCancelId(null);
+      refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Cancel failed");
     } finally {
@@ -1108,44 +1885,106 @@ function MissionsTab() {
     }
   };
 
-  const openDetail = (m: Mission) => {
-    setDetail(m);
-    setEventsLoading(true);
-    get<CorridorEventRow[]>(`/api/corridor-events?missionId=${m.id}`)
-      .then((rows) => setEvents(Array.isArray(rows) ? rows : []))
-      .catch(() => setEvents([]))
-      .finally(() => setEventsLoading(false));
-  };
-
-  /* primary next-step action for a mission */
-  const primaryAction = (
+  /** Primary next-step action for a mission. */
+  const primaryFor = (
     m: Mission
   ): { label: string; run: () => void; className?: string } | null => {
     if (m.status === "REQUESTED")
       return { label: "Dispatch", run: () => openDispatch(m) };
-    if (m.status === "DISPATCHED" || m.status === "EN_ROUTE")
-      return { label: "Advance", run: () => void runAction(m, "advance"), className: "" };
-    if (m.status === "ARRIVED")
+    const nxt = NEXT_STEP[m.status];
+    if (nxt) {
+      const msg = `${m.requestRef} → ${titleCase(nxt.status)} · progress ${STATUS_PROGRESS[nxt.status] ?? 100}%`;
       return {
-        label: "Complete",
-        run: () => void runAction(m, "complete"),
-        className: "bg-emerald-600 text-white hover:bg-emerald-700",
+        label: nxt.label,
+        run: () => void setStatus(m, nxt.status, msg),
+        ...(nxt.status === "COMPLETED"
+          ? { className: "bg-emerald-600 text-white hover:bg-emerald-700" }
+          : {}),
       };
+    }
     return null;
   };
 
-  const detailRoute = useMemo(() => parseRoute(detail?.route), [detail]);
+  /* ------------------------------- renders ------------------------------- */
 
-  /* ------------------------------- renders -------------------------------- */
+  const missionColumns: DataTableColumn<Mission>[] = [
+    { key: "ref", header: "Ref", mono: true },
+    { key: "patient", header: "Patient" },
+    { key: "type", header: "Emergency", hideBelow: "md" },
+    { key: "route", header: "Route", hideBelow: "lg" },
+    { key: "ambulance", header: "Ambulance", hideBelow: "sm" },
+    { key: "eta", header: "ETA", align: "right", hideBelow: "lg" },
+    { key: "progress", header: "Progress", hideBelow: "md" },
+    { key: "status", header: "Status" },
+    { key: "actions", header: "Actions", align: "right" },
+  ];
 
-  const missionCard = (m: Mission) => {
-    const primary = primaryAction(m);
+  const missionRowActions = (m: Mission) => {
+    const primary = primaryFor(m);
     const closed = ["COMPLETED", "CANCELLED"].includes(m.status);
     return (
-      <article key={m.id} className="rounded-xl border p-4">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-11 md:size-8"
+            aria-label={`Actions for mission ${m.requestRef}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <DropdownMenuItem onSelect={() => setDetailId(m.id)}>
+            <Eye className="size-4" aria-hidden="true" /> View details
+          </DropdownMenuItem>
+          {primary && (
+            <DropdownMenuItem onSelect={primary.run}>
+              <Navigation className="size-4" aria-hidden="true" />{" "}
+              {primary.label}
+            </DropdownMenuItem>
+          )}
+          {!closed && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-red-600 focus:text-red-700 dark:text-red-400"
+                onSelect={() => setCancelId(m.id)}
+              >
+                <Ban className="size-4" aria-hidden="true" /> Cancel mission
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+
+  const missionCard = (m: Mission) => {
+    const primary = primaryFor(m);
+    const closed = ["COMPLETED", "CANCELLED"].includes(m.status);
+    return (
+      <article
+        key={m.id}
+        className="rounded-xl border bg-card p-4 transition-colors hover:bg-muted/40"
+      >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-sm font-semibold">{m.requestRef}</span>
-          <StatusBadge status={m.priority} tone={PRIORITY_TONE[m.priority] ?? "neutral"} />
+          <button
+            type="button"
+            onClick={() => setDetailId(m.id)}
+            className="font-mono text-sm font-semibold hover:underline"
+            aria-label={`View mission ${m.requestRef}`}
+          >
+            {m.requestRef}
+          </button>
+          <StatusBadge
+            status={m.priority}
+            tone={PRIORITY_TONE[m.priority] ?? "neutral"}
+          />
           <StatusBadge status={m.status} />
           {m.corridorActive && (
             <Badge
@@ -1156,14 +1995,19 @@ function MissionsTab() {
             </Badge>
           )}
           <span className="ml-auto text-xs text-muted-foreground">
-            {m.ambulance ? `${m.ambulance.code} · ${m.ambulance.driverName}` : "Unassigned"}
+            {m.ambulance
+              ? `${m.ambulance.code} · ${m.ambulance.driverName}`
+              : "Unassigned"}
           </span>
         </div>
         <p className="mt-2 text-sm font-medium">
-          {m.patientName} · {labelOf(emergencyOptions.options, m.emergencyType)}
+          {m.patientName} ·{" "}
+          {labelOf(emergencyOptions.options, m.emergencyType)}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-          {m.pickup} <ArrowRight className="inline size-3" aria-hidden="true" /> {m.destination}
+          {m.pickup}{" "}
+          <ArrowRight className="inline size-3" aria-hidden="true" />{" "}
+          {m.destination}
         </p>
         <div className="mt-3 flex items-center gap-3">
           <Progress
@@ -1171,10 +2015,12 @@ function MissionsTab() {
             className="h-2 flex-1 [&>div]:bg-red-500"
             aria-label={`Mission progress ${m.progress}%`}
           />
-          <span className="text-xs font-medium">{m.progress}%</span>
+          <span className="text-xs font-medium tabular-nums">
+            {m.progress}%
+          </span>
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <Button variant="outline" size="sm" onClick={() => openDetail(m)}>
+          <Button variant="outline" size="sm" onClick={() => setDetailId(m.id)}>
             View
           </Button>
           {primary && (
@@ -1183,6 +2029,7 @@ function MissionsTab() {
               variant={primary.className ? "default" : "outline"}
               className={primary.className}
               onClick={primary.run}
+              disabled={busyId === m.id}
             >
               {primary.label}
             </Button>
@@ -1192,7 +2039,7 @@ function MissionsTab() {
               size="sm"
               variant="outline"
               className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-              onClick={() => setCancelTarget(m)}
+              onClick={() => setCancelId(m.id)}
               aria-label={`Cancel mission ${m.requestRef}`}
             >
               <Ban className="size-3.5" aria-hidden="true" /> Cancel
@@ -1203,15 +2050,24 @@ function MissionsTab() {
     );
   };
 
+  const detailRoute = useMemo(() => parseRoute(detail?.route), [detail]);
+
   return (
     <div className="space-y-4">
       {/* status pill filters */}
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter missions by status">
+      <div
+        className="flex flex-wrap gap-1.5"
+        role="group"
+        aria-label="Filter missions by status"
+      >
         {MISSION_FILTERS.map((f) => (
           <button
             key={f}
             type="button"
-            onClick={() => setFilter(f)}
+            onClick={() => {
+              setFilter(f);
+              setPage(1);
+            }}
             aria-pressed={filter === f}
             className={cn(
               "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
@@ -1231,7 +2087,27 @@ function MissionsTab() {
         icon={<Siren className="size-4" aria-hidden="true" />}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ViewSwitcher value={view} onChange={setView} options={["table", "list"]} />
+            <div className="relative">
+              <Search
+                className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search ref, patient, route…"
+                className="h-9 w-full pl-8 sm:w-44"
+                aria-label="Search missions"
+              />
+            </div>
+            <ViewSwitcher
+              value={view}
+              onChange={setView}
+              options={["table", "grid"]}
+            />
             <ExportMenu
               columns={missionsCsv}
               rows={filteredMissions}
@@ -1253,154 +2129,158 @@ function MissionsTab() {
         ) : filteredMissions.length === 0 ? (
           <EmptyState
             icon={<Route className="size-8" aria-hidden="true" />}
-            title={missions.length === 0 ? "No missions yet" : "No missions match this filter"}
+            title={
+              missions.length === 0
+                ? "No missions yet"
+                : "No missions match this filter"
+            }
             hint={
               missions.length === 0
                 ? "Create a mission when an emergency request arrives, then dispatch the nearest ambulance."
-                : "Try another status filter."
+                : "Try another status filter or search term."
             }
           >
-            {missions.length === 0 && (
+            {missions.length === 0 ? (
               <Button onClick={openCreate}>
                 <Siren className="size-4" aria-hidden="true" /> New mission
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setFilter("ALL");
+                  setQ("");
+                }}
+              >
+                <RefreshCw className="size-4" aria-hidden="true" /> Reset
+                filters
               </Button>
             )}
           </EmptyState>
         ) : view === "table" ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Request ref</TableHead>
-                  <TableHead>Patient</TableHead>
-                  <TableHead>Type / priority</TableHead>
-                  <TableHead className="min-w-44">Route</TableHead>
-                  <TableHead>Ambulance</TableHead>
-                  <TableHead>ETA</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredMissions.map((m) => {
-                  const primary = primaryAction(m);
-                  const closed = ["COMPLETED", "CANCELLED"].includes(m.status);
+          <DataTable
+            columns={missionColumns}
+            rows={pageRows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => setDetailId(r.id)}
+            height="max-h-[34rem]"
+            page={safePage}
+            pages={pageCount(filteredMissions.length, pageSize)}
+            total={filteredMissions.length}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+            itemLabel="missions"
+          >
+            {(row, col) => {
+              switch (col.key) {
+                case "ref":
                   return (
-                    <TableRow key={m.id}>
-                      <TableCell className="font-mono text-xs font-semibold">
-                        {m.requestRef}
-                      </TableCell>
-                      <TableCell>
-                        {m.patientName}
-                        <span className="block text-xs text-muted-foreground">{m.contact}</span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge
-                            variant="outline"
-                            className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
-                          >
-                            {labelOf(emergencyOptions.options, m.emergencyType)}
-                          </Badge>
-                          <StatusBadge
-                            status={m.priority}
-                            tone={PRIORITY_TONE[m.priority] ?? "neutral"}
-                          />
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-52">
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <span className="truncate">{m.pickup}</span>
-                          <ArrowRight className="size-3 shrink-0" aria-hidden="true" />
-                          <span className="truncate">{m.destination}</span>
-                        </span>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-xs">
-                        {m.ambulance ? m.ambulance.code : "—"}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        {m.etaMin ? `${m.etaMin} min` : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-1">
-                          <StatusBadge status={m.status} />
-                          {m.corridorActive && (
-                            <span title="Green corridor active">
-                              <Zap
-                                className="size-3.5 text-red-600 dark:text-red-400"
-                                aria-label="Green corridor active"
-                              />
-                            </span>
-                          )}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          {primary && (
-                            <Button
-                              size="sm"
-                              variant={primary.className ? "default" : "outline"}
-                              className={cn("h-8", primary.className)}
-                              onClick={primary.run}
-                            >
-                              {primary.label}
-                            </Button>
-                          )}
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="size-11 md:size-8"
-                                aria-label={`Actions for ${m.requestRef}`}
-                              >
-                                <MoreHorizontal className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onSelect={() => openDetail(m)}>
-                                View details
-                              </DropdownMenuItem>
-                              {m.status === "REQUESTED" && (
-                                <DropdownMenuItem onSelect={() => openDispatch(m)}>
-                                  Dispatch…
-                                </DropdownMenuItem>
-                              )}
-                              {(m.status === "DISPATCHED" || m.status === "EN_ROUTE") && (
-                                <DropdownMenuItem onSelect={() => void runAction(m, "advance")}>
-                                  Advance
-                                </DropdownMenuItem>
-                              )}
-                              {m.status === "ARRIVED" && (
-                                <DropdownMenuItem onSelect={() => void runAction(m, "complete")}>
-                                  Complete
-                                </DropdownMenuItem>
-                              )}
-                              {!closed && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    className="text-red-600 focus:text-red-700 dark:text-red-400"
-                                    onSelect={() => setCancelTarget(m)}
-                                  >
-                                    Cancel mission
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                    <span className="font-semibold">{row.requestRef}</span>
                   );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+                case "patient":
+                  return (
+                    <span>
+                      {row.patientName}
+                      <span className="block text-xs text-muted-foreground">
+                        {row.contact}
+                      </span>
+                    </span>
+                  );
+                case "type":
+                  return (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <Badge
+                        variant="outline"
+                        className="border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+                      >
+                        {EMERGENCY_SHORT[row.emergencyType] ??
+                          titleCase(row.emergencyType)}
+                      </Badge>
+                      <StatusBadge
+                        status={row.priority}
+                        tone={PRIORITY_TONE[row.priority] ?? "neutral"}
+                      />
+                    </span>
+                  );
+                case "route":
+                  return (
+                    <span className="flex max-w-56 items-center gap-1 text-xs text-muted-foreground">
+                      <span className="truncate">{row.pickup}</span>
+                      <ArrowRight
+                        className="size-3 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="truncate">{row.destination}</span>
+                    </span>
+                  );
+                case "ambulance":
+                  return (
+                    <span className="font-mono text-xs">
+                      {row.ambulance ? row.ambulance.code : "—"}
+                    </span>
+                  );
+                case "eta":
+                  return (
+                    <span className="tabular-nums">
+                      {row.etaMin ? `${row.etaMin} min` : "—"}
+                    </span>
+                  );
+                case "progress":
+                  return (
+                    <span className="flex items-center gap-2">
+                      <Progress
+                        value={row.progress}
+                        className="h-1.5 w-14 [&>div]:bg-red-500"
+                        aria-label={`Mission progress ${row.progress}%`}
+                      />
+                      <span className="text-xs tabular-nums">
+                        {row.progress}%
+                      </span>
+                    </span>
+                  );
+                case "status":
+                  return (
+                    <span className="flex items-center gap-1">
+                      <StatusBadge status={row.status} />
+                      {row.corridorActive && (
+                        <span title="Green corridor active">
+                          <Zap
+                            className="size-3.5 text-red-600 dark:text-red-400"
+                            aria-label="Green corridor active"
+                          />
+                        </span>
+                      )}
+                    </span>
+                  );
+                case "actions":
+                  return (
+                    <div className="flex justify-end">
+                      {missionRowActions(row)}
+                    </div>
+                  );
+                default:
+                  return null;
+              }
+            }}
+          </DataTable>
         ) : (
-          <div className="space-y-3" aria-label="Missions list">
-            {filteredMissions.map(missionCard)}
-          </div>
+          <>
+            <div className="grid gap-3 md:grid-cols-2">
+              {pageRows.map(missionCard)}
+            </div>
+            <PaginationBar
+              page={safePage}
+              pages={pageCount(filteredMissions.length, pageSize)}
+              total={filteredMissions.length}
+              onPage={setPage}
+              itemLabel="missions"
+              className="mt-3"
+            />
+          </>
         )}
       </SectionCard>
 
@@ -1480,24 +2360,28 @@ function MissionsTab() {
           description="Advisory — quick-add known bottlenecks or type custom segments. The corridor engine simulates live congestion on dispatch."
         >
           <div className="flex flex-wrap items-center gap-1.5">
-            {SEGMENT_POOL.filter((name) => !form.route.some((s) => s.name === name)).map(
-              (name) => (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() =>
-                    setForm((f) => ({
-                      ...f,
-                      route: [...f.route, { name, congestion: "MODERATE", lengthKm: "1.5" }],
-                    }))
-                  }
-                  aria-label={`Quick add segment ${name}`}
-                  className="rounded-full border px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                >
-                  <Plus className="mr-0.5 inline size-3" aria-hidden="true" /> {name}
-                </button>
-              )
-            )}
+            {SEGMENT_POOL.filter(
+              (name) => !form.route.some((s) => s.name === name)
+            ).map((name) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    route: [
+                      ...f.route,
+                      { name, congestion: "MODERATE", lengthKm: "1.5" },
+                    ],
+                  }))
+                }
+                aria-label={`Quick add segment ${name}`}
+                className="rounded-full border px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              >
+                <Plus className="mr-0.5 inline size-3" aria-hidden="true" />{" "}
+                {name}
+              </button>
+            ))}
             <Button
               type="button"
               variant="ghost"
@@ -1506,7 +2390,10 @@ function MissionsTab() {
               onClick={() =>
                 setForm((f) => ({
                   ...f,
-                  route: [...f.route, { name: "", congestion: "MODERATE", lengthKm: "1" }],
+                  route: [
+                    ...f.route,
+                    { name: "", congestion: "MODERATE", lengthKm: "1" },
+                  ],
                 }))
               }
               aria-label="Add custom route segment"
@@ -1525,7 +2412,9 @@ function MissionsTab() {
                   onChange={(e) =>
                     setForm((f) => ({
                       ...f,
-                      route: f.route.map((s, j) => (j === i ? { ...s, name: e.target.value } : s)),
+                      route: f.route.map((s, j) =>
+                        j === i ? { ...s, name: e.target.value } : s
+                      ),
                     }))
                   }
                   placeholder="Segment name"
@@ -1536,7 +2425,9 @@ function MissionsTab() {
                   onValueChange={(v) =>
                     setForm((f) => ({
                       ...f,
-                      route: f.route.map((s, j) => (j === i ? { ...s, congestion: v } : s)),
+                      route: f.route.map((s, j) =>
+                        j === i ? { ...s, congestion: v } : s
+                      ),
                     }))
                   }
                 >
@@ -1572,7 +2463,10 @@ function MissionsTab() {
                   size="icon"
                   className="size-9"
                   onClick={() =>
-                    setForm((f) => ({ ...f, route: f.route.filter((_, j) => j !== i) }))
+                    setForm((f) => ({
+                      ...f,
+                      route: f.route.filter((_, j) => j !== i),
+                    }))
                   }
                   aria-label={`Remove segment ${i + 1}`}
                 >
@@ -1582,7 +2476,8 @@ function MissionsTab() {
             ))}
             {form.route.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No segments planned — quick-add above or let the corridor engine generate a route.
+                No segments planned — quick-add above or let the corridor engine
+                generate a route.
               </p>
             )}
           </div>
@@ -1602,7 +2497,8 @@ function MissionsTab() {
           />
           {availableAmbulances.length === 0 && (
             <p className="text-xs text-red-600 dark:text-red-400">
-              No ambulances are currently available — the mission will be logged as REQUESTED.
+              No ambulances are currently available — the mission will be logged
+              as REQUESTED.
             </p>
           )}
         </FormSection>
@@ -1613,7 +2509,7 @@ function MissionsTab() {
         open={!!dispatchTarget}
         onOpenChange={(o) => {
           if (!o) {
-            setDispatchTarget(null);
+            setDispatchId(null);
             setDispatchError(null);
           }
         }}
@@ -1645,41 +2541,64 @@ function MissionsTab() {
         />
         {availableAmbulances.length === 0 && (
           <p className="text-xs text-red-600 dark:text-red-400">
-            No ambulances are currently available. Free one up by completing a mission or add a unit
-            in the Fleet tab.
+            No ambulances are currently available. Free one up by completing a
+            mission or add a unit in the Fleet tab.
           </p>
         )}
       </FormSheet>
 
       {/* --------------------------- mission detail --------------------------- */}
-      <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-md">
-          {detail && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  <span className="font-mono">{detail.requestRef}</span>
-                  <StatusBadge status={detail.status} className="ml-auto" />
-                </SheetTitle>
-                <SheetDescription>
-                  {detail.patientName} ·{" "}
-                  {labelOf(emergencyOptions.options, detail.emergencyType)}
-                </SheetDescription>
-              </SheetHeader>
-
+      <DetailSheet
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetailId(null)}
+        eyebrow="Emergency mission"
+        title={detail?.requestRef ?? ""}
+        description={
+          detail
+            ? `${detail.patientName} · ${detail.pickup} → ${detail.destination}`
+            : undefined
+        }
+        status={
+          detail ? (
+            <span className="flex flex-wrap items-center gap-1.5">
+              <StatusBadge status={detail.priority} tone={PRIORITY_TONE[detail.priority] ?? "neutral"} />
+              <StatusBadge status={detail.status} />
               {detail.corridorActive && (
-                <div
-                  role="status"
-                  className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-700 dark:text-red-400"
+                <Badge
+                  variant="outline"
+                  className="border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400"
                 >
-                  <Zap className="size-4 animate-pulse" aria-hidden="true" />
-                  Green corridor ACTIVE
-                </div>
+                  <Zap className="size-3" aria-hidden="true" /> Corridor active
+                </Badge>
               )}
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+            </span>
+          ) : undefined
+        }
+        footer={
+          detail ? (
+            <MissionDetailFooter
+              mission={detail}
+              busy={busyId === detail.id}
+              onDispatch={() => openDispatch(detail)}
+              onAdvance={(status, msg) =>
+                void setStatus(detail, status, msg)
+              }
+              onCancel={() => setCancelId(detail.id)}
+            />
+          ) : undefined
+        }
+      >
+        {detail && (
+          <>
+            <DetailSection title="Mission overview">
+              <DetailGrid cols={3}>
+                <DataField label="Request ref" value={detail.requestRef} mono />
                 <DataField label="Patient" value={detail.patientName} />
                 <DataField label="Contact" value={detail.contact} mono copy />
+                <DataField
+                  label="Emergency type"
+                  value={labelOf(emergencyOptions.options, detail.emergencyType)}
+                />
                 <DataField
                   label="Priority"
                   value={
@@ -1697,144 +2616,101 @@ function MissionsTab() {
                       : "Unassigned"
                   }
                 />
-                <DataField label="Vehicles alerted" value={fmtNum(detail.vehiclesAlerted)} />
-                <DataField label="Time saved" value={formatDuration(detail.timeSavedSec)} />
-                <DataField label="ETA" value={detail.etaMin ? `${detail.etaMin} min` : "—"} />
                 <DataField
-                  label="Route"
-                  value={`${detail.pickup} → ${detail.destination}`}
-                  className="col-span-2"
+                  label="Pickup"
+                  value={detail.pickup}
+                  icon={<MapPin className="size-3" aria-hidden="true" />}
                 />
+                <DataField
+                  label="Destination"
+                  value={detail.destination}
+                  icon={<Flag className="size-3" aria-hidden="true" />}
+                />
+                <DataField
+                  label="Requested"
+                  value={
+                    detail.createdAt ? formatDateTime(detail.createdAt) : "—"
+                  }
+                />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection
+              title="Status"
+              description="Advance along the corridor — progress is set automatically per step."
+            >
+              <StatusStepper status={detail.status} />
+              <div className="flex items-center gap-3">
+                <Progress
+                  value={detail.progress}
+                  className="h-2 flex-1 [&>div]:bg-red-500"
+                  aria-label={`Mission progress ${detail.progress}%`}
+                />
+                <span className="text-xs font-medium tabular-nums">
+                  {detail.progress}%
+                </span>
               </div>
+            </DetailSection>
 
-              <SectionCard
-                title="Route segments"
-                description="Congestion along the planned corridor"
-                icon={<Route className="size-4" aria-hidden="true" />}
-              >
-                {detailRoute.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Route is generated when the mission is dispatched.
-                  </p>
-                ) : (
-                  <ol className="space-y-2">
-                    {detailRoute.map((seg, i) => (
-                      <li key={i} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-                        <span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold">
-                          {i + 1}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{seg.name}</span>
-                        <span className="hidden text-xs text-muted-foreground sm:inline">
-                          {seg.lengthKm} km
-                        </span>
-                        <StatusBadge
-                          status={seg.congestion}
-                          tone={CONGESTION_TONE[seg.congestion] ?? "neutral"}
-                          className="shrink-0"
-                        />
-                      </li>
-                    ))}
-                  </ol>
-                )}
-                <div className="mt-3 flex items-center gap-3">
-                  <Progress
-                    value={detail.progress}
-                    className="h-2 flex-1 [&>div]:bg-red-500"
-                    aria-label={`Mission progress ${detail.progress}%`}
-                  />
-                  <span className="text-xs font-medium">{detail.progress}%</span>
-                </div>
-              </SectionCard>
+            <DetailSection
+              title="Impact & corridor"
+              description="What the green corridor achieved on this run."
+            >
+              <DetailGrid cols={3}>
+                <DataField
+                  label="Vehicles alerted"
+                  value={formatNumber(detail.vehiclesAlerted)}
+                  icon={<Radio className="size-3" aria-hidden="true" />}
+                />
+                <DataField
+                  label="Time saved"
+                  value={formatDuration(detail.timeSavedSec)}
+                  icon={<Timer className="size-3" aria-hidden="true" />}
+                />
+                <DataField
+                  label="Corridor"
+                  value={
+                    detail.corridorActive ? (
+                      <span className="flex items-center gap-1.5 font-semibold text-red-600 dark:text-red-400">
+                        <Zap className="size-3.5 animate-pulse" aria-hidden="true" />
+                        ACTIVE
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Disarmed</span>
+                    )
+                  }
+                />
+                <DataField
+                  label="ETA"
+                  value={detail.etaMin ? `${detail.etaMin} min` : "—"}
+                />
+              </DetailGrid>
+            </DetailSection>
 
-              <SectionCard
-                title="Corridor events"
-                description="Alert ladder per congested segment"
-                icon={<Radio className="size-4" aria-hidden="true" />}
-              >
-                {eventsLoading ? (
-                  <div className="space-y-2" aria-busy="true">
-                    {[0, 1].map((i) => (
-                      <Skeleton key={i} className="h-14 rounded-lg" />
-                    ))}
-                  </div>
-                ) : events.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No corridor events — they are recorded when the mission is dispatched.
-                  </p>
-                ) : (
-                  <ol className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin">
-                    {events.map((ev) => (
-                      <li key={ev.id} className="rounded-lg border p-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge
-                            status={ev.method}
-                            tone={METHOD_TONE[ev.method] ?? "neutral"}
-                            className="font-mono"
-                          >
-                            {ev.method}
-                          </StatusBadge>
-                          <StatusBadge
-                            status={ev.congestion}
-                            tone={CONGESTION_TONE[ev.congestion] ?? "neutral"}
-                          />
-                          <span className="ml-auto text-xs text-muted-foreground">
-                            {formatDateTime(ev.createdAt)}
-                          </span>
-                        </div>
-                        <p className="mt-1.5 text-sm font-medium">{ev.segment}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {fmtNum(ev.vehiclesAlerted)} vehicles alerted ·{" "}
-                          {formatDuration(ev.timeSavedSec)} saved
-                        </p>
-                        {ev.note && (
-                          <p className="mt-1 text-xs italic text-muted-foreground">{ev.note}</p>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </SectionCard>
+            <DetailSection
+              title="Route segments"
+              description="Congestion along the planned corridor"
+            >
+              <RouteTimeline route={detailRoute} />
+            </DetailSection>
 
-              {!["COMPLETED", "CANCELLED"].includes(detail.status) && (
-                <div className="flex flex-wrap gap-2 border-t pt-4">
-                  {detail.status === "REQUESTED" && (
-                    <Button size="sm" onClick={() => openDispatch(detail)}>
-                      <AmbulanceIcon className="size-3.5" aria-hidden="true" /> Dispatch
-                    </Button>
-                  )}
-                  {(detail.status === "DISPATCHED" || detail.status === "EN_ROUTE") && (
-                    <Button size="sm" variant="outline" onClick={() => void runAction(detail, "advance")}>
-                      <ArrowRight className="size-3.5" aria-hidden="true" /> Advance
-                    </Button>
-                  )}
-                  {detail.status === "ARRIVED" && (
-                    <Button
-                      size="sm"
-                      className="bg-emerald-600 text-white hover:bg-emerald-700"
-                      onClick={() => void runAction(detail, "complete")}
-                    >
-                      <Flag className="size-3.5" aria-hidden="true" /> Complete
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                    onClick={() => setCancelTarget(detail)}
-                    aria-label={`Cancel mission ${detail.requestRef}`}
-                  >
-                    <Ban className="size-3.5" aria-hidden="true" /> Cancel
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            <DetailSection
+              title="Corridor events"
+              description="Alert ladder per congested segment"
+            >
+              <EventFeed
+                events={detailEvents}
+                loading={false}
+                emptyHint="No corridor events yet — they are recorded when the mission is dispatched."
+              />
+            </DetailSection>
+          </>
+        )}
+      </DetailSheet>
 
       <ConfirmDialog
         open={!!cancelTarget}
-        onOpenChange={(o) => !o && setCancelTarget(null)}
+        onOpenChange={(o) => !o && setCancelId(null)}
         title="Cancel mission?"
         recordName={
           cancelTarget
@@ -1855,6 +2731,77 @@ function MissionsTab() {
   );
 }
 
+/** Sticky footer actions for the mission DetailSheet. */
+function MissionDetailFooter({
+  mission,
+  busy,
+  onDispatch,
+  onAdvance,
+  onCancel,
+}: {
+  mission: Mission;
+  busy: boolean;
+  onDispatch: () => void;
+  onAdvance: (status: string, msg?: string) => void;
+  onCancel: () => void;
+}) {
+  const closed = ["COMPLETED", "CANCELLED"].includes(mission.status);
+  const next = NEXT_STEP[mission.status];
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2">
+      {mission.status === "REQUESTED" && (
+        <Button size="sm" onClick={onDispatch}>
+          <AmbulanceIcon className="size-4" aria-hidden="true" /> Dispatch…
+        </Button>
+      )}
+      {next && (
+        <Button
+          size="sm"
+          variant={next.status === "COMPLETED" ? "default" : "outline"}
+          className={
+            next.status === "COMPLETED"
+              ? "bg-emerald-600 text-white hover:bg-emerald-700"
+              : undefined
+          }
+          onClick={() =>
+            onAdvance(
+              next.status,
+              `${mission.requestRef} → ${titleCase(next.status)} · progress ${STATUS_PROGRESS[next.status] ?? 100}%`
+            )
+          }
+          disabled={busy}
+        >
+          {next.status === "EN_ROUTE" ? (
+            <Navigation className="size-4" aria-hidden="true" />
+          ) : next.status === "ARRIVED" ? (
+            <MapPin className="size-4" aria-hidden="true" />
+          ) : (
+            <Flag className="size-4" aria-hidden="true" />
+          )}
+          {next.label}
+        </Button>
+      )}
+      {!closed ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
+          onClick={onCancel}
+          aria-label={`Cancel mission ${mission.requestRef}`}
+        >
+          <Ban className="size-4" aria-hidden="true" /> Cancel mission
+        </Button>
+      ) : (
+        <span className="ml-auto text-xs text-muted-foreground">
+          {mission.status === "COMPLETED"
+            ? "Mission completed — the unit was released back to AVAILABLE."
+            : "Mission cancelled."}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ============================== CORRIDOR TAB =============================== */
 
 const corridorCsv: CsvColumn<CorridorEventRow>[] = [
@@ -1865,37 +2812,35 @@ const corridorCsv: CsvColumn<CorridorEventRow>[] = [
   { header: "Congestion", value: (e) => e.congestion },
   { header: "Vehicles alerted", value: (e) => e.vehiclesAlerted },
   { header: "Time saved (sec)", value: (e) => e.timeSavedSec },
+  { header: "Note", value: (e) => e.note ?? "" },
 ];
 
-function CorridorTab() {
-  const [events, setEvents] = useState<CorridorEventRow[]>([]);
-  const [loading, setLoading] = useState(true);
+function CorridorTab({
+  events,
+  loading,
+}: {
+  events: CorridorEventRow[];
+  loading: boolean;
+}) {
   const [methodFilter, setMethodFilter] = useState("ALL");
   const [congestionFilter, setCongestionFilter] = useState("ALL");
   const [q, setQ] = useState("");
   const [view, setView] = useViewPref("ambulance-corridor");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const rows = await get<CorridorEventRow[]>("/api/corridor-events?limit=200");
-      setEvents(Array.isArray(rows) ? rows : []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load corridor events");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const detail = useMemo(
+    () => events.find((e) => e.id === detailId) ?? null,
+    [events, detailId]
+  );
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return events.filter((e) => {
       if (methodFilter !== "ALL" && e.method !== methodFilter) return false;
-      if (congestionFilter !== "ALL" && e.congestion !== congestionFilter) return false;
+      if (congestionFilter !== "ALL" && e.congestion !== congestionFilter)
+        return false;
       if (needle) {
         const hay = `${e.segment} ${e.mission?.requestRef ?? ""} ${e.note ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
@@ -1903,6 +2848,12 @@ function CorridorTab() {
       return true;
     });
   }, [events, methodFilter, congestionFilter, q]);
+
+  const safePage = Math.min(page, pageCount(filtered.length, pageSize));
+  const pageRows = useMemo(
+    () => paginate(filtered, safePage, pageSize),
+    [filtered, safePage, pageSize]
+  );
 
   const totals = useMemo(
     () => ({
@@ -1912,20 +2863,31 @@ function CorridorTab() {
     [filtered]
   );
 
+  const columns: DataTableColumn<CorridorEventRow>[] = [
+    { key: "when", header: "When", hideBelow: "sm" },
+    { key: "mission", header: "Mission", mono: true },
+    { key: "segment", header: "Segment" },
+    { key: "method", header: "Method" },
+    { key: "congestion", header: "Congestion", hideBelow: "md" },
+    { key: "vehicles", header: "Vehicles", align: "right", hideBelow: "lg" },
+    { key: "saved", header: "Saved", align: "right" },
+    { key: "actions", header: "Actions", align: "right" },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Events logged"
-          value={filtered.length}
+          value={formatNumber(filtered.length)}
           accent="teal"
           icon={<Radio className="size-5" aria-hidden="true" />}
           loading={loading}
-          hint="Newest 200 shown"
+          hint={`Newest ${Math.min(300, events.length)} of the alert log`}
         />
         <StatCard
           label="Vehicles alerted"
-          value={fmtNum(totals.vehicles)}
+          value={formatNumber(totals.vehicles)}
           accent="amber"
           icon={<Siren className="size-5" aria-hidden="true" />}
           loading={loading}
@@ -1943,11 +2905,15 @@ function CorridorTab() {
 
       <SectionCard
         title="Corridor alert log"
-        description="Every green-corridor alert across all missions — V2X, cell broadcast, mesh, FM and siren."
+        description="Every green-corridor alert across all missions — the 5-layer fallback chain in action."
         icon={<Radio className="size-4" aria-hidden="true" />}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ViewSwitcher value={view} onChange={setView} options={["table", "list"]} />
+            <ViewSwitcher
+              value={view}
+              onChange={setView}
+              options={["table", "list"]}
+            />
             <ExportMenu
               columns={corridorCsv}
               rows={filtered}
@@ -1959,21 +2925,39 @@ function CorridorTab() {
       >
         {/* filters */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Select value={methodFilter} onValueChange={setMethodFilter}>
-            <SelectTrigger className="w-full sm:w-44" aria-label="Filter by alert method">
+          <Select
+            value={methodFilter}
+            onValueChange={(v) => {
+              setMethodFilter(v);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger
+              className="w-full sm:w-44"
+              aria-label="Filter by alert method"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All methods</SelectItem>
               {METHODS.map((m) => (
                 <SelectItem key={m} value={m}>
-                  {m}
+                  {METHOD_LABEL[m]}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Select value={congestionFilter} onValueChange={setCongestionFilter}>
-            <SelectTrigger className="w-full sm:w-40" aria-label="Filter by congestion">
+          <Select
+            value={congestionFilter}
+            onValueChange={(v) => {
+              setCongestionFilter(v);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger
+              className="w-full sm:w-40"
+              aria-label="Filter by congestion"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1992,7 +2976,10 @@ function CorridorTab() {
             />
             <Input
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPage(1);
+              }}
               placeholder="Search segment or mission ref…"
               className="h-9 pl-8"
               aria-label="Search corridor events"
@@ -2009,14 +2996,18 @@ function CorridorTab() {
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Radio className="size-8" aria-hidden="true" />}
-            title={events.length === 0 ? "No corridor events yet" : "No events match the filters"}
+            title={
+              events.length === 0
+                ? "No corridor events yet"
+                : "No events match the filters"
+            }
             hint={
               events.length === 0
                 ? "Events are recorded when missions are dispatched along congested segments."
                 : "Try clearing the method or congestion filters."
             }
           >
-            {(events.length > 0 || q) && (
+            {events.length > 0 && (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -2025,91 +3016,728 @@ function CorridorTab() {
                   setQ("");
                 }}
               >
-                <RefreshCw className="size-4" aria-hidden="true" /> Reset filters
+                <RefreshCw className="size-4" aria-hidden="true" /> Reset
+                filters
               </Button>
             )}
           </EmptyState>
         ) : view === "table" ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Mission</TableHead>
-                  <TableHead>Segment</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Congestion</TableHead>
-                  <TableHead className="text-right">Vehicles</TableHead>
-                  <TableHead className="text-right">Saved</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {formatDateTime(e.createdAt)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs font-semibold">
-                      {e.mission?.requestRef ?? "—"}
-                    </TableCell>
-                    <TableCell className="max-w-44 truncate text-sm">{e.segment}</TableCell>
-                    <TableCell>
-                      <StatusBadge
-                        status={e.method}
-                        tone={METHOD_TONE[e.method] ?? "neutral"}
-                        className="font-mono text-[11px]"
+          <DataTable
+            columns={columns}
+            rows={pageRows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => setDetailId(r.id)}
+            height="max-h-[34rem]"
+            page={safePage}
+            pages={pageCount(filtered.length, pageSize)}
+            total={filtered.length}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+            itemLabel="events"
+          >
+            {(row, col) => {
+              switch (col.key) {
+                case "when":
+                  return (
+                    <span className="text-xs text-muted-foreground">
+                      {timeAgo(row.createdAt)}
+                    </span>
+                  );
+                case "mission":
+                  return (
+                    <span className="font-semibold">
+                      {row.mission?.requestRef ?? "—"}
+                    </span>
+                  );
+                case "segment":
+                  return (
+                    <span className="max-w-52 truncate">{row.segment}</span>
+                  );
+                case "method":
+                  return <MethodChip method={row.method} />;
+                case "congestion":
+                  return <CongestionChip level={row.congestion} />;
+                case "vehicles":
+                  return (
+                    <span className="font-medium tabular-nums">
+                      {formatNumber(row.vehiclesAlerted)}
+                    </span>
+                  );
+                case "saved":
+                  return (
+                    <span className="font-medium">
+                      {formatDuration(row.timeSavedSec)}
+                    </span>
+                  );
+                case "actions":
+                  return (
+                    <div className="flex justify-end">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-11 md:size-8"
+                        aria-label={`View event at ${row.segment}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDetailId(row.id);
+                        }}
                       >
-                        {e.method}
-                      </StatusBadge>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge
-                        status={e.congestion}
-                        tone={CONGESTION_TONE[e.congestion] ?? "neutral"}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right font-medium">{fmtNum(e.vehiclesAlerted)}</TableCell>
-                    <TableCell className="text-right font-medium">
-                      {formatDuration(e.timeSavedSec)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                        <Eye className="size-4" />
+                      </Button>
+                    </div>
+                  );
+                default:
+                  return null;
+              }
+            }}
+          </DataTable>
         ) : (
-          <ul className="max-h-[36rem] space-y-2 overflow-y-auto scrollbar-thin" aria-label="Corridor events list">
-            {filtered.map((e) => (
-              <li key={e.id} className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{e.segment}</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    <span className="font-mono">{e.mission?.requestRef ?? "—"}</span> ·{" "}
-                    {formatDateTime(e.createdAt)} · {fmtNum(e.vehiclesAlerted)} vehicles alerted
-                    {e.note ? ` · ${e.note}` : ""}
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                  <StatusBadge
-                    status={e.method}
-                    tone={METHOD_TONE[e.method] ?? "neutral"}
-                    className="font-mono text-[11px]"
+          <>
+            <ul
+              className="max-h-[36rem] space-y-2 overflow-y-auto scrollbar-thin"
+              aria-label="Corridor events list"
+            >
+              {pageRows.map((e) => (
+                <li key={e.id}>
+                  <button
+                    type="button"
+                    onClick={() => setDetailId(e.id)}
+                    className="flex w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+                    aria-label={`View event at ${e.segment}`}
                   >
-                    {e.method}
-                  </StatusBadge>
-                  <StatusBadge
-                    status={e.congestion}
-                    tone={CONGESTION_TONE[e.congestion] ?? "neutral"}
-                  />
-                  <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold">
-                    {formatDuration(e.timeSavedSec)} saved
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {e.segment}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        <span className="font-mono">
+                          {e.mission?.requestRef ?? "—"}
+                        </span>{" "}
+                        · {timeAgo(e.createdAt)} ·{" "}
+                        {formatNumber(e.vehiclesAlerted)} vehicles alerted
+                        {e.note ? ` · ${e.note}` : ""}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                      <MethodChip method={e.method} />
+                      <CongestionChip level={e.congestion} />
+                      <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold">
+                        {formatDuration(e.timeSavedSec)} saved
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <PaginationBar
+              page={safePage}
+              pages={pageCount(filtered.length, pageSize)}
+              total={filtered.length}
+              onPage={setPage}
+              itemLabel="events"
+              className="mt-3"
+            />
+          </>
         )}
       </SectionCard>
+
+      {/* ---------------------------- event detail ---------------------------- */}
+      <DetailSheet
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetailId(null)}
+        eyebrow="Green corridor · Alert event"
+        title={detail?.segment ?? ""}
+        description={
+          detail
+            ? `Alert relayed for mission ${detail.mission?.requestRef ?? "—"}`
+            : undefined
+        }
+        status={
+          detail ? (
+            <span className="flex items-center gap-1.5">
+              <MethodChip method={detail.method} />
+              <CongestionChip level={detail.congestion} />
+            </span>
+          ) : undefined
+        }
+      >
+        {detail && (
+          <>
+            <DetailSection title="Event">
+              <DetailGrid cols={3}>
+                <DataField
+                  label="Mission"
+                  value={detail.mission?.requestRef ?? "—"}
+                  mono
+                />
+                <DataField label="Segment" value={detail.segment} />
+                <DataField
+                  label="Alert method"
+                  value={METHOD_LABEL[detail.method] ?? detail.method}
+                />
+                <DataField
+                  label="Congestion"
+                  value={<CongestionChip level={detail.congestion} />}
+                />
+                <DataField
+                  label="Vehicles alerted"
+                  value={formatNumber(detail.vehiclesAlerted)}
+                />
+                <DataField
+                  label="Time saved"
+                  value={formatDuration(detail.timeSavedSec)}
+                />
+                <DataField
+                  label="Logged"
+                  value={
+                    detail.createdAt ? formatDateTime(detail.createdAt) : "—"
+                  }
+                />
+                <DataField
+                  label="Age"
+                  value={timeAgo(detail.createdAt)}
+                  className="col-span-2"
+                />
+              </DetailGrid>
+              {detail.note && (
+                <p className="rounded-lg border bg-muted/40 px-3 py-2 text-sm italic text-muted-foreground">
+                  {detail.note}
+                </p>
+              )}
+            </DetailSection>
+
+            <DetailSection
+              title="Fallback chain"
+              description="Higher layers fail over to the next; the siren is always the last resort."
+            >
+              <MethodChainStrip />
+            </DetailSection>
+          </>
+        )}
+      </DetailSheet>
+    </div>
+  );
+}
+
+/* ============================= ANALYTICS TAB =============================== */
+
+function ChartSkeleton() {
+  return <Skeleton className="h-64 w-full rounded-xl" aria-hidden="true" />;
+}
+
+function AnalyticsTab({
+  stats,
+  loading,
+}: {
+  stats: CorridorStats | null;
+  loading: boolean;
+}) {
+  const emergencyOptions = useMasters("EMERGENCY_TYPE");
+
+  const emergencyData = useMemo(
+    () =>
+      (stats?.byEmergencyType ?? []).map((r) => ({
+        type: r.type,
+        name:
+          EMERGENCY_SHORT[r.type] ??
+          labelOf(emergencyOptions.options, r.type),
+        count: r.count,
+      })),
+    [stats, emergencyOptions.options]
+  );
+
+  const weeklyData = useMemo(() => stats?.weekly ?? [], [stats]);
+
+  const methodData = useMemo(
+    () =>
+      (stats?.byMethod ?? []).map((r) => ({
+        method: r.method,
+        label: METHOD_LABEL[r.method] ?? r.method,
+        count: r.count,
+      })),
+    [stats]
+  );
+
+  const congestionData = useMemo(
+    () => stats?.congestionDistribution ?? [],
+    [stats]
+  );
+
+  const segmentData = useMemo(
+    () =>
+      (stats?.topSegments ?? []).map((s) => ({
+        segment: trunc(s.segment, 22),
+        savedMin: Math.round((s.savedSec ?? 0) / 60),
+        savedSec: s.savedSec ?? 0,
+      })),
+    [stats]
+  );
+
+  const utilizationData = useMemo(
+    () =>
+      (stats?.fleetUtilization ?? []).map((u) => ({
+        code: u.code,
+        missions: u.missions,
+      })),
+    [stats]
+  );
+
+  const fleet = stats?.fleet;
+  const missionsAgg = stats?.missions;
+  const hasMissionData = !!stats && stats.missions.total > 0;
+  const hasEventData = (stats?.byMethod ?? []).some((m) => m.count > 0);
+
+  return (
+    <div className="space-y-4">
+      {/* KPI strip */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <StatCard
+          label="Total missions"
+          value={formatNumber(missionsAgg?.total ?? 0)}
+          accent="red"
+          icon={<Siren className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
+        <StatCard
+          label="Completed"
+          value={formatNumber(missionsAgg?.completed ?? 0)}
+          accent="emerald"
+          icon={<CheckCircle2 className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
+        <StatCard
+          label="Active now"
+          value={formatNumber(missionsAgg?.active ?? 0)}
+          accent="amber"
+          icon={<Activity className="size-5" aria-hidden="true" />}
+          hint="Dispatched · en route · arrived"
+          loading={loading}
+        />
+        <StatCard
+          label="Completion rate"
+          value={`${missionsAgg?.total ? (stats?.completionRate ?? 0) : 0}%`}
+          accent="teal"
+          icon={<Gauge className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
+        <StatCard
+          label="Fleet size"
+          value={formatNumber(fleet?.total ?? 0)}
+          accent="teal"
+          icon={<AmbulanceIcon className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
+        <StatCard
+          label="Fleet availability"
+          value={`${fleet?.availabilityPct ?? 0}%`}
+          accent="lime"
+          icon={<CheckCircle2 className="size-5" aria-hidden="true" />}
+          hint={`${formatNumber(fleet?.available ?? 0)} of ${formatNumber(fleet?.total ?? 0)} units AVAILABLE`}
+          loading={loading}
+        />
+        <StatCard
+          label="Vehicles alerted"
+          value={formatNumber(stats?.vehiclesAlerted ?? 0)}
+          accent="red"
+          icon={<Radio className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
+        <StatCard
+          label="Time saved"
+          value={`${formatNumber(stats?.timeSavedMin ?? 0)} min`}
+          accent="emerald"
+          icon={<Timer className="size-5" aria-hidden="true" />}
+          hint="Total corridor clearance benefit"
+          loading={loading}
+        />
+        <StatCard
+          label="Avg saved / completed"
+          value={formatDuration(stats?.avgSavedSec ?? 0)}
+          accent="orange"
+          icon={<TrendingUp className="size-5" aria-hidden="true" />}
+          hint="Per completed mission"
+          loading={loading}
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* missions by emergency type */}
+        <SectionCard
+          title="Missions by emergency type"
+          description="Every request logged, split by emergency."
+          icon={<BarChart3 className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : !hasMissionData ? (
+            <EmptyState
+              icon={<BarChart3 className="size-6" aria-hidden="true" />}
+              title="No missions yet"
+              hint="Create missions in the Missions tab and this chart fills up."
+            />
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={emergencyData}
+                  margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    vertical={false}
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                    interval={0}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip {...TOOLTIP_PROPS} />
+                  <Bar
+                    dataKey="count"
+                    name="Missions"
+                    fill={C_RED}
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={44}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* 8-week trend */}
+        <SectionCard
+          title="Mission trend"
+          description="Emergency runs per week — last 8 weeks."
+          icon={<TrendingUp className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : !hasMissionData ? (
+            <EmptyState
+              icon={<TrendingUp className="size-6" aria-hidden="true" />}
+              title="No trend data yet"
+              hint="Weekly volumes appear once missions are logged."
+            />
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart
+                  data={weeklyData}
+                  margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                >
+                  <defs>
+                    <linearGradient id="corridorTrendFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C_RED} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={C_RED} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    vertical={false}
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    dataKey="label"
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip {...TOOLTIP_PROPS} />
+                  <Area
+                    type="monotone"
+                    dataKey="count"
+                    name="Missions"
+                    stroke={C_RED}
+                    strokeWidth={2}
+                    fill="url(#corridorTrendFill)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* alert fallback chain */}
+        <SectionCard
+          title="Alerts by fallback layer"
+          description="How the corridor reached vehicles, per alert method."
+          icon={<Radio className="size-4" aria-hidden="true" />}
+          actions={<MethodChainStrip className="hidden xl:flex" />}
+          className="lg:col-span-2"
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : !hasEventData ? (
+            <EmptyState
+              icon={<Radio className="size-6" aria-hidden="true" />}
+              title="No corridor events yet"
+              hint="Dispatch a mission along congested segments to see the fallback chain fire."
+            />
+          ) : (
+            <div className="space-y-3">
+              <MethodChainStrip className="xl:hidden" />
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={methodData}
+                    layout="vertical"
+                    margin={{ top: 4, right: 32, left: 8, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      horizontal={false}
+                      stroke="var(--border)"
+                      strokeDasharray="3 3"
+                    />
+                    <XAxis
+                      type="number"
+                      allowDecimals={false}
+                      tick={AXIS_TICK}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="label"
+                      width={118}
+                      tick={AXIS_TICK}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip {...TOOLTIP_PROPS} />
+                    <Bar
+                      dataKey="count"
+                      name="Alerts"
+                      radius={[0, 6, 6, 0]}
+                      maxBarSize={20}
+                    >
+                      {methodData.map((d) => (
+                        <Cell
+                          key={d.method}
+                          fill={METHOD_COLOR[d.method] ?? C_RED}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* congestion distribution */}
+        <SectionCard
+          title="Congestion profile"
+          description="Share of alerts by congestion level."
+          icon={<Gauge className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : !hasEventData ? (
+            <EmptyState
+              icon={<Gauge className="size-6" aria-hidden="true" />}
+              title="No congestion data yet"
+              hint="Congestion mix appears once corridor events are logged."
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={congestionData}
+                    margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                  >
+                    <CartesianGrid
+                      vertical={false}
+                      stroke="var(--border)"
+                      strokeDasharray="3 3"
+                    />
+                    <XAxis
+                      dataKey="congestion"
+                      tick={AXIS_TICK}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v: string) => titleCase(v)}
+                      interval={0}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={AXIS_TICK}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip {...TOOLTIP_PROPS} />
+                    <Bar
+                      dataKey="count"
+                      name="Alerts"
+                      radius={[6, 6, 0, 0]}
+                      maxBarSize={44}
+                    >
+                      {congestionData.map((d) => (
+                        <Cell
+                          key={d.congestion}
+                          fill={CONGESTION_COLOR[d.congestion] ?? C_AMBER}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {congestionData.map((d) => (
+                  <span
+                    key={d.congestion}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                      d.congestion === "LOW" &&
+                        "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+                      d.congestion === "MODERATE" &&
+                        "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+                      d.congestion === "HEAVY" &&
+                        "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+                      d.congestion === "GRIDLOCK" &&
+                        "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400"
+                    )}
+                  >
+                    {titleCase(d.congestion)} · {d.count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* top segments by time saved */}
+        <SectionCard
+          title="Top segments by time saved"
+          description="Where corridor clearance bought the most minutes."
+          icon={<MapPin className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : segmentData.length === 0 ? (
+            <EmptyState
+              icon={<MapPin className="size-6" aria-hidden="true" />}
+              title="No segment data yet"
+              hint="Dispatch missions to accumulate per-segment savings."
+            />
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={segmentData}
+                  layout="vertical"
+                  margin={{ top: 4, right: 32, left: 8, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    horizontal={false}
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    type="number"
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => `${v}m`}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="segment"
+                    width={150}
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip {...TOOLTIP_PROPS} />
+                  <Bar
+                    dataKey="savedMin"
+                    name="Minutes saved"
+                    fill={C_TEAL}
+                    radius={[0, 6, 6, 0]}
+                    maxBarSize={20}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </SectionCard>
+
+        {/* fleet utilisation */}
+        <SectionCard
+          title="Fleet utilisation"
+          description="Missions served per ambulance unit."
+          icon={<AmbulanceIcon className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <ChartSkeleton />
+          ) : utilizationData.length === 0 ? (
+            <EmptyState
+              icon={<AmbulanceIcon className="size-6" aria-hidden="true" />}
+              title="No ambulances on the roster"
+              hint="Add units in the Fleet tab to see utilisation."
+            />
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={utilizationData}
+                  layout="vertical"
+                  margin={{ top: 4, right: 32, left: 8, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    horizontal={false}
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                  />
+                  <XAxis
+                    type="number"
+                    allowDecimals={false}
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="code"
+                    width={128}
+                    tick={AXIS_TICK}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <Tooltip {...TOOLTIP_PROPS} />
+                  <Bar
+                    dataKey="missions"
+                    name="Missions"
+                    fill={C_AMBER}
+                    radius={[0, 6, 6, 0]}
+                    maxBarSize={20}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </div>
   );
 }

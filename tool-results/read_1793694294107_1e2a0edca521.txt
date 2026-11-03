@@ -1,0 +1,656 @@
+   601→      <PageHeader
+   602→        title="Animal Welfare"
+   603→        description="Angel Paws — rescue residents, foster families and adoptions."
+   604→        icon={<PawPrint className="size-5" aria-hidden="true" />}
+   605→        actions={
+   606→          <Button onClick={openCreate} aria-label="Add animal">
+   607→            <Plus className="size-4" aria-hidden="true" /> Add animal
+   608→          </Button>
+   609→        }
+   610→      />
+   611→
+   612→      {/* stats */}
+   613→      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+   614→        <StatCard label="Residents" value={counts.total} accent="lime" icon={<PawPrint className="size-5" aria-hidden="true" />} loading={loading} />
+   615→        <StatCard label="Available" value={counts.available} accent="emerald" icon={<HeartPulse className="size-5" aria-hidden="true" />} loading={loading} />
+   616→        <StatCard label="Adopted" value={counts.adopted} accent="teal" icon={<UserCheck className="size-5" aria-hidden="true" />} loading={loading} />
+   617→        <StatCard label="Critical rescues" value={counts.critical} accent="red" icon={<HeartPulse className="size-5" aria-hidden="true" />} loading={loading} hint="Need urgent care" />
+   618→      </div>
+   619→
+   620→      <SectionCard
+   621→        title="Rescue directory"
+   622→        icon={<PawPrint className="size-4" aria-hidden="true" />}
+   623→        description={loading ? "Loading residents…" : `${filtered.length} of ${animals.length} residents`}
+   624→        bodyClassName="space-y-4"
+   625→        actions={
+   626→          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+   627→            <div className="relative w-full sm:w-48">
+   628→              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+   629→              <Input
+   630→                value={search}
+   631→                onChange={(e) => setSearch(e.target.value)}
+   632→                placeholder="Search name, breed or place…"
+   633→                className="pl-9"
+   634→                aria-label="Search animals"
+   635→              />
+   636→            </div>
+   637→            <Select value={speciesFilter} onValueChange={setSpeciesFilter}>
+   638→              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by species">
+   639→                <SelectValue placeholder="All species" />
+   640→              </SelectTrigger>
+   641→              <SelectContent>
+   642→                <SelectItem value="ALL">All species</SelectItem>
+   643→                {speciesOptions.options.map((o) => (
+   644→                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+   645→                ))}
+   646→              </SelectContent>
+   647→            </Select>
+   648→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   649→              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by status">
+   650→                <SelectValue placeholder="All statuses" />
+   651→              </SelectTrigger>
+   652→              <SelectContent>
+   653→                <SelectItem value="ALL">All statuses</SelectItem>
+   654→                {ANIMAL_STATUSES.map((s) => (
+   655→                  <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+   656→                ))}
+   657→              </SelectContent>
+   658→            </Select>
+   659→            <ViewSwitcher value={view} onChange={setView} />
+   660→            <ExportMenu columns={csvColumns} rows={filtered} filename="uar-animals" disabled={loading || filtered.length === 0} />
+   661→          </div>
+   662→        }
+   663→      >
+   664→        {loading ? (
+   665→          <ViewSkeleton view={view} />
+   666→        ) : filtered.length === 0 ? (
+   667→          <EmptyState
+   668→            icon={<PawPrint className="size-6" aria-hidden="true" />}
+   669→            title={animals.length === 0 ? "No residents yet" : "No animals match the filters"}
+   670→            hint={
+   671→              animals.length === 0
+   672→                ? "Add rescued animals so donors can sponsor food and medical care."
+   673→                : "Try a different search term, species or status filter."
+   674→            }
+   675→          >
+   676→            {animals.length === 0 ? (
+   677→              <Button size="sm" onClick={openCreate}>
+   678→                <Plus className="size-4" aria-hidden="true" /> Add animal
+   679→              </Button>
+   680→            ) : (
+   681→              <Button
+   682→                size="sm"
+   683→                variant="outline"
+   684→                onClick={() => {
+   685→                  setSearch("");
+   686→                  setQuery("");
+   687→                  setSpeciesFilter("ALL");
+   688→                  setStatusFilter("ALL");
+   689→                }}
+   690→              >
+   691→                Clear filters
+   692→              </Button>
+   693→            )}
+   694→          </EmptyState>
+   695→        ) : view === "table" ? (
+   696→          <>
+   697→            <div className="overflow-x-auto rounded-xl border bg-card">
+   698→              <Table>
+   699→                <TableHeader>
+   700→                  <TableRow className="bg-muted/50 hover:bg-muted/50">
+   701→                    <TableHead>Resident</TableHead>
+   702→                    <TableHead className="hidden lg:table-cell">Age / gender</TableHead>
+   703→                    <TableHead className="hidden xl:table-cell">Health</TableHead>
+   704→                    <TableHead className="hidden md:table-cell">Care flags</TableHead>
+   705→                    <TableHead className="text-right">Food / mo</TableHead>
+   706→                    <TableHead>Status</TableHead>
+   707→                    <TableHead className="w-12 text-right">
+   708→                      <span className="sr-only">Actions</span>
+   709→                    </TableHead>
+   710→                  </TableRow>
+   711→                </TableHeader>
+   712→                <TableBody>
+   713→                  {paged.map((a) => {
+   714→                    const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   715→                    return (
+   716→                      <TableRow
+   717→                        key={a.id}
+   718→                        className="cursor-pointer"
+   719→                        onClick={() => setSheet(a)}
+   720→                        aria-label={`Open details for ${a.name}`}
+   721→                      >
+   722→                        <TableCell>
+   723→                          <div className="flex items-center gap-2.5">
+   724→                            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   725→                              <Icon className="size-4" aria-hidden="true" />
+   726→                            </span>
+   727→                            <div className="min-w-0">
+   728→                              <p className="truncate text-sm font-medium">{a.name}</p>
+   729→                              <p className="truncate text-[11px] text-muted-foreground">
+   730→                                {labelOf(speciesOptions.options, a.species)}
+   731→                                {a.breed ? ` · ${a.breed}` : ""} · {a.location}
+   732→                              </p>
+   733→                            </div>
+   734→                          </div>
+   735→                        </TableCell>
+   736→                        <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">
+   737→                          {ageText(a.ageMonths)} · {a.gender === "FEMALE" ? "♀" : a.gender === "MALE" ? "♂" : "—"}
+   738→                        </TableCell>
+   739→                        <TableCell className="hidden max-w-40 truncate text-sm text-muted-foreground xl:table-cell">
+   740→                          {a.healthStatus || "No issues noted"}
+   741→                        </TableCell>
+   742→                        <TableCell className="hidden md:table-cell">
+   743→                          <div className="flex gap-1">
+   744→                            {a.vaccinated && (
+   745→                              <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" aria-label="Vaccinated">
+   746→                                <Syringe className="size-3" aria-hidden="true" /> Vacc
+   747→                              </Badge>
+   748→                            )}
+   749→                            {a.sterilized && (
+   750→                              <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400" aria-label="Sterilized">
+   751→                                <Scissors className="size-3" aria-hidden="true" /> Ster
+   752→                              </Badge>
+   753→                            )}
+   754→                            {!a.vaccinated && !a.sterilized && <span className="text-xs text-muted-foreground">—</span>}
+   755→                          </div>
+   756→                        </TableCell>
+   757→                        <TableCell className="text-right text-sm font-medium">{formatINR(a.monthlyFood)}</TableCell>
+   758→                        <TableCell>
+   759→                          <Badge variant="outline" className={cn(ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   760→                            {titleCase(a.status)}
+   761→                          </Badge>
+   762→                        </TableCell>
+   763→                        <TableCell className="text-right">
+   764→                          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+   765→                            <RowMenu a={a} />
+   766→                          </div>
+   767→                        </TableCell>
+   768→                      </TableRow>
+   769→                    );
+   770→                  })}
+   771→                </TableBody>
+   772→              </Table>
+   773→            </div>
+   774→            <div className="flex flex-wrap items-center justify-between gap-2">
+   775→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   776→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   777→            </div>
+   778→          </>
+   779→        ) : view === "list" ? (
+   780→          <>
+   781→            <ul className="divide-y rounded-xl border bg-card">
+   782→              {paged.map((a) => {
+   783→                const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   784→                return (
+   785→                  <li key={a.id}>
+   786→                    <button
+   787→                      type="button"
+   788→                      onClick={() => setSheet(a)}
+   789→                      aria-label={`Open details for ${a.name}`}
+   790→                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
+   791→                    >
+   792→                      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   793→                        <Icon className="size-4" aria-hidden="true" />
+   794→                      </span>
+   795→                      <div className="min-w-0 flex-1">
+   796→                        <p className="truncate text-sm font-medium">{a.name}</p>
+   797→                        <p className="truncate text-xs text-muted-foreground">
+   798→                          {labelOf(speciesOptions.options, a.species)}
+   799→                          {a.breed ? ` · ${a.breed}` : ""} · {ageText(a.ageMonths)} · {a.location}
+   800→                        </p>
+   801→                      </div>
+   802→                      <div className="hidden shrink-0 items-center gap-1 sm:flex">
+   803→                        {a.vaccinated && <Syringe className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-label="Vaccinated" />}
+   804→                        {a.sterilized && <Scissors className="size-3.5 text-teal-600 dark:text-teal-400" aria-label="Sterilized" />}
+   805→                      </div>
+   806→                      <span className="hidden shrink-0 text-sm font-medium sm:block">{formatINRCompact(a.monthlyFood)}</span>
+   807→                      <Badge variant="outline" className={cn("shrink-0", ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   808→                        {titleCase(a.status)}
+   809→                      </Badge>
+   810→                      <div onClick={(e) => e.stopPropagation()}>
+   811→                        <RowMenu a={a} />
+   812→                      </div>
+   813→                    </button>
+   814→                  </li>
+   815→                );
+   816→              })}
+   817→            </ul>
+   818→            <div className="flex flex-wrap items-center justify-between gap-2">
+   819→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   820→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   821→            </div>
+   822→          </>
+   823→        ) : (
+   824→          <>
+   825→            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   826→              {paged.map((a) => {
+   827→                const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   828→                return (
+   829→                  <button
+   830→                    key={a.id}
+   831→                    type="button"
+   832→                    onClick={() => setSheet(a)}
+   833→                    aria-label={`Open details for ${a.name}`}
+   834→                    className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-lime-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+   835→                  >
+   836→                    <div className="flex items-start gap-3">
+   837→                      <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   838→                        <Icon className="size-5" aria-hidden="true" />
+   839→                      </span>
+   840→                      <div className="min-w-0 flex-1">
+   841→                        <p className="truncate font-semibold leading-tight">{a.name}</p>
+   842→                        <p className="truncate text-xs text-muted-foreground">
+   843→                          {labelOf(speciesOptions.options, a.species)}
+   844→                          {a.breed ? ` · ${a.breed}` : ""} · {ageText(a.ageMonths)}
+   845→                        </p>
+   846→                      </div>
+   847→                      <Badge variant="outline" className={cn("shrink-0", ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   848→                        {titleCase(a.status)}
+   849→                      </Badge>
+   850→                    </div>
+   851→
+   852→                    <div className="flex flex-wrap gap-1.5">
+   853→                      <Badge variant="outline">{a.gender === "FEMALE" ? "♀ Female" : a.gender === "MALE" ? "♂ Male" : "Unknown"}</Badge>
+   854→                      <Badge
+   855→                        variant="outline"
+   856→                        className={a.vaccinated ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}
+   857→                      >
+   858→                        <Syringe className="size-3" aria-hidden="true" />
+   859→                        {a.vaccinated ? "Vaccinated" : "Not vaccinated"}
+   860→                      </Badge>
+   861→                      <Badge
+   862→                        variant="outline"
+   863→                        className={a.sterilized ? "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400" : "text-muted-foreground"}
+   864→                      >
+   865→                        <Scissors className="size-3" aria-hidden="true" />
+   866→                        {a.sterilized ? "Sterilized" : "Not sterilized"}
+   867→                      </Badge>
+   868→                    </div>
+   869→
+   870→                    <p className="line-clamp-2 text-xs text-muted-foreground">{a.story}</p>
+   871→
+   872→                    <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3 text-xs">
+   873→                      <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
+   874→                        <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
+   875→                        <span className="truncate">{a.location}</span>
+   876→                      </span>
+   877→                      <span className="whitespace-nowrap font-medium">{formatINR(a.monthlyFood)}/mo food</span>
+   878→                    </div>
+   879→                  </button>
+   880→                );
+   881→              })}
+   882→            </div>
+   883→            <div className="flex flex-wrap items-center justify-between gap-2">
+   884→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   885→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   886→            </div>
+   887→          </>
+   888→        )}
+   889→      </SectionCard>
+   890→
+   891→      {/* ============================== DETAIL SHEET ============================= */}
+   892→      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+   893→        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg">
+   894→          {sheet && (
+   895→            <div className="space-y-5 p-5">
+   896→              <SheetHeader className="p-0 text-left">
+   897→                <SheetTitle className="flex items-center gap-2">
+   898→                  {sheet.name}
+   899→                  <Badge variant="outline" className={cn("ml-auto", ANIMAL_STATUS[sheet.status] ?? "")}>
+   900→                    {titleCase(sheet.status)}
+   901→                  </Badge>
+   902→                </SheetTitle>
+   903→                <SheetDescription>
+   904→                  {labelOf(speciesOptions.options, sheet.species)} · Angel Paws resident
+   905→                </SheetDescription>
+   906→              </SheetHeader>
+   907→
+   908→              <div className="grid grid-cols-2 gap-3">
+   909→                <DataField label="Breed" value={sheet.breed || "—"} />
+   910→                <DataField label="Age" value={ageText(sheet.ageMonths)} />
+   911→                <DataField label="Gender" value={titleCase(sheet.gender)} />
+   912→                <DataField label="Monthly food" value={formatINR(sheet.monthlyFood)} />
+   913→                <DataField label="Location" value={sheet.location} icon={<MapPin className="size-3.5" aria-hidden="true" />} />
+   914→                <DataField label="Health" value={sheet.healthStatus || "No issues noted"} />
+   915→              </div>
+   916→
+   917→              <div className="grid grid-cols-2 gap-3">
+   918→                <div className="flex items-center justify-between gap-2 rounded-lg border p-3">
+   919→                  <Label htmlFor="sheet-vacc" className="text-xs">
+   920→                    Vaccinated
+   921→                  </Label>
+   922→                  <Switch id="sheet-vacc" checked={!!sheet.vaccinated} disabled aria-label="Vaccinated" />
+   923→                </div>
+   924→                <div className="flex items-center justify-between gap-2 rounded-lg border p-3">
+   925→                  <Label htmlFor="sheet-ster" className="text-xs">
+   926→                    Sterilized
+   927→                  </Label>
+   928→                  <Switch id="sheet-ster" checked={!!sheet.sterilized} disabled aria-label="Sterilized" />
+   929→                </div>
+   930→              </div>
+   931→
+   932→              <SectionCard title="Story">
+   933→                <p className="text-sm leading-relaxed text-muted-foreground">{sheet.story}</p>
+   934→              </SectionCard>
+   935→
+   936→              {sheet.adoptedByName ? (
+   937→                <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
+   938→                  <span className="flex size-9 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-400">
+   939→                    <UserCheck className="size-4" aria-hidden="true" />
+   940→                  </span>
+   941→                  <div className="min-w-0">
+   942→                    <p className="text-xs text-muted-foreground">Adopted by</p>
+   943→                    <p className="truncate text-sm font-semibold">{sheet.adoptedByName}</p>
+   944→                  </div>
+   945→                </div>
+   946→              ) : null}
+   947→
+   948→              <SectionCard title={`Pledges (${(sheet.pledges ?? []).length})`}>
+   949→                {(sheet.pledges ?? []).length === 0 ? (
+   950→                  <p className="text-sm text-muted-foreground">No pledges yet — donors can sponsor food, medical care or shelter.</p>
+   951→                ) : (
+   952→                  <ul className="max-h-60 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+   953→                    {(sheet.pledges ?? []).map((pl) => (
+   954→                      <li key={pl.id} className="flex items-center gap-2 rounded-lg border p-2.5 text-sm">
+   955→                        <div className="min-w-0 flex-1">
+   956→                          <p className="truncate font-medium">{pl.donorName}</p>
+   957→                          <p className="text-xs text-muted-foreground">
+   958→                            {titleCase(pl.kind)} · {formatINR(pl.amount)} · {titleCase(pl.frequency)}
+   959→                          </p>
+   960→                        </div>
+   961→                        <Badge variant="outline" className={cn("shrink-0", PLEDGE_STATUS_CLS[pl.status] ?? "")}>
+   962→                          {titleCase(pl.status)}
+   963→                        </Badge>
+   964→                      </li>
+   965→                    ))}
+   966→                  </ul>
+   967→                )}
+   968→              </SectionCard>
+   969→
+   970→              <div className="flex flex-wrap gap-2 border-t pt-4">
+   971→                {sheet.status !== "ADOPTED" && (
+   972→                  <Button variant="outline" size="sm" onClick={() => openAdopt(sheet)}>
+   973→                    <UserCheck className="size-3.5" aria-hidden="true" /> Mark adopted
+   974→                  </Button>
+   975→                )}
+   976→                {sheet.status === "FOSTERED" ? (
+   977→                  <Button
+   978→                    variant="outline"
+   979→                    size="sm"
+   980→                    onClick={() => void setStatus(sheet, "AVAILABLE")}
+   981→                    aria-label={`Return ${sheet.name} from foster care`}
+   982→                  >
+   983→                    End foster
+   984→                  </Button>
+   985→                ) : (
+   986→                  <Button
+   987→                    variant="outline"
+   988→                    size="sm"
+   989→                    disabled={sheet.status === "ADOPTED"}
+   990→                    onClick={() => void setStatus(sheet, "FOSTERED")}
+   991→                    aria-label={`Send ${sheet.name} to foster care`}
+   992→                  >
+   993→                    Foster
+   994→                  </Button>
+   995→                )}
+   996→                {sheet.status === "CRITICAL" ? (
+   997→                  <Button variant="outline" size="sm" onClick={() => void setStatus(sheet, "AVAILABLE")}>
+   998→                    Mark stable
+   999→                  </Button>
+  1000→                ) : (
+  1001→                  <Button
+  1002→                    variant="outline"
+  1003→                    size="sm"
+  1004→                    className="border-red-500/40 text-red-700 hover:bg-red-500/10 dark:text-red-400"
+  1005→                    onClick={() => void setStatus(sheet, "CRITICAL")}
+  1006→                  >
+  1007→                    <HeartPulse className="size-3.5" aria-hidden="true" /> Critical rescue
+  1008→                  </Button>
+  1009→                )}
+  1010→                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+  1011→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+  1012→                </Button>
+  1013→                <Button
+  1014→                  variant="outline"
+  1015→                  size="sm"
+  1016→                  className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+  1017→                  onClick={() => setDeleteTarget(sheet)}
+  1018→                  aria-label={`Delete ${sheet.name}`}
+  1019→                >
+  1020→                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+  1021→                </Button>
+  1022→              </div>
+  1023→            </div>
+  1024→          )}
+  1025→        </SheetContent>
+  1026→      </Sheet>
+  1027→
+  1028→      {/* ============================ ADOPT DIALOG =============================== */}
+  1029→      <Dialog open={!!adoptTarget} onOpenChange={(o) => !o && setAdoptTarget(null)}>
+  1030→        <DialogContent className="sm:max-w-md">
+  1031→          <DialogHeader>
+  1032→            <DialogTitle>Mark {adoptTarget?.name} as adopted</DialogTitle>
+  1033→            <DialogDescription>
+  1034→              Records the adopter and issues an Animal Adoption Certificate.
+  1035→            </DialogDescription>
+  1036→          </DialogHeader>
+  1037→          <div className="grid gap-4">
+  1038→            <div className="grid gap-2">
+  1039→              <Label htmlFor="adopt-name">Adopter name *</Label>
+  1040→              <Input
+  1041→                id="adopt-name"
+  1042→                value={adopterName}
+  1043→                onChange={(e) => setAdopterName(e.target.value)}
+  1044→                placeholder="Ravi Kumar"
+  1045→              />
+  1046→            </div>
+  1047→            <div className="grid gap-2">
+  1048→              <Label htmlFor="adopt-search">Link an existing account (optional)</Label>
+  1049→              <div className="flex gap-2">
+  1050→                <Input
+  1051→                  id="adopt-search"
+  1052→                  value={userQuery}
+  1053→                  onChange={(e) => setUserQuery(e.target.value)}
+  1054→                  placeholder="Search by name or email…"
+  1055→                  onKeyDown={(e) => {
+  1056→                    if (e.key === "Enter") {
+  1057→                      e.preventDefault();
+  1058→                      void searchUsers();
+  1059→                    }
+  1060→                  }}
+  1061→                />
+  1062→                <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" onClick={() => void searchUsers()} aria-label="Search users" disabled={searchingUsers}>
+  1063→                  <Search className="size-4" aria-hidden="true" />
+  1064→                </Button>
+  1065→              </div>
+  1066→              {userMatches.length > 0 && (
+  1067→                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-1 scrollbar-thin">
+  1068→                  {userMatches.map((u) => (
+  1069→                    <li key={u.id}>
+  1070→                      <button
+  1071→                        type="button"
+  1072→                        onClick={() => {
+  1073→                          setAdoptUserId(u.id);
+  1074→                          setAdopterName(u.name);
+  1075→                          setUserMatches([]);
+  1076→                        }}
+  1077→                        className={cn(
+  1078→                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
+  1079→                          adoptUserId === u.id && "bg-accent"
+  1080→                        )}
+  1081→                      >
+  1082→                        <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
+  1083→                          {initials(u.name)}
+  1084→                        </span>
+  1085→                        <span className="min-w-0 flex-1 truncate">{u.name}</span>
+  1086→                        <span className="truncate text-xs text-muted-foreground">{u.email}</span>
+  1087→                      </button>
+  1088→                    </li>
+  1089→                  ))}
+  1090→                </ul>
+  1091→              )}
+  1092→              {adoptUserId && (
+  1093→                <p className="text-xs text-muted-foreground">Account linked — the certificate will appear in their portal.</p>
+  1094→              )}
+  1095→            </div>
+  1096→          </div>
+  1097→          <DialogFooter>
+  1098→            <Button variant="outline" onClick={() => setAdoptTarget(null)}>
+  1099→              Cancel
+  1100→            </Button>
+  1101→            <Button onClick={() => void confirmAdopt()} disabled={adopting}>
+  1102→              {adopting ? "Confirming…" : "Confirm adoption"}
+  1103→            </Button>
+  1104→          </DialogFooter>
+  1105→        </DialogContent>
+  1106→      </Dialog>
+  1107→
+  1108→      {/* ============================ CREATE / EDIT ============================= */}
+  1109→      <FormSheet
+  1110→        open={formOpen}
+  1111→        onOpenChange={handleFormOpenChange}
+  1112→        title={editing ? `Edit ${editing.name}` : "Add animal"}
+  1113→        description="Rescue profile shown on the public Angel Paws page."
+  1114→        onSubmit={save}
+  1115→        submitLabel={editing ? "Save changes" : "Add animal"}
+  1116→        loading={saving}
+  1117→        dirty={dirty}
+  1118→        size="lg"
+  1119→        footerExtra={
+  1120→          errorCount > 0 ? (
+  1121→            <span className="font-medium text-destructive">{errorCount} field(s) need attention</span>
+  1122→          ) : null
+  1123→        }
+  1124→      >
+  1125→        <FormSection title="Profile" description="Identity and basic facts about this resident.">
+  1126→          <FieldGrid>
+  1127→            <TextField
+  1128→              label="Name"
+  1129→              required
+  1130→              value={form.name}
+  1131→              onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+  1132→              placeholder="Simba"
+  1133→              error={errors.name}
+  1134→            />
+  1135→            <SelectField
+  1136→              label="Species"
+  1137→              value={form.species}
+  1138→              onChange={(v) => setForm((f) => ({ ...f, species: v }))}
+  1139→              options={speciesOptions.options.length > 0 ? speciesOptions.options : [{ value: "OTHER", label: "Other" }]}
+  1140→              placeholder="Select species"
+  1141→            />
+  1142→          </FieldGrid>
+  1143→          <FieldGrid>
+  1144→            <TextField
+  1145→              label="Breed"
+  1146→              value={form.breed}
+  1147→              onChange={(v) => setForm((f) => ({ ...f, breed: v }))}
+  1148→              placeholder="Indie / mix"
+  1149→            />
+  1150→            <TextField
+  1151→              label="Age (months)"
+  1152→              type="number"
+  1153→              min="0"
+  1154→              value={form.ageMonths}
+  1155→              onChange={(v) => setForm((f) => ({ ...f, ageMonths: v }))}
+  1156→              placeholder="12"
+  1157→              error={errors.ageMonths}
+  1158→            />
+  1159→          </FieldGrid>
+  1160→          <SelectField
+  1161→            label="Gender"
+  1162→            value={form.gender}
+  1163→            onChange={(v) => setForm((f) => ({ ...f, gender: v }))}
+  1164→            options={[
+  1165→              { value: "MALE", label: "Male" },
+  1166→              { value: "FEMALE", label: "Female" },
+  1167→              { value: "UNKNOWN", label: "Unknown" },
+  1168→            ]}
+  1169→          />
+  1170→        </FormSection>
+  1171→
+  1172→        <FormSection title="Health & care" description="Medical flags and the monthly cost of care.">
+  1173→          <TextField
+  1174→            label="Health status"
+  1175→            value={form.healthStatus}
+  1176→            onChange={(v) => setForm((f) => ({ ...f, healthStatus: v }))}
+  1177→            placeholder="Recovering from mange"
+  1178→            hint="Leave blank if there are no issues."
+  1179→          />
+  1180→          <FieldGrid>
+  1181→            <SwitchField
+  1182→              label="Vaccinated"
+  1183→              hint="Rabies and core vaccines"
+  1184→              checked={form.vaccinated}
+  1185→              onChange={(v) => setForm((f) => ({ ...f, vaccinated: v }))}
+  1186→            />
+  1187→            <SwitchField
+  1188→              label="Sterilized"
+  1189→              hint="Spayed or neutered"
+  1190→              checked={form.sterilized}
+  1191→              onChange={(v) => setForm((f) => ({ ...f, sterilized: v }))}
+  1192→            />
+  1193→          </FieldGrid>
+  1194→          <FieldGrid>
+  1195→            <TextField
+  1196→              label="Location"
+  1197→              required
+  1198→              value={form.location}
+  1199→              onChange={(v) => setForm((f) => ({ ...f, location: v }))}
+  1200→              placeholder="UAR shelter, Hebbal"
+  1201→              error={errors.location}
+  1202→            />
+  1203→            <TextField
+  1204→              label="Monthly food cost"
+  1205→              type="number"
+  1206→              min="0"
+  1207→              prefix="₹"
+  1208→              value={form.monthlyFood}
+  1209→              onChange={(v) => setForm((f) => ({ ...f, monthlyFood: v }))}
+  1210→              placeholder="1500"
+  1211→              hint="₹0 if not yet known."
+  1212→              error={errors.monthlyFood}
+  1213→            />
+  1214→          </FieldGrid>
+  1215→        </FormSection>
+  1216→
+  1217→        <FormSection title="Story" description="The rescue journey — shown on the public adoption page.">
+  1218→          <TextareaField
+  1219→            label="Story"
+  1220→            required
+  1221→            rows={4}
+  1222→            value={form.story}
+  1223→            onChange={(v) => setForm((f) => ({ ...f, story: v }))}
+  1224→            placeholder="Rescued from a busy junction with an injured leg…"
+  1225→            error={errors.story}
+  1226→          />
+  1227→        </FormSection>
+  1228→      </FormSheet>
+  1229→
+  1230→      {/* ============================ DELETE CONFIRM ============================ */}
+  1231→      <ConfirmDialog
+  1232→        open={!!deleteTarget}
+  1233→        onOpenChange={(o) => !o && setDeleteTarget(null)}
+  1234→        title={`Remove ${deleteTarget?.name ?? "resident"}?`}
+  1235→        recordName={deleteTarget ? `${deleteTarget.name} · ${labelOf(speciesOptions.options, deleteTarget.species)}` : null}
+  1236→        description="This deletes the rescue profile and its pledge history permanently."
+  1237→        confirmLabel="Delete resident"
+  1238→        loading={saving}
+  1239→        onConfirm={remove}
+  1240→      />
+  1241→
+  1242→      <ConfirmDialog
+  1243→        open={confirmDiscard}
+  1244→        onOpenChange={setConfirmDiscard}
+  1245→        title="Discard unsaved changes?"
+  1246→        description="Your edits to this resident haven't been saved yet. Closing now will lose them."
+  1247→        confirmLabel="Discard"
+  1248→        onConfirm={() => {
+  1249→          setFormOpen(false);
+  1250→          setConfirmDiscard(false);
+  1251→        }}
+  1252→      />
+  1253→    </div>
+  1254→  );
+  1255→}
+  1256→

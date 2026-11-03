@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Distributions — the trust's welfare-delivery module.
+     5→ *
+     6→ * Tab 1 "General distributions": every aid type (food kits, medical, cash…)
+     7→ *   with beneficiary urgency, item-level tracking, volunteer assignment,
+     8→ *   campaign linkage, value estimation and impact math.
+     9→ * Tab 2 "Sanitary pads drives": the pads programme (schools, girls count,
+    10→ *   pads per girl, awareness sessions) — always lives inside Distributions.
+    11→ */
+    12→
+    13→import { useCallback, useEffect, useMemo, useState } from "react";
+    14→import {
+    15→  Banknote,
+    16→  Calculator,
+    17→  CalendarDays,
+    18→  GraduationCap,
+    19→  Info,
+    20→  MapPin,
+    21→  Megaphone,
+    22→  MoreHorizontal,
+    23→  Package,
+    24→  Pencil,
+    25→  PawPrint,
+    26→  Plus,
+    27→  RefreshCw,
+    28→  School,
+    29→  Search,
+    30→  Shirt,
+    31→  Sparkles,
+    32→  Stethoscope,
+    33→  Trash2,
+    34→  TriangleAlert,
+    35→  Users,
+    36→  UtensilsCrossed,
+    37→  Wallet,
+    38→  X,
+    39→} from "lucide-react";
+    40→import { toast } from "sonner";
+    41→import { del, get, patch, post } from "@/lib/api-client";
+    42→import {
+    43→  financialYear,
+    44→  formatDate,
+    45→  formatDateTime,
+    46→  formatINR,
+    47→  formatINRCompact,
+    48→  titleCase,
+    49→} from "@/lib/format";
+    50→import { dateRule } from "@/lib/validators";
+    51→import { cn } from "@/lib/utils";
+    52→import { useAuth } from "@/hooks/use-auth";
+    53→import { PageHeader } from "@/components/shared/page-header";
+    54→import { SectionCard } from "@/components/shared/section-card";
+    55→import { StatCard } from "@/components/shared/stat-card";
+    56→import { DataField } from "@/components/shared/data-field";
+    57→import { EmptyState } from "@/components/shared/empty-state";
+    58→import { StatusBadge, type Tone } from "@/components/shared/status-badge";
+    59→import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+    60→import { FormSheet } from "@/components/shared/form-sheet";
+    61→import {
+    62→  DetailGrid,
+    63→  DetailSection,
+    64→  DetailSheet,
+    65→} from "@/components/shared/detail-sheet";
+    66→import {
+    67→  Field,
+    68→  FieldGrid,
+    69→  FormSection,
+    70→  SelectField,
+    71→  SwitchField,
+    72→  TextField,
+    73→  TextareaField,
+    74→} from "@/components/shared/form-fields";
+    75→import { CsvColumn, ExportMenu } from "@/components/shared/csv";
+    76→import {
+    77→  DataTable,
+    78→  type DataTableColumn,
+    79→} from "@/components/shared/data-table";
+    80→import { useViewPref, ViewSwitcher } from "@/components/shared/view-switcher";
+    81→import { Badge } from "@/components/ui/badge";
+    82→import { Button } from "@/components/ui/button";
+    83→import { Input } from "@/components/ui/input";
+    84→import { Progress } from "@/components/ui/progress";
+    85→import { Skeleton } from "@/components/ui/skeleton";
+    86→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    87→import {
+    88→  DropdownMenu,
+    89→  DropdownMenuContent,
+    90→  DropdownMenuItem,
+    91→  DropdownMenuSeparator,
+    92→  DropdownMenuTrigger,
+    93→} from "@/components/ui/dropdown-menu";
+    94→
+    95→/* ---------------------------------- types ---------------------------------- */
+    96→
+    97→interface DistributionRow {
+    98→  id: string;
+    99→  type: string;
+   100→  beneficiaryId?: string | null;
+   101→  volunteerId?: string | null;
+   102→  campaignId?: string | null;
+   103→  items?: string | null;
+   104→  quantity: number;
+   105→  value?: number | null;
+   106→  location?: string | null;
+   107→  photos?: string | null;
+   108→  notes?: string | null;
+   109→  distributedAt: string;
+   110→  createdAt?: string;
+   111→  beneficiary?: {
+   112→    id: string;
+   113→    name: string;
+   114→    category: string;
+   115→    urgencyLevel: string;
+   116→    city?: string | null;
+   117→    familyMembers: number;
+   118→  } | null;
+   119→  volunteer?: { id: string; user?: { name: string } | null } | null;
+   120→  campaign?: {
+   121→    id: string;
+   122→    title: string;
+   123→    accent?: string;
+   124→    status?: string;
+   125→    targetAmount?: number;
+   126→    raisedAmount?: number;
+   127→  } | null;
+   128→}
+   129→
+   130→interface DistEnvelope {
+   131→  items: DistributionRow[];
+   132→  total: number;
+   133→  count: number;
+   134→  sumValue: number;
+   135→  sumQuantity: number;
+   136→  beneficiariesServed: number;
+   137→  avgItemsPerDrive: number;
+   138→}
+   139→
+   140→interface PadDrive {
+   141→  id: string;
+   142→  schoolName?: string | null;
+   143→  area: string;
+   144→  girlsCount: number;
+   145→  padsDistributed: number;
+   146→  awarenessSession: boolean;
+   147→  sessionAttendees?: number | null;
+   148→  volunteerId?: string | null;
+   149→  volunteerName?: string | null;
+   150→  notes?: string | null;
+   151→  distributionDate: string;
+   152→  volunteer?: { id: string; name: string } | null;
+   153→}
+   154→
+   155→interface PadEnvelope {
+   156→  items: PadDrive[];
+   157→  total: number;
+   158→  count: number;
+   159→  sumPads: number;
+   160→  sumGirls: number;
+   161→  sumAttendees: number;
+   162→  sessions: number;
+   163→  schools: number;
+   164→}
+   165→
+   166→interface BeneficiaryLite {
+   167→  id: string;
+   168→  name: string;
+   169→  city?: string | null;
+   170→  category: string;
+   171→  urgencyLevel: string;
+   172→  familyMembers: number;
+   173→}
+   174→
+   175→interface CampaignLite {
+   176→  id: string;
+   177→  title: string;
+   178→  status: string;
+   179→  targetAmount: number;
+   180→  raisedAmount: number;
+   181→}
+   182→
+   183→interface VolunteerLite {
+   184→  id: string;
+   185→  status: string;
+   186→  assignedArea?: string | null;
+   187→  user: { name: string };
+   188→}
+   189→
+   190→interface InventoryLite {
+   191→  id: string;
+   192→  name: string;
+   193→  unit: string;
+   194→  pricePerUnit?: number | null;
+   195→}
+   196→
+   197→interface SchoolRow {
+   198→  id: string;
+   199→  schoolName: string;
+   200→  city?: string | null;
+   201→  totalGirls: number;
+   202→  visitsCount: number;
+   203→  isActive: boolean;
+   204→  lastVisited?: string | null;
+   205→}
+   206→
+   207→interface ItemRow {
+   208→  name: string;
+   209→  qty: string;
+   210→  unit: string;
+   211→}
+   212→
+   213→interface DistForm {
+   214→  type: string;
+   215→  beneficiaryId: string;
+   216→  volunteerId: string;
+   217→  campaignId: string;
+   218→  quantity: string;
+   219→  value: string;
+   220→  location: string;
+   221→  distributedAt: string;
+   222→  items: ItemRow[];
+   223→  notes: string;
+   224→}
+   225→
+   226→interface PadForm {
+   227→  schoolName: string;
+   228→  area: string;
+   229→  girlsCount: string;
+   230→  padsDistributed: string;
+   231→  awarenessSession: boolean;
+   232→  sessionAttendees: string;
+   233→  volunteerId: string;
+   234→  volunteerName: string;
+   235→  distributionDate: string;
+   236→  notes: string;
+   237→}
+   238→
+   239→interface SchoolForm {
+   240→  schoolName: string;
+   241→  city: string;
+   242→  contactPerson: string;
+   243→  contactPhone: string;
+   244→  totalGirls: string;
+   245→}
+   246→
+   247→type Errors = Record<string, string | null>;
+   248→type DateRange = "30" | "90" | "fy" | "all";
+   249→
+   250→/* ------------------------------ chip styles ------------------------------- */
+   251→
+   252→const TYPE_META: Record<
+   253→  string,
+   254→  { label: string; cls: string; icon: React.ElementType }
+   255→> = {
+   256→  FOOD: {
+   257→    label: "Food",
+   258→    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   259→    icon: UtensilsCrossed,
+   260→  },
+   261→  SANITARY_PADS: {
+   262→    label: "Sanitary Pads",
+   263→    cls: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400",
+   264→    icon: Sparkles,
+   265→  },
+   266→  MEDICAL: {
+   267→    label: "Medical",
+   268→    cls: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+   269→    icon: Stethoscope,
+   270→  },
+   271→  ANIMAL_FEED: {
+   272→    label: "Animal Feed",
+   273→    cls: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+   274→    icon: PawPrint,
+   275→  },
+   276→  CLOTHING: {
+   277→    label: "Clothing",
+   278→    cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+   279→    icon: Shirt,
+   280→  },
+   281→  EDUCATION_MATERIAL: {
+   282→    label: "Education",
+   283→    cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+   284→    icon: GraduationCap,
+   285→  },
+   286→  CASH: {
+   287→    label: "Cash Support",
+   288→    cls: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+   289→    icon: Banknote,
+   290→  },
+   291→  OTHER: {
+   292→    label: "Other",
+   293→    cls: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+   294→    icon: Package,
+   295→  },
+   296→};
+   297→
+   298→const DISTRIBUTION_TYPES = Object.keys(TYPE_META);
+   299→
+   300→const URGENCY_TONE: Record<string, Tone> = {
+   301→  CRITICAL: "danger",
+   302→  HIGH: "warning",
+   303→  MEDIUM: "progress",
+   304→  LOW: "success",
+   305→};
+   306→
+   307→/** Rough field estimates so numbers feel human — clearly labelled as approximations. */
+   308→const IMPACT_PER_TYPE: Record<string, (qty: number) => string> = {
+   309→  FOOD: (q) =>
+   310→    `≈ ${q} ration kit${q === 1 ? "" : "s"} — a family of 4 eats for ~${q * 15} days on this`,
+   311→  SANITARY_PADS: (q) => {
+   312→    const months = Math.floor(q / 18);
+   313→    return `≈ ${q} pad${q === 1 ? "" : "s"} — ${months} girl-month${months === 1 ? "" : "s"} of protection (18 pads ≈ 1 month)`;
+   314→  },
+   315→  MEDICAL: (q) =>
+   316→    `≈ ${q} patient-month${q === 1 ? "" : "s"} of medicine support (₹1,000 covers a month of BP/diabetes meds)`,
+   317→  EDUCATION_MATERIAL: (q) =>
+   318→    `≈ ${q} student${q === 1 ? "" : "s"} equipped with supplies for a term`,
+   319→  CLOTHING: (q) => `≈ ${q} garment${q === 1 ? "" : "s"} to someone who needed them today`,
+   320→  ANIMAL_FEED: (q) =>
+   321→    `≈ ${q} street dog${q === 1 ? "" : "s"} fed for a month (₹600 ≈ 1 dog-month of feed)`,
+   322→  CASH: () => "Direct cash assistance handed to the family",
+   323→  OTHER: (q) => `${q} unit${q === 1 ? "" : "s"} delivered to the field`,
+   324→};
+   325→
+   326→const RATION_KIT_COST = 650;
+   327→const PADS_PER_GIRL_MONTH = 18;
+   328→
+   329→const NATIVE_SELECT_CLS =
+   330→  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+   331→
+   332→const RANGE_OPTIONS: Array<{ value: DateRange; label: string }> = [
+   333→  { value: "30", label: "Last 30 days" },
+   334→  { value: "90", label: "Last 90 days" },
+   335→  { value: "fy", label: "This financial year" },
+   336→  { value: "all", label: "All time" },
+   337→];
+   338→
+   339→const EMPTY_ITEM: ItemRow = { name: "", qty: "1", unit: "" };
+   340→
+   341→const EMPTY_DIST_FORM: DistForm = {
+   342→  type: "FOOD",
+   343→  beneficiaryId: "",
+   344→  volunteerId: "",
+   345→  campaignId: "",
+   346→  quantity: "1",
+   347→  value: "",
+   348→  location: "",
+   349→  distributedAt: "",
+   350→  items: [{ ...EMPTY_ITEM }],
+   351→  notes: "",
+   352→};
+   353→
+   354→const EMPTY_PAD_FORM: PadForm = {
+   355→  schoolName: "",
+   356→  area: "",
+   357→  girlsCount: "",
+   358→  padsDistributed: "",
+   359→  awarenessSession: false,
+   360→  sessionAttendees: "",
+   361→  volunteerId: "",
+   362→  volunteerName: "",
+   363→  distributionDate: "",
+   364→  notes: "",
+   365→};
+   366→
+   367→const EMPTY_SCHOOL_FORM: SchoolForm = {
+   368→  schoolName: "",
+   369→  city: "",
+   370→  contactPerson: "",
+   371→  contactPhone: "",
+   372→  totalGirls: "",
+   373→};
+   374→
+   375→/* -------------------------------- utilities -------------------------------- */
+   376→
+   377→function pad2(n: number): string {
+   378→  return String(n).padStart(2, "0");
+   379→}
+   380→
+   381→/** Local-time value for <input type="datetime-local"> */
+   382→function nowLocalInput(): string {
+   383→  const d = new Date();
+   384→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+   385→}
+   386→
+   387→function toLocalInput(iso: string | null | undefined): string {
+   388→  if (!iso) return "";
+   389→  const d = new Date(iso);
+   390→  if (Number.isNaN(d.getTime())) return "";
+   391→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+   392→}
+   393→
+   394→function todayIso(): string {
+   395→  const d = new Date();
+   396→  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+   397→}
+   398→
+   399→/** Financial-year window (Apr → Mar) as ISO strings for API filters. */
+   400→function fyRange(): { from: string; to: string } {
+   401→  const now = new Date();
+   402→  const y = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+   403→  return { from: `${y}-04-01T00:00:00`, to: `${y + 1}-03-31T23:59:59.999` };
+   404→}
+   405→
+   406→function rangeToParams(range: DateRange): { from?: string; to?: string } {
+   407→  if (range === "all") return {};
+   408→  if (range === "fy") return fyRange();
+   409→  const days = range === "30" ? 30 : 90;
+   410→  const from = new Date(Date.now() - days * 86_400_000);
+   411→  return {
+   412→    from: `${from.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}T00:00:00`,
+   413→  };
+   414→}
+   415→
+   416→interface ParsedItem {
+   417→  name?: string;
+   418→  qty?: number | string;
+   419→  unit?: string;
+   420→}
+   421→
+   422→function parseItems(json: string | null | undefined): ParsedItem[] {
+   423→  if (!json) return [];
+   424→  try {
+   425→    const parsed = JSON.parse(json);
+   426→    return Array.isArray(parsed) ? (parsed as ParsedItem[]) : [];
+   427→  } catch {
+   428→    return [];
+   429→  }
+   430→}
+   431→
+   432→function itemsSummary(json: string | null | undefined): string {
+   433→  const items = parseItems(json);
+   434→  if (!items.length) return "—";
+   435→  return items
+   436→    .map((i) => {
+   437→      const name = String(i?.name ?? i ?? "").trim();
+   438→      const qty = i?.qty;
+   439→      const unit = i?.unit ? ` ${i.unit}` : "";
+   440→      return `${name} ×${qty ?? 1}${unit}`;
+   441→    })
+   442→    .join(", ");
+   443→}
+   444→
+   445→/* ---------------------------------- view ----------------------------------- */
+   446→
+   447→export default function DistributionsView() {
+   448→  const { user } = useAuth();
+   449→  const isAdmin = user?.role === "ADMIN";
+   450→
+   451→  /* ------------------------------- list state ------------------------------ */
+   452→  const [loading, setLoading] = useState(true);
+   453→  const [distRows, setDistRows] = useState<DistributionRow[]>([]);
+   454→  const [distTotals, setDistTotals] = useState<DistEnvelope | null>(null);
+   455→  const [padRows, setPadRows] = useState<PadDrive[]>([]);
+   456→  const [padTotals, setPadTotals] = useState<PadEnvelope | null>(null);
+   457→
+   458→  /* FY aggregates for the KPI strip */
+   459→  const [kpi, setKpi] = useState<{
+   460→    count: number;
+   461→    sumValue: number;
+   462→    beneficiaries: number;
+   463→    avgItems: number;
+   464→    pads: number;
+   465→    girls: number;
+   466→    sessions: number;
+   467→  } | null>(null);
+   468→  const [kpiLoading, setKpiLoading] = useState(true);
+   469→
+   470→  /* supporting data for forms/detail */
+   471→  const [beneficiaries, setBeneficiaries] = useState<BeneficiaryLite[]>([]);
+   472→  const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+   473→  const [volunteers, setVolunteers] = useState<VolunteerLite[]>([]);
+   474→  const [invItems, setInvItems] = useState<InventoryLite[]>([]);
+   475→  const [schools, setSchools] = useState<SchoolRow[]>([]);
+   476→
+   477→  /* --------------------------------- tab ---------------------------------- */
+   478→  const [tab, setTab] = useState<"general" | "pads">("general");
+   479→
+   480→  /* --------------------------- general tab filters ------------------------- */
+   481→  const [query, setQuery] = useState("");
+   482→  const [appliedQuery, setAppliedQuery] = useState("");
+   483→  const [typeFilter, setTypeFilter] = useState<string[]>([]);
+   484→  const [range, setRange] = useState<DateRange>("all");
+   485→  const [volunteerFilter, setVolunteerFilter] = useState("");
+   486→  const [viewDist, setViewDist] = useViewPref("distributions");
+   487→  const [page, setPage] = useState(1);
+   488→  const [pageSize, setPageSize] = useState(25);
+   489→
+   490→  /* ------------------------------ pads filters ----------------------------- */
+   491→  const [padQuery, setPadQuery] = useState("");
+   492→  const [appliedPadQuery, setAppliedPadQuery] = useState("");
+   493→  const [padSession, setPadSession] = useState<"all" | "yes" | "no">("all");
+   494→  const [padRange, setPadRange] = useState<DateRange>("all");
+   495→  const [padVolunteer, setPadVolunteer] = useState("");
+   496→  const [viewPad, setViewPad] = useViewPref("pad-drives");
+   497→  const [padPage, setPadPage] = useState(1);
+   498→  const [padPageSize, setPadPageSize] = useState(25);
+   499→
+   500→  /* --------------------------- general forms/sheets ------------------------ */
+   501→  const [detail, setDetail] = useState<DistributionRow | null>(null);
+   502→  const [distOpen, setDistOpen] = useState(false);
+   503→  const [editingDist, setEditingDist] = useState<DistributionRow | null>(null);
+   504→  const [distForm, setDistForm] = useState<DistForm>(EMPTY_DIST_FORM);
+   505→  const [distSnapshot, setDistSnapshot] = useState<DistForm>(EMPTY_DIST_FORM);
+   506→  const [distErrors, setDistErrors] = useState<Errors>({});
+   507→  const [benQuery, setBenQuery] = useState("");
+   508→  const [savingDist, setSavingDist] = useState(false);
+   509→  const [deleteTarget, setDeleteTarget] = useState<DistributionRow | null>(null);
+   510→  const [deletingDist, setDeletingDist] = useState(false);
+   511→
+   512→  /* ----------------------------- pad forms/sheets -------------------------- */
+   513→  const [padDetail, setPadDetail] = useState<PadDrive | null>(null);
+   514→  const [padOpen, setPadOpen] = useState(false);
+   515→  const [editingPad, setEditingPad] = useState<PadDrive | null>(null);
+   516→  const [padForm, setPadForm] = useState<PadForm>(EMPTY_PAD_FORM);
+   517→  const [padSnapshot, setPadSnapshot] = useState<PadForm>(EMPTY_PAD_FORM);
+   518→  const [padErrors, setPadErrors] = useState<Errors>({});
+   519→  const [schoolDdOpen, setSchoolDdOpen] = useState(false);
+   520→  const [savingPad, setSavingPad] = useState(false);
+   521→  const [deletePad, setDeletePad] = useState<PadDrive | null>(null);
+   522→  const [deletingPad, setDeletingPad] = useState(false);
+   523→
+   524→  /* ----------------------------- school registry --------------------------- */
+   525→  const [schoolFormOpen, setSchoolFormOpen] = useState(false);
+   526→  const [schoolForm, setSchoolForm] = useState<SchoolForm>(EMPTY_SCHOOL_FORM);
+   527→  const [savingSchool, setSavingSchool] = useState(false);
+   528→
+   529→  /* ================================ loading ================================ */
+   530→
+   531→  const loadDist = useCallback(async () => {
+   532→    const sp = new URLSearchParams();
+   533→    if (appliedQuery.trim()) sp.set("q", appliedQuery.trim());
+   534→    if (typeFilter.length) sp.set("type", typeFilter.join(","));
+   535→    const r = rangeToParams(range);
+   536→    if (r.from) sp.set("from", r.from);
+   537→    if (r.to) sp.set("to", r.to);
+   538→    if (volunteerFilter) sp.set("volunteerId", volunteerFilter);
+   539→    sp.set("limit", "500");
+   540→    sp.set("withTotals", "1");
+   541→    try {
+   542→      const data = await get<DistEnvelope>(`/api/distributions?${sp.toString()}`);
+   543→      setDistRows(Array.isArray(data?.items) ? data.items : []);
+   544→      setDistTotals(data ?? null);
+   545→    } catch (e) {
+   546→      toast.error(e instanceof Error ? e.message : "Failed to load distributions");
+   547→    } finally {
+   548→      setLoading(false);
+   549→    }
+   550→  }, [appliedQuery, typeFilter, range, volunteerFilter]);
+   551→
+   552→  const loadPads = useCallback(async () => {
+   553→    const sp = new URLSearchParams();
+   554→    if (appliedPadQuery.trim()) sp.set("q", appliedPadQuery.trim());
+   555→    if (padSession !== "all") sp.set("session", padSession === "yes" ? "1" : "0");
+   556→    const r = rangeToParams(padRange);
+   557→    if (r.from) sp.set("from", r.from);
+   558→    if (r.to) sp.set("to", r.to);
+   559→    if (padVolunteer) sp.set("volunteerId", padVolunteer);
+   560→    sp.set("limit", "500");
+   561→    sp.set("withTotals", "1");
+   562→    try {
+   563→      const data = await get<PadEnvelope>(`/api/pad-distributions?${sp.toString()}`);
+   564→      setPadRows(Array.isArray(data?.items) ? data.items : []);
+   565→      setPadTotals(data ?? null);
+   566→    } catch (e) {
+   567→      toast.error(e instanceof Error ? e.message : "Failed to load pad drives");
+   568→    } finally {
+   569→      setLoading(false);
+   570→    }
+   571→  }, [appliedPadQuery, padSession, padRange, padVolunteer]);
+   572→
+   573→  const loadKpis = useCallback(async () => {
+   574→    const { from, to } = fyRange();
+   575→    const results = await Promise.allSettled([
+   576→      get<DistEnvelope>(
+   577→        `/api/distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+   578→      ),
+   579→      get<PadEnvelope>(
+   580→        `/api/pad-distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+   581→      ),
+   582→    ]);
+   583→    const d = results[0].status === "fulfilled" ? results[0].value : null;
+   584→    const p = results[1].status === "fulfilled" ? results[1].value : null;
+   585→    setKpi({
+   586→      count: d?.count ?? 0,
+   587→      sumValue: d?.sumValue ?? 0,
+   588→      beneficiaries: d?.beneficiariesServed ?? 0,
+   589→      avgItems: d?.avgItemsPerDrive ?? 0,
+   590→      pads: p?.sumPads ?? 0,
+   591→      girls: p?.sumGirls ?? 0,
+   592→      sessions: p?.sessions ?? 0,
+   593→    });
+   594→    setKpiLoading(false);
+   595→  }, []);
+   596→
+   597→  const loadSupport = useCallback(async () => {
+   598→    get<BeneficiaryLite[]>("/api/beneficiaries")
+   599→      .then((rows) => setBeneficiaries(Array.isArray(rows) ? rows : []))
+   600→      .catch(() => setBeneficiaries([]));
+   601→    get<CampaignLite[]>("/api/campaigns?all=1")
+   602→      .then((rows) => setCampaigns(Array.isArray(rows) ? rows : []))
+   603→      .catch(() => setCampaigns([]));
+   604→    get<InventoryLite[]>("/api/inventory")
+   605→      .then((rows) => setInvItems(Array.isArray(rows) ? rows : []))
+   606→      .catch(() => setInvItems([]));
+   607→    get<SchoolRow[]>("/api/school-coverages")
+   608→      .then((rows) => setSchools(Array.isArray(rows) ? rows : []))
+   609→      .catch(() => setSchools([]));
+   610→    if (isAdmin) {
+   611→      get<VolunteerLite[]>("/api/volunteers")
+   612→        .then((rows) => setVolunteers(Array.isArray(rows) ? rows : []))
+   613→        .catch(() => setVolunteers([]));
+   614→    }
+   615→  }, [isAdmin]);
+   616→
+   617→  useEffect(() => {
+   618→    void loadSupport();
+   619→  }, [loadSupport]);
+   620→
+   621→  useEffect(() => {
+   622→    void loadDist();
+   623→    void loadKpis();
+   624→  }, [loadDist, loadKpis]);
+   625→
+   626→  useEffect(() => {
+   627→    void loadPads();
+   628→  }, [loadPads]);
+   629→
+   630→  /* debounce searches */
+   631→  useEffect(() => {
+   632→    const t = window.setTimeout(() => {
+   633→      setAppliedQuery(query);
+   634→      setPage(1);
+   635→    }, 300);
+   636→    return () => window.clearTimeout(t);
+   637→  }, [query]);
+   638→
+   639→  useEffect(() => {
+   640→    const t = window.setTimeout(() => {
+   641→      setAppliedPadQuery(padQuery);
+   642→      setPadPage(1);
+   643→    }, 300);
+   644→    return () => window.clearTimeout(t);
+   645→  }, [padQuery]);
+   646→
+   647→  const refreshAll = useCallback(() => {
+   648→    void loadDist();
+   649→    void loadPads();
+   650→    void loadKpis();
+   651→  }, [loadDist, loadPads, loadKpis]);
+   652→
+   653→  /* ============================== derived data ============================= */
+   654→
+   655→  const pages = Math.max(1, Math.ceil(distRows.length / pageSize));
+   656→  const pageSafe = Math.min(page, pages);
+   657→  const pagedDist = distRows.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
+   658→
+   659→  const padPages = Math.max(1, Math.ceil(padRows.length / padPageSize));
+   660→  const padPageSafe = Math.min(padPage, padPages);
+   661→  const pagedPads = padRows.slice(
+   662→    (padPageSafe - 1) * padPageSize,
+   663→    padPageSafe * padPageSize
+   664→  );
+   665→
+   666→  const benFiltered = useMemo(() => {
+   667→    const q = benQuery.trim().toLowerCase();
+   668→    if (!q) return beneficiaries.slice(0, 300);
+   669→    return beneficiaries
+   670→      .filter(
+   671→        (b) =>
+   672→          b.name.toLowerCase().includes(q) || (b.city ?? "").toLowerCase().includes(q)
+   673→      )
+   674→      .slice(0, 300);
+   675→  }, [beneficiaries, benQuery]);
+   676→
+   677→  const selectedBeneficiary = useMemo(
+   678→    () => beneficiaries.find((b) => b.id === distForm.beneficiaryId) ?? null,
+   679→    [beneficiaries, distForm.beneficiaryId]
+   680→  );
+   681→
+   682→  const matchInventory = useCallback(
+   683→    (name: string): InventoryLite | null => {
+   684→      const q = name.trim().toLowerCase();
+   685→      if (q.length < 2) return null;
+   686→      return (
+   687→        invItems.find((i) => i.name.toLowerCase() === q) ??
+   688→        invItems.find((i) => i.name.toLowerCase().includes(q)) ??
+   689→        null
+   690→      );
+   691→    },
+   692→    [invItems]
+   693→  );
+   694→
+   695→  const itemTotals = useMemo(() => {
+   696→    let lines = 0;
+   697→    let units = 0;
+   698→    let estValue = 0;
+   699→    let priced = true;
+   700→    for (const it of distForm.items) {
+   701→      if (!it.name.trim()) continue;
+   702→      lines += 1;
+   703→      const q = Number(it.qty);
+   704→      if (Number.isFinite(q) && q > 0) units += q;
+   705→      const inv = matchInventory(it.name);
+   706→      if (inv?.pricePerUnit != null && Number.isFinite(q) && q > 0) {
+   707→        estValue += inv.pricePerUnit * q;
+   708→      } else if (it.name.trim()) {
+   709→        priced = false;
+   710→      }
+   711→    }
+   712→    return { lines, units, estValue, priced };
+   713→  }, [distForm.items, matchInventory]);
+   714→
+   715→  const distValNum = Number(distForm.value);
+   716→  const distQtyNum = Math.trunc(Number(distForm.quantity)) || 0;
+   717→  const perUnitHint =
+   718→    distForm.value.trim() !== "" && Number.isFinite(distValNum) && distQtyNum > 0
+   719→      ? `≈ ${formatINR(distValNum / distQtyNum)} per unit`
+   720→      : "Estimated market value — feeds exports, reports and impact stats.";
+   721→
+   722→  const schoolMatches = useMemo(() => {
+   723→    const active = schools.filter((s) => s.isActive);
+   724→    const q = padForm.schoolName.trim().toLowerCase();
+   725→    if (!q) return active.slice(0, 50);
+   726→    const starts = active.filter((s) => s.schoolName.toLowerCase().startsWith(q));
+   727→    const rest = active.filter(
+   728→      (s) =>
+   729→        !s.schoolName.toLowerCase().startsWith(q) &&
+   730→        s.schoolName.toLowerCase().includes(q)
+   731→    );
+   732→    return [...starts, ...rest].slice(0, 50);
+   733→  }, [schools, padForm.schoolName]);
+   734→
+   735→  const schoolKnown = useMemo(
+   736→    () =>
+   737→      schools.some(
+   738→        (s) => s.schoolName.toLowerCase() === padForm.schoolName.trim().toLowerCase()
+   739→      ),
+   740→    [schools, padForm.schoolName]
+   741→  );
+   742→
+   743→  const distDirty = useMemo(
+   744→    () => JSON.stringify(distForm) !== JSON.stringify(distSnapshot),
+   745→    [distForm, distSnapshot]
+   746→  );
+   747→  const padDirty = useMemo(
+   748→    () => JSON.stringify(padForm) !== JSON.stringify(padSnapshot),
+   749→    [padForm, padSnapshot]
+   750→  );
+   751→
+   752→  const distFiltersActive =
+   753→    appliedQuery.trim() !== "" ||
+   754→    typeFilter.length > 0 ||
+   755→    range !== "all" ||
+   756→    volunteerFilter !== "";
+   757→  const padFiltersActive =
+   758→    appliedPadQuery.trim() !== "" || padSession !== "all" || padRange !== "all" || padVolunteer !== "";
+   759→
+   760→  /* ============================== mutations ================================ */
+   761→
+   762→  const openDistCreate = () => {
+   763→    const form = { ...EMPTY_DIST_FORM, distributedAt: nowLocalInput() };
+   764→    setDistForm(form);
+   765→    setDistSnapshot(form);
+   766→    setDistErrors({});
+   767→    setEditingDist(null);
+   768→    setBenQuery("");
+   769→    setDistOpen(true);
+   770→  };
+   771→
+   772→  const openDistEdit = (row: DistributionRow) => {
+   773→    const items = parseItems(row.items);
+   774→    const form: DistForm = {
+   775→      type: DISTRIBUTION_TYPES.includes(row.type) ? row.type : "OTHER",
+   776→      beneficiaryId: row.beneficiaryId ?? "",
+   777→      volunteerId: row.volunteerId ?? "",
+   778→      campaignId: row.campaignId ?? "",
+   779→      quantity: String(row.quantity ?? 1),
+   780→      value: row.value != null ? String(row.value) : "",
+   781→      location: row.location ?? "",
+   782→      distributedAt: toLocalInput(row.distributedAt) || nowLocalInput(),
+   783→      items: items.length
+   784→        ? items.map((i) => ({
+   785→            name: String(i?.name ?? ""),
+   786→            qty: String(i?.qty ?? 1),
+   787→            unit: String(i?.unit ?? ""),
+   788→          }))
+   789→        : [{ ...EMPTY_ITEM }],
+   790→      notes: row.notes ?? "",
+   791→    };
+   792→    setDistForm(form);
+   793→    setDistSnapshot(form);
+   794→    setDistErrors({});
+   795→    setEditingDist(row);
+   796→    setDetail(null);
+   797→    setBenQuery("");
+   798→    setDistOpen(true);
+   799→  };
+   800→
+   801→  const validateDist = (): boolean => {
+   802→    const errs: Errors = {};
+   803→    if (!distForm.location.trim()) errs.location = "Location is required";
+   804→    const qty = Math.trunc(Number(distForm.quantity));
+   805→    if (!Number.isFinite(qty) || qty < 1)
+   806→      errs.quantity = "Quantity must be a whole number of at least 1";
+   807→    if (distForm.value.trim() !== "") {
+   808→      const v = Number(distForm.value);
+   809→      if (!Number.isFinite(v) || v < 0) errs.value = "Enter a valid amount (≥ 0)";
+   810→    }
+   811→    const dateErr = dateRule(true)(distForm.distributedAt);
+   812→    if (dateErr) errs.distributedAt = dateErr;
+   813→    distForm.items.forEach((it, i) => {
+   814→      if (!it.name.trim() && it.qty.trim() === "") return;
+   815→      if (!it.name.trim()) {
+   816→        errs[`item-${i}`] = "Item name is required";
+   817→        return;
+   818→      }
+   819→      const q = Number(it.qty);
+   820→      if (!Number.isFinite(q) || q <= 0)
+   821→        errs[`item-${i}`] = "Quantity must be a positive number";
+   822→    });
+   823→    setDistErrors(errs);
+   824→    return Object.values(errs).every((v) => !v);
+   825→  };
+   826→
+   827→  const saveDist = async () => {
+   828→    if (!validateDist()) {
+   829→      toast.error("Please fix the highlighted fields");
+   830→      return;
+   831→    }
+   832→    setSavingDist(true);
+   833→    try {
+   834→      const items = distForm.items
+   835→        .filter((i) => i.name.trim())
+   836→        .map((i) => ({
+   837→          name: i.name.trim(),
+   838→          qty: Number(i.qty) || 1,
+   839→          ...(i.unit.trim() ? { unit: i.unit.trim() } : {}),
+   840→        }));
+   841→      const payload = {
+   842→        type: distForm.type,
+   843→        beneficiaryId: distForm.beneficiaryId || undefined,
+   844→        volunteerId: distForm.volunteerId || undefined,
+   845→        campaignId: distForm.campaignId || undefined,
+   846→        quantity: Math.trunc(Number(distForm.quantity)),
+   847→        items,
+   848→        value: distForm.value === "" ? undefined : Number(distForm.value),
+   849→        location: distForm.location.trim(),
+   850→        distributedAt: distForm.distributedAt || undefined,
+   851→        notes: distForm.notes.trim() || undefined,
+   852→      };
+   853→      if (editingDist) {
+   854→        await patch(`/api/distributions/${editingDist.id}`, payload);
+   855→        toast.success("Distribution updated");
+   856→      } else {
+   857→        await post("/api/distributions", payload);
+   858→        toast.success("Distribution recorded");
+   859→      }
+   860→      setDistOpen(false);
+   861→      refreshAll();
+   862→    } catch (e) {
+   863→      toast.error(e instanceof Error ? e.message : "Save failed");
+   864→    } finally {
+   865→      setSavingDist(false);
+   866→    }
+   867→  };
+   868→
+   869→  const removeDist = async () => {
+   870→    if (!deleteTarget) return;
+   871→    setDeletingDist(true);
+   872→    const id = deleteTarget.id;
+   873→    // optimistic removal
+   874→    setDistRows((rows) => rows.filter((r) => r.id !== id));
+   875→    setDetail(null);
+   876→    try {
+   877→      await del(`/api/distributions/${id}`);
+   878→      toast.success("Distribution deleted");
+   879→      setDeleteTarget(null);
+   880→    } catch (e) {
+   881→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   882→    } finally {
+   883→      setDeletingDist(false);
+   884→      refreshAll();
+   885→    }
+   886→  };
+   887→
+   888→  const openPadCreate = () => {
+   889→    const form = { ...EMPTY_PAD_FORM, distributionDate: todayIso() };
+   890→    setPadForm(form);
+   891→    setPadSnapshot(form);
+   892→    setPadErrors({});
+   893→    setEditingPad(null);
+   894→    setSchoolDdOpen(false);
+   895→    setPadOpen(true);
+   896→  };
+   897→
+   898→  const openPadEdit = (row: PadDrive) => {
+   899→    const form: PadForm = {
+   900→      schoolName: row.schoolName ?? "",
+   901→      area: row.area ?? "",
+   902→      girlsCount: String(row.girlsCount ?? 0),
+   903→      padsDistributed: String(row.padsDistributed ?? 0),
+   904→      awarenessSession: Boolean(row.awarenessSession),
+   905→      sessionAttendees: row.sessionAttendees != null ? String(row.sessionAttendees) : "",
+   906→      volunteerId: row.volunteerId ?? "",
+   907→      volunteerName: row.volunteerName ?? "",
+   908→      distributionDate: toLocalInput(row.distributionDate).slice(0, 10) || todayIso(),
+   909→      notes: row.notes ?? "",
+   910→    };
+   911→    setPadForm(form);
+   912→    setPadSnapshot(form);
+   913→    setPadErrors({});
+   914→    setEditingPad(row);
+   915→    setPadDetail(null);
+   916→    setSchoolDdOpen(false);
+   917→    setPadOpen(true);
+   918→  };
+   919→
+   920→  const padGirlsNum = Math.trunc(Number(padForm.girlsCount)) || 0;
+   921→  const padPadsNum = Math.trunc(Number(padForm.padsDistributed)) || 0;
+   922→  const padPerGirl =
+   923→    padGirlsNum > 0 && padPadsNum > 0
+   924→      ? Math.round((padPadsNum / padGirlsNum) * 10) / 10
+   925→      : null;
+   926→
+   927→  const validatePad = (): boolean => {
+   928→    const padErrs: Errors = {};
+   929→    if (!padForm.area.trim()) padErrs.area = "Area is required";
+   930→    if (padForm.girlsCount.trim() === "")
+   931→      padErrs.girlsCount = "Girls reached is required (0 if none)";
+   932→    else if (!Number.isFinite(Number(padForm.girlsCount)) || padGirlsNum < 0)
+   933→      padErrs.girlsCount = "Girls count must be 0 or more";
+   934→    if (padForm.padsDistributed.trim() === "")
+   935→      padErrs.padsDistributed = "Pads distributed is required (0 if none)";
+   936→    else if (!Number.isFinite(Number(padForm.padsDistributed)) || padPadsNum < 0)
+   937→      padErrs.padsDistributed = "Pads distributed must be 0 or more";
+   938→    if (padForm.sessionAttendees !== "") {
+   939→      const att = Math.trunc(Number(padForm.sessionAttendees));
+   940→      if (!Number.isFinite(att) || att < 0)
+   941→        padErrs.sessionAttendees = "Attendees must be 0 or more";
+   942→    }
+   943→    const dateErr = dateRule(true)(padForm.distributionDate);
+   944→    if (dateErr) padErrs.distributionDate = dateErr;
+   945→    setPadErrors(padErrs);
+   946→    return Object.values(padErrs).every((v) => !v);
+   947→  };
+   948→
+   949→  const savePad = async () => {
+   950→    if (!validatePad()) {
+   951→      toast.error("Please fix the highlighted fields");
+   952→      return;
+   953→    }
+   954→    setSavingPad(true);
+   955→    try {
+   956→      const payload = {
+   957→        area: padForm.area.trim(),
+   958→        schoolName: padForm.schoolName.trim() || undefined,
+   959→        girlsCount: padGirlsNum,
+   960→        padsDistributed: padPadsNum,
+   961→        awarenessSession: padForm.awarenessSession,
+   962→        sessionAttendees:
+   963→          padForm.sessionAttendees === ""
+   964→            ? undefined
+   965→            : Math.trunc(Number(padForm.sessionAttendees)),
+   966→        volunteerId: padForm.volunteerId || undefined,
+   967→        volunteerName: padForm.volunteerName.trim() || undefined,
+   968→        distributionDate: padForm.distributionDate || undefined,
+   969→        notes: padForm.notes.trim() || undefined,
+   970→      };
+   971→      if (editingPad) {
+   972→        await patch(`/api/pad-distributions/${editingPad.id}`, payload);
+   973→        toast.success("Pad drive updated");
+   974→      } else {
+   975→        await post("/api/pad-distributions", payload);
+   976→        toast.success("Pad drive recorded");
+   977→      }
+   978→
+   979→      // register brand-new schools in the coverage registry (best-effort)
+   980→      const school = padForm.schoolName.trim();
+   981→      if (!editingPad && school && !schoolKnown) {
+   982→        try {
+   983→          await post("/api/school-coverages", {
+   984→            schoolName: school,
+   985→            lastVisited: padForm.distributionDate || todayIso(),
+   986→          });
+   987→          toast.success(`School "${school}" added to the coverage registry`);
+   988→        } catch {
+   989→          toast.error(`Pad drive saved, but registering school "${school}" failed`);
+   990→        }
+   991→      }
+   992→
+   993→      setPadOpen(false);
+   994→      refreshAll();
+   995→    } catch (e) {
+   996→      toast.error(e instanceof Error ? e.message : "Save failed");
+   997→    } finally {
+   998→      setSavingPad(false);
+   999→    }
+  1000→  };
+  1001→
+  1002→  const removePad = async () => {
+  1003→    if (!deletePad) return;
+  1004→    setDeletingPad(true);
+  1005→    const id = deletePad.id;
+  1006→    setPadRows((rows) => rows.filter((r) => r.id !== id));
+  1007→    setPadDetail(null);
+  1008→    try {
+  1009→      await del(`/api/pad-distributions/${id}`);
+  1010→      toast.success("Pad drive deleted");
+  1011→      setDeletePad(null);
+  1012→    } catch (e) {
+  1013→      toast.error(e instanceof Error ? e.message : "Delete failed");
+  1014→    } finally {
+  1015→      setDeletingPad(false);
+  1016→      refreshAll();
+  1017→    }
+  1018→  };
+  1019→
+  1020→  const openSchoolCreate = () => {
+  1021→    setSchoolForm(EMPTY_SCHOOL_FORM);
+  1022→    setSchoolFormOpen(true);
+  1023→  };
+  1024→
+  1025→  const saveSchool = async () => {
+  1026→    if (!schoolForm.schoolName.trim()) {
+  1027→      toast.error("School name is required");
+  1028→      return;
+  1029→    }
+  1030→    if (schoolForm.totalGirls !== "") {
+  1031→      const g = Math.trunc(Number(schoolForm.totalGirls));
+  1032→      if (!Number.isFinite(g) || g < 0) {
+  1033→        toast.error("Total girls must be 0 or more");
+  1034→        return;
+  1035→      }
+  1036→    }
+  1037→    setSavingSchool(true);
+  1038→    try {
+  1039→      await post("/api/school-coverages", {
+  1040→        schoolName: schoolForm.schoolName.trim(),
+  1041→        city: schoolForm.city.trim() || undefined,
+  1042→        contactPerson: schoolForm.contactPerson.trim() || undefined,
+  1043→        contactPhone: schoolForm.contactPhone.trim() || undefined,
+  1044→        totalGirls:
+  1045→          schoolForm.totalGirls === ""
+  1046→            ? 0
+  1047→            : Math.trunc(Number(schoolForm.totalGirls)),
+  1048→        lastVisited: todayIso(),
+  1049→      });
+  1050→      toast.success(`School "${schoolForm.schoolName.trim()}" registered`);
+  1051→      setSchoolFormOpen(false);
+  1052→      loadSupport();
+  1053→    } catch (e) {
+  1054→      toast.error(e instanceof Error ? e.message : "Register failed");
+  1055→    } finally {
+  1056→      setSavingSchool(false);
+  1057→    }
+  1058→  };
+  1059→
+  1060→  /* ================================== CSV ================================== */
+  1061→
+  1062→  const distCsv: CsvColumn<DistributionRow>[] = useMemo(
+  1063→    () => [
+  1064→      { header: "Date", value: (d) => formatDate(d.distributedAt) },
+  1065→      { header: "Type", value: (d) => titleCase(d.type) },
+  1066→      { header: "Beneficiary", value: (d) => d.beneficiary?.name ?? "Community" },
+  1067→      { header: "Category", value: (d) => titleCase(d.beneficiary?.category ?? "") },
+  1068→      { header: "Urgency", value: (d) => titleCase(d.beneficiary?.urgencyLevel ?? "") },
+  1069→      { header: "Items", value: (d) => itemsSummary(d.items) },
+  1070→      { header: "Quantity", value: (d) => d.quantity },
+  1071→      { header: "Value (INR)", value: (d) => d.value ?? "" },
+  1072→      { header: "Location", value: (d) => d.location ?? "" },
+  1073→      { header: "Volunteer", value: (d) => d.volunteer?.user?.name ?? "" },
+  1074→      { header: "Campaign", value: (d) => d.campaign?.title ?? "" },
+  1075→      { header: "Notes", value: (d) => d.notes ?? "" },
+  1076→    ],
+  1077→    []
+  1078→  );
+  1079→
+  1080→  const padCsv: CsvColumn<PadDrive>[] = useMemo(
+  1081→    () => [
+  1082→      { header: "Date", value: (p) => formatDate(p.distributionDate) },
+  1083→      { header: "Area", value: (p) => p.area },
+  1084→      { header: "School", value: (p) => p.schoolName ?? "Community visit" },
+  1085→      { header: "Girls Reached", value: (p) => p.girlsCount },
+  1086→      { header: "Pads Distributed", value: (p) => p.padsDistributed },
+  1087→      {
+  1088→        header: "Pads per Girl",
+  1089→        value: (p) =>
+  1090→          p.girlsCount > 0
+  1091→            ? Math.round((p.padsDistributed / p.girlsCount) * 10) / 10
+  1092→            : "",
+  1093→      },
+  1094→      { header: "Awareness Session", value: (p) => (p.awarenessSession ? "Yes" : "No") },
+  1095→      { header: "Attendees", value: (p) => p.sessionAttendees ?? "" },
+  1096→      { header: "Volunteer", value: (p) => p.volunteer?.name ?? p.volunteerName ?? "" },
+  1097→      { header: "Notes", value: (p) => p.notes ?? "" },
+  1098→    ],
+  1099→    []
+  1100→  );
+  1101→
+  1102→  /* ============================== small pieces ============================= */
+  1103→
+  1104→  const typeChip = (t: string, className?: string) => {
+  1105→    const meta = TYPE_META[t] ?? TYPE_META.OTHER;
+  1106→    const Icon = meta.icon;
+  1107→    return (
+  1108→      <Badge
+  1109→        variant="outline"
+  1110→        className={cn("gap-1 font-medium whitespace-nowrap", meta.cls, className)}
+  1111→      >
+  1112→        <Icon className="size-3" aria-hidden="true" />
+  1113→        {meta.label}
+  1114→      </Badge>
+  1115→    );
+  1116→  };
+  1117→
+  1118→  const urgencyBadge = (level?: string | null) =>
+  1119→    level ? (
+  1120→      <StatusBadge tone={URGENCY_TONE[level] ?? "neutral"}>{titleCase(level)}</StatusBadge>
+  1121→    ) : null;
+  1122→
+  1123→  const rowMenu = (row: DistributionRow) => (
+  1124→    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+  1125→      <DropdownMenu>
+  1126→        <DropdownMenuTrigger asChild>
+  1127→          <Button
+  1128→            variant="ghost"
+  1129→            size="icon"
+  1130→            className="size-8"
+  1131→            aria-label={`Actions for ${titleCase(row.type)} distribution`}
+  1132→          >
+  1133→            <MoreHorizontal className="size-4" aria-hidden="true" />
+  1134→          </Button>
+  1135→        </DropdownMenuTrigger>
+  1136→        <DropdownMenuContent align="end" className="w-40">
+  1137→          <DropdownMenuItem onClick={() => setDetail(row)}>
+  1138→            <Info className="size-4" aria-hidden="true" /> View details
+  1139→          </DropdownMenuItem>
+  1140→          <DropdownMenuItem onClick={() => openDistEdit(row)}>
+  1141→            <Pencil className="size-4" aria-hidden="true" /> Edit
+  1142→          </DropdownMenuItem>
+  1143→          <DropdownMenuSeparator />
+  1144→          <DropdownMenuItem
+  1145→            className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+  1146→            onClick={() => setDeleteTarget(row)}
+  1147→          >
+  1148→            <Trash2 className="size-4" aria-hidden="true" /> Delete
+  1149→          </DropdownMenuItem>
+  1150→        </DropdownMenuContent>
+  1151→      </DropdownMenu>
+  1152→    </div>
+  1153→  );
+  1154→
+  1155→  const padRowMenu = (row: PadDrive) => (
+  1156→    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+  1157→      <DropdownMenu>
+  1158→        <DropdownMenuTrigger asChild>
+  1159→          <Button
+  1160→            variant="ghost"
+  1161→            size="icon"
+  1162→            className="size-8"
+  1163→            aria-label={`Actions for pad drive in ${row.area}`}
+  1164→          >
+  1165→            <MoreHorizontal className="size-4" aria-hidden="true" />
+  1166→          </Button>
+  1167→        </DropdownMenuTrigger>
+  1168→        <DropdownMenuContent align="end" className="w-40">
+  1169→          <DropdownMenuItem onClick={() => setPadDetail(row)}>
+  1170→            <Info className="size-4" aria-hidden="true" /> View details
+  1171→          </DropdownMenuItem>
+  1172→          <DropdownMenuItem onClick={() => openPadEdit(row)}>
+  1173→            <Pencil className="size-4" aria-hidden="true" /> Edit
+  1174→          </DropdownMenuItem>
+  1175→          <DropdownMenuSeparator />
+  1176→          <DropdownMenuItem
+  1177→            className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+  1178→            onClick={() => setDeletePad(row)}
+  1179→          >
+  1180→            <Trash2 className="size-4" aria-hidden="true" /> Delete
+  1181→          </DropdownMenuItem>
+  1182→        </DropdownMenuContent>
+  1183→      </DropdownMenu>
+  1184→    </div>
+  1185→  );
+  1186→
+  1187→  const clearDistFilters = () => {
+  1188→    setQuery("");
+  1189→    setTypeFilter([]);
+  1190→    setRange("all");
+  1191→    setVolunteerFilter("");
+  1192→    setPage(1);
+  1193→  };
+  1194→
+  1195→  const clearPadFilters = () => {
+  1196→    setPadQuery("");
+  1197→    setPadSession("all");
+  1198→    setPadRange("all");
+  1199→    setPadVolunteer("");
+  1200→    setPadPage(1);
+  1201→  };
+  1202→
+  1203→  const distColumns: DataTableColumn<DistributionRow>[] = [
+  1204→    {
+  1205→      key: "date",
+  1206→      header: "Date",
+  1207→      className: "w-[6.5rem]",
+  1208→      accessor: (r) => (
+  1209→        <span className="whitespace-nowrap text-muted-foreground">
+  1210→          {formatDate(r.distributedAt)}
+  1211→        </span>
+  1212→      ),
+  1213→    },
+  1214→    { key: "type", header: "Type", accessor: (r) => typeChip(r.type) },
+  1215→    {
+  1216→      key: "beneficiary",
+  1217→      header: "Beneficiary",
+  1218→      accessor: (r) => (
+  1219→        <div className="min-w-0">
+  1220→          <p className="truncate font-medium">
+  1221→            {r.beneficiary?.name ?? "Community hand-out"}
+  1222→          </p>
+  1223→          {r.beneficiary ? (
+  1224→            <p className="truncate text-xs text-muted-foreground">
+  1225→              {titleCase(r.beneficiary.category)} · family of {r.beneficiary.familyMembers}
+  1226→            </p>
+  1227→          ) : null}
+  1228→        </div>
+  1229→      ),
+  1230→    },
+  1231→    {
+  1232→      key: "urgency",
+  1233→      header: "Urgency",
+  1234→      hideBelow: "lg",
+  1235→      accessor: (r) =>
+  1236→        r.beneficiary ? (
+  1237→          urgencyBadge(r.beneficiary.urgencyLevel)
+  1238→        ) : (
+  1239→          <span className="text-xs text-muted-foreground">—</span>
+  1240→        ),
+  1241→    },
+  1242→    {
+  1243→      key: "volunteer",
+  1244→      header: "Volunteer",
+  1245→      hideBelow: "md",
+  1246→      accessor: (r) => (
+  1247→        <span className="text-muted-foreground">
+  1248→          {r.volunteer?.user?.name ?? "—"}
+  1249→        </span>
+  1250→      ),
+  1251→    },
+  1252→    {
+  1253→      key: "items",
+  1254→      header: "Items",
+  1255→      hideBelow: "lg",
+  1256→      accessor: (r) => (
+  1257→        <span className="block max-w-56 truncate text-muted-foreground" title={itemsSummary(r.items)}>
+  1258→          {itemsSummary(r.items)}
+  1259→        </span>
+  1260→      ),
+  1261→    },
+  1262→    {
+  1263→      key: "quantity",
+  1264→      header: "Qty",
+  1265→      align: "right",
+  1266→      mono: true,
+  1267→      accessor: (r) => r.quantity.toLocaleString("en-IN"),
+  1268→    },
+  1269→    {
+  1270→      key: "value",
+  1271→      header: "Value",
+  1272→      align: "right",
+  1273→      mono: true,
+  1274→      accessor: (r) =>
+  1275→        r.value != null ? (
+  1276→          <span className="font-medium">{formatINR(r.value)}</span>
+  1277→        ) : (
+  1278→          <span className="text-muted-foreground">—</span>
+  1279→        ),
+  1280→    },
+  1281→    {
+  1282→      key: "location",
+  1283→      header: "Location",
+  1284→      hideBelow: "sm",
+  1285→      accessor: (r) => (
+  1286→        <span className="block max-w-44 truncate text-muted-foreground" title={r.location ?? ""}>
+  1287→          {r.location || "—"}
+  1288→        </span>
+  1289→      ),
+  1290→    },
+  1291→    {
+  1292→      key: "actions",
+  1293→      header: "",
+  1294→      align: "right",
+  1295→      className: "w-12",
+  1296→      accessor: (r) => rowMenu(r),
+  1297→    },
+  1298→  ];
+  1299→
+  1300→  const padColumns: DataTableColumn<PadDrive>[] = [
+  1301→    {
+  1302→      key: "date",
+  1303→      header: "Date",
+  1304→      className: "w-[6.5rem]",
+  1305→      accessor: (p) => (
+  1306→        <span className="whitespace-nowrap text-muted-foreground">
+  1307→          {formatDate(p.distributionDate)}
+  1308→        </span>
+  1309→      ),
+  1310→    },
+  1311→    {
+  1312→      key: "area",
+  1313→      header: "Area",
+  1314→      accessor: (p) => (
+  1315→        <div className="min-w-0">
+  1316→          <p className="truncate font-medium">{p.area}</p>
+  1317→          <p className="truncate text-xs text-muted-foreground">
+  1318→            {p.schoolName || "Community visit"}
+  1319→          </p>
+  1320→        </div>
+  1321→      ),
+  1322→    },
+  1323→    {
+  1324→      key: "school",
+  1325→      header: "School",
+  1326→      hideBelow: "md",
+  1327→      accessor: (p) => (
+  1328→        <span className="block max-w-52 truncate text-muted-foreground" title={p.schoolName ?? ""}>
+  1329→          {p.schoolName || "—"}
+  1330→        </span>
+  1331→      ),
+  1332→    },
+  1333→    {
+  1334→      key: "girls",
+  1335→      header: "Girls",
+  1336→      align: "right",
+  1337→      mono: true,
+  1338→      accessor: (p) => p.girlsCount.toLocaleString("en-IN"),
+  1339→    },
+  1340→    {
+  1341→      key: "pads",
+  1342→      header: "Pads",
+  1343→      align: "right",
+  1344→      mono: true,
+  1345→      accessor: (p) => (
+  1346→        <span className="font-medium">{p.padsDistributed.toLocaleString("en-IN")}</span>
+  1347→      ),
+  1348→    },
+  1349→    {
+  1350→      key: "perGirl",
+  1351→      header: "Per girl",
+  1352→      align: "right",
+  1353→      mono: true,
+  1354→      hideBelow: "lg",
+  1355→      accessor: (p) =>
+  1356→        p.girlsCount > 0
+  1357→          ? (Math.round((p.padsDistributed / p.girlsCount) * 10) / 10).toFixed(1)
+  1358→          : "—",
+  1359→    },
+  1360→    {
+  1361→      key: "session",
+  1362→      header: "Session",
+  1363→      hideBelow: "sm",
+  1364→      accessor: (p) =>
+  1365→        p.awarenessSession ? (
+  1366→          <Badge
+  1367→            variant="outline"
+  1368→            className="border-teal-500/30 bg-teal-500/10 font-medium text-teal-700 dark:text-teal-400"
+  1369→          >
+  1370→            Session{p.sessionAttendees != null ? ` · ${p.sessionAttendees}` : ""}
+  1371→          </Badge>
+  1372→        ) : (
+  1373→          <span className="text-xs text-muted-foreground">—</span>
+  1374→        ),
+  1375→    },
+  1376→    {
+  1377→      key: "volunteer",
+  1378→      header: "Volunteer",
+  1379→      hideBelow: "md",
+  1380→      accessor: (p) => (
+  1381→        <span className="text-muted-foreground">
+  1382→          {p.volunteer?.name ?? p.volunteerName ?? "—"}
+  1383→        </span>
+  1384→      ),
+  1385→    },
+  1386→    {
+  1387→      key: "actions",
+  1388→      header: "",
+  1389→      align: "right",
+  1390→      className: "w-12",
+  1391→      accessor: (p) => padRowMenu(p),
+  1392→    },
+  1393→  ];
+  1394→
+  1395→  /* ================================= render ================================ */
+  1396→
+  1397→  const fyLabel = financialYear(new Date());
+  1398→  const girlMonths = Math.floor((kpi?.pads ?? 0) / PADS_PER_GIRL_MONTH);
+  1399→  const familyKits = Math.floor((kpi?.sumValue ?? 0) / RATION_KIT_COST);
+  1400→
+  1401→  return (
+  1402→    <div className="space-y-6">
+  1403→      <PageHeader
+  1404→        title="Distributions"
+  1405→        description="Every kit, pad drive and hand-out the trust delivers — with beneficiaries, volunteers and impact math."
+  1406→        icon={<Package className="size-5" aria-hidden="true" />}
+  1407→        actions={
+  1408→          <Button variant="outline" onClick={refreshAll} aria-label="Refresh distributions">
+  1409→            <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+  1410→          </Button>
+  1411→        }
+  1412→      />
+  1413→
+  1414→      {/* ============================== KPI strip ============================= */}
+  1415→      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+  1416→        <StatCard
+  1417→          label="Distributions"
+  1418→          value={(kpi?.count ?? 0).toLocaleString("en-IN")}
+  1419→          hint={`recorded this FY (${fyLabel})`}
+  1420→          icon={<Package className="size-5" aria-hidden="true" />}
+  1421→          accent="emerald"
+  1422→          loading={kpiLoading}
+  1423→        />
+  1424→        <StatCard
+  1425→          label="Value disbursed"
+  1426→          value={formatINRCompact(kpi?.sumValue ?? 0)}
+  1427→          hint="estimated market value this FY"
+  1428→          icon={<Wallet className="size-5" aria-hidden="true" />}
+  1429→          accent="orange"
+  1430→          loading={kpiLoading}
+  1431→        />
+  1432→        <StatCard
+  1433→          label="Beneficiaries served"
+  1434→          value={(kpi?.beneficiaries ?? 0).toLocaleString("en-IN")}
+  1435→          hint="registered cases reached this FY"
+  1436→          icon={<Users className="size-5" aria-hidden="true" />}
+  1437→          accent="teal"
+  1438→          loading={kpiLoading}
+  1439→        />
+  1440→        <StatCard
+  1441→          label="Pads distributed"
+  1442→          value={(kpi?.pads ?? 0).toLocaleString("en-IN")}
+  1443→          hint={
+  1444→            girlMonths > 0
+  1445→              ? `≈ ${girlMonths.toLocaleString("en-IN")} girl-months of protection`
+  1446→              : "via school & community drives"
+  1447→          }
+  1448→          icon={<Sparkles className="size-5" aria-hidden="true" />}
+  1449→          accent="pink"
+  1450→          loading={kpiLoading}
+  1451→        />
+  1452→        <StatCard
+  1453→          label="Avg items / kit drive"
+  1454→          value={kpi?.avgItems ? kpi.avgItems.toFixed(1) : "—"}
+  1455→          hint="item lines per recorded drive"
+  1456→          icon={<Calculator className="size-5" aria-hidden="true" />}
+  1457→          accent="amber"
+  1458→          loading={kpiLoading}
+  1459→        />
+  1460→      </div>
+  1461→
+  1462→      {/* ============================ impact math ============================ */}
+  1463→      <div
+  1464→        className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground"
+  1465→        aria-label="Impact math"
+  1466→      >
+  1467→        <span className="flex items-center gap-1.5 font-semibold text-foreground">
+  1468→          <Calculator className="size-3.5 text-primary" aria-hidden="true" /> Impact math
+  1469→        </span>
+  1470→        <span>1 ration kit (₹{RATION_KIT_COST}) = a family of 4 fed for 15 days</span>
+  1471→        <span aria-hidden="true" className="hidden sm:inline">·</span>
+  1472→        <span>
+  1473→          {formatINRCompact(kpi?.sumValue ?? 0)} disbursed ≈{" "}
+  1474→          <strong className="font-semibold text-foreground">
+  1475→            {familyKits.toLocaleString("en-IN")}
+  1476→          </strong>{" "}
+  1477→          family kits
+  1478→        </span>
+  1479→        <span aria-hidden="true" className="hidden sm:inline">·</span>
+  1480→        <span>
+  1481→          {PADS_PER_GIRL_MONTH} pads = 1 girl-month ·{" "}
+  1482→          {(kpi?.pads ?? 0).toLocaleString("en-IN")} pads ≈{" "}
+  1483→          <strong className="font-semibold text-foreground">
+  1484→            {girlMonths.toLocaleString("en-IN")}
+  1485→          </strong>{" "}
+  1486→          girl-months
+  1487→        </span>
+  1488→      </div>
+  1489→
+  1490→      <Tabs value={tab} onValueChange={(v) => setTab(v as "general" | "pads")}>
+  1491→        <TabsList className="h-auto w-full flex-wrap sm:w-auto">
+  1492→          <TabsTrigger value="general">
+  1493→            General distributions
+  1494→            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+  1495→              {distRows.length}
+  1496→            </Badge>
+  1497→          </TabsTrigger>
+  1498→          <TabsTrigger value="pads">
+  1499→            Sanitary pads drives
+  1500→            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+  1501→              {padRows.length}
+  1502→            </Badge>
+  1503→          </TabsTrigger>
+  1504→        </TabsList>
+  1505→
+  1506→        {/* =========================== GENERAL TAB =========================== */}
+  1507→        <TabsContent value="general" className="mt-4 space-y-4">
+  1508→          {/* filters bar */}
+  1509→          <div className="flex flex-wrap items-center gap-2">
+  1510→            <div className="relative w-full sm:w-64">
+  1511→              <Search
+  1512→                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+  1513→                aria-hidden="true"
+  1514→              />
+  1515→              <Input
+  1516→                value={query}
+  1517→                onChange={(e) => setQuery(e.target.value)}
+  1518→                placeholder="Search beneficiary, location, items…"
+  1519→                aria-label="Search distributions"
+  1520→                className="pl-8"
+  1521→              />
+  1522→            </div>
+  1523→
+  1524→            <div
+  1525→              className="flex flex-wrap items-center gap-1.5"
+  1526→              role="group"
+  1527→              aria-label="Filter by distribution type"
+  1528→            >
+  1529→              <button
+  1530→                type="button"
+  1531→                aria-pressed={typeFilter.length === 0}
+  1532→                onClick={() => {
+  1533→                  setTypeFilter([]);
+  1534→                  setPage(1);
+  1535→                }}
+  1536→                className={cn(
+  1537→                  "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+  1538→                  typeFilter.length === 0
+  1539→                    ? "border-primary bg-primary/10 text-primary"
+  1540→                    : "border-border bg-background text-muted-foreground hover:bg-accent"
+  1541→                )}
+  1542→              >
+  1543→                All
+  1544→              </button>
+  1545→              {DISTRIBUTION_TYPES.map((t) => {
+  1546→                const active = typeFilter.includes(t);
+  1547→                const meta = TYPE_META[t];
+  1548→                const Icon = meta.icon;
+  1549→                return (
+  1550→                  <button
+  1551→                    key={t}
+  1552→                    type="button"
+  1553→                    aria-pressed={active}
+  1554→                    onClick={() => {
+  1555→                      setTypeFilter((prev) =>
+  1556→                        prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+  1557→                      );
+  1558→                      setPage(1);
+  1559→                    }}
+  1560→                    className={cn(
+  1561→                      "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+  1562→                      active
+  1563→                        ? meta.cls
+  1564→                        : "border-border bg-background text-muted-foreground hover:bg-accent"
+  1565→                    )}
+  1566→                  >
+  1567→                    <Icon className="size-3" aria-hidden="true" />
+  1568→                    {meta.label}
+  1569→                  </button>
+  1570→                );
+  1571→              })}
+  1572→            </div>
+  1573→
+  1574→            <select
+  1575→              aria-label="Filter by date range"
+  1576→              value={range}
+  1577→              onChange={(e) => {
+  1578→                setRange(e.target.value as DateRange);
+  1579→                setPage(1);
+  1580→              }}
+  1581→              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-44")}
+  1582→            >
+  1583→              {RANGE_OPTIONS.map((o) => (
+  1584→                <option key={o.value} value={o.value}>
+  1585→                  {o.label}
+  1586→                </option>
+  1587→              ))}
+  1588→            </select>
+  1589→
+  1590→            {isAdmin ? (
+  1591→              <select
+  1592→                aria-label="Filter by volunteer"
+  1593→                value={volunteerFilter}
+  1594→                onChange={(e) => {
+  1595→                  setVolunteerFilter(e.target.value);
+  1596→                  setPage(1);
+  1597→                }}
+  1598→                className={cn(NATIVE_SELECT_CLS, "w-full sm:w-48")}
+  1599→              >
+  1600→                <option value="">All volunteers</option>
+  1601→                {volunteers.map((v) => (
+  1602→                  <option key={v.id} value={v.id}>
+  1603→                    {v.user.name}
+  1604→                    {v.assignedArea ? ` — ${v.assignedArea}` : ""}
+  1605→                  </option>
+  1606→                ))}
+  1607→              </select>
+  1608→            ) : null}
+  1609→
+  1610→            {distFiltersActive ? (
+  1611→              <Button variant="ghost" size="sm" onClick={clearDistFilters}>
+  1612→                <X className="size-3.5" aria-hidden="true" /> Clear
+  1613→              </Button>
+  1614→            ) : null}
+  1615→
+  1616→            <span className="text-xs tabular-nums text-muted-foreground">
+  1617→              {distRows.length} result{distRows.length === 1 ? "" : "s"}
+  1618→            </span>
+  1619→
+  1620→            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+  1621→              <ExportMenu
+  1622→                columns={distCsv}
+  1623→                rows={distRows}
+  1624→                filename="uar-distributions"
+  1625→                disabled={distRows.length === 0}
+  1626→              />
+  1627→              <ViewSwitcher value={viewDist} onChange={setViewDist} />
+  1628→              <Button size="sm" onClick={openDistCreate}>
+  1629→                <Plus className="size-4" aria-hidden="true" /> Record distribution
+  1630→              </Button>
+  1631→            </div>
+  1632→          </div>
+  1633→
+  1634→          {viewDist === "table" ? (
+  1635→            <DataTable
+  1636→              columns={distColumns}
+  1637→              rows={pagedDist}
+  1638→              rowKey={(r) => r.id}
+  1639→              loading={loading}
+  1640→              skeletonRows={8}
+  1641→              height="fill"
+  1642→              fillOffset={470}
+  1643→              onRowClick={(r) => setDetail(r)}
+  1644→              page={pageSafe}
+  1645→              pages={pages}
+  1646→              total={distRows.length}
+  1647→              pageSize={pageSize}
+  1648→              onPage={setPage}
+  1649→              onPageSize={(n) => {
+  1650→                setPageSize(n);
+  1651→                setPage(1);
+  1652→              }}
+  1653→              itemLabel="distributions"
+  1654→              empty={
+  1655→                <EmptyState
+  1656→                  icon={<Package className="size-8" aria-hidden="true" />}
+  1657→                  title={
+  1658→                    distFiltersActive
+  1659→                      ? "No distributions match these filters"
+  1660→                      : "No distributions recorded yet"
+  1661→                  }
+  1662→                  hint="Record a field distribution so stock levels, beneficiary history and impact stats stay accurate."
+  1663→                >
+  1664→                  <Button variant="outline" onClick={openDistCreate}>
+  1665→                    <Plus className="size-4" aria-hidden="true" /> Record distribution
+  1666→                  </Button>
+  1667→                </EmptyState>
+  1668→              }
+  1669→            />
+  1670→          ) : loading ? (
+  1671→            viewDist === "grid" ? (
+  1672→              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+  1673→                {[0, 1, 2, 3].map((i) => (
+  1674→                  <Skeleton key={i} className="h-44 rounded-xl" />
+  1675→                ))}
+  1676→              </div>
+  1677→            ) : (
+  1678→              <div className="space-y-2" aria-busy="true">
+  1679→                {[0, 1, 2, 3, 4].map((i) => (
+  1680→                  <Skeleton key={i} className="h-14 rounded-lg" />
+  1681→                ))}
+  1682→              </div>
+  1683→            )
+  1684→          ) : distRows.length === 0 ? (
+  1685→            <EmptyState
+  1686→              icon={<Package className="size-8" aria-hidden="true" />}
+  1687→              title={
+  1688→                distFiltersActive
+  1689→                  ? "No distributions match these filters"
+  1690→                  : "No distributions recorded yet"
+  1691→              }
+  1692→              hint="Record a field distribution so stock levels, beneficiary history and impact stats stay accurate."
+  1693→            >
+  1694→              <Button variant="outline" onClick={openDistCreate}>
+  1695→                <Plus className="size-4" aria-hidden="true" /> Record distribution
+  1696→              </Button>
+  1697→            </EmptyState>
+  1698→          ) : viewDist === "grid" ? (
+  1699→            <div
+  1700→              className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+  1701→              role="list"
+  1702→              aria-label="Distributions"
+  1703→            >
+  1704→              {pagedDist.map((d) => {
+  1705→                const meta = TYPE_META[d.type] ?? TYPE_META.OTHER;
+  1706→                const Icon = meta.icon;
+  1707→                return (
+  1708→                  <div
+  1709→                    key={d.id}
+  1710→                    role="listitem"
+  1711→                    className="flex cursor-pointer flex-col gap-2.5 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+  1712→                    onClick={() => setDetail(d)}
+  1713→                  >
+  1714→                    <div className="flex items-center gap-2">
+  1715→                      <span
+  1716→                        aria-hidden="true"
+  1717→                        className={cn(
+  1718→                          "flex size-9 items-center justify-center rounded-lg border",
+  1719→                          meta.cls
+  1720→                        )}
+  1721→                      >
+  1722→                        <Icon className="size-4" />
+  1723→                      </span>
+  1724→                      {typeChip(d.type)}
+  1725→                      <span className="ml-auto text-xs text-muted-foreground">
+  1726→                        {formatDate(d.distributedAt)}
+  1727→                      </span>
+  1728→                    </div>
+  1729→                    <div className="min-w-0">
+  1730→                      <p className="truncate font-semibold">
+  1731→                        {d.beneficiary?.name ?? "Community hand-out"} × {d.quantity}
+  1732→                      </p>
+  1733→                      <p className="truncate text-xs text-muted-foreground">
+  1734→                        {d.location || "—"}
+  1735→                        {d.volunteer?.user?.name ? ` · ${d.volunteer.user.name}` : ""}
+  1736→                      </p>
+  1737→                    </div>
+  1738→                    {d.beneficiary ? (
+  1739→                      <div>{urgencyBadge(d.beneficiary.urgencyLevel)}</div>
+  1740→                    ) : null}
+  1741→                    <div className="mt-auto flex items-center gap-2 border-t pt-3">
+  1742→                      <Badge variant="outline" className="font-mono text-xs">
+  1743→                        {d.value != null ? formatINR(d.value) : "No value"}
+  1744→                      </Badge>
+  1745→                      <div className="ml-auto">{rowMenu(d)}</div>
+  1746→                    </div>
+  1747→                  </div>
+  1748→                );
+  1749→              })}
+  1750→            </div>
+  1751→          ) : (
+  1752→            <div
+  1753→              className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+  1754→              role="list"
+  1755→              aria-label="Distributions"
+  1756→            >
+  1757→              {pagedDist.map((d) => {
+  1758→                const meta = TYPE_META[d.type] ?? TYPE_META.OTHER;
+  1759→                const Icon = meta.icon;
+  1760→                return (
+  1761→                  <div
+  1762→                    key={d.id}
+  1763→                    role="listitem"
+  1764→                    className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent/40"
+  1765→                    onClick={() => setDetail(d)}
+  1766→                  >
+  1767→                    <span
+  1768→                      aria-hidden="true"
+  1769→                      className={cn(
+  1770→                        "flex size-9 shrink-0 items-center justify-center rounded-lg border",
+  1771→                        meta.cls
+  1772→                      )}
+  1773→                    >
+  1774→                      <Icon className="size-4" />
+  1775→                    </span>
+  1776→                    <div className="min-w-0 flex-1">
+  1777→                      <p className="truncate text-sm font-medium">
+  1778→                        {d.beneficiary?.name ?? "Community hand-out"} × {d.quantity}
+  1779→                      </p>
+  1780→                      <p className="truncate text-xs text-muted-foreground">
+  1781→                        {meta.label} · {d.location || "—"} · {formatDate(d.distributedAt)}
+  1782→                      </p>
+  1783→                    </div>
+  1784→                    <span className="hidden font-mono text-sm font-medium tabular-nums sm:block">
+  1785→                      {d.value != null ? formatINR(d.value) : "—"}
+  1786→                    </span>
+  1787→                    {rowMenu(d)}
+  1788→                  </div>
+  1789→                );
+  1790→              })}
+  1791→            </div>
+  1792→          )}
+  1793→        </TabsContent>
+  1794→
+  1795→        {/* ============================ PAD DRIVES ============================ */}
+  1796→        <TabsContent value="pads" className="mt-4 space-y-4">
+  1797→          {/* pads mini-metrics */}
+  1798→          <div
+  1799→            className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-muted/30 px-4 py-3 text-sm"
+  1800→            aria-label="Pad programme summary"
+  1801→          >
+  1802→            <span className="flex items-center gap-1.5 font-semibold text-foreground">
+  1803→              <Sparkles className="size-4 text-pink-600 dark:text-pink-400" aria-hidden="true" />
+  1804→              Programme
+  1805→            </span>
+  1806→            <span className="text-muted-foreground">
+  1807→              <strong className="font-semibold text-foreground tabular-nums">
+  1808→                {(padTotals?.sumPads ?? 0).toLocaleString("en-IN")}
+  1809→              </strong>{" "}
+  1810→              pads distributed
+  1811→            </span>
+  1812→            <span className="text-muted-foreground">
+  1813→              <strong className="font-semibold text-foreground tabular-nums">
+  1814→                {(padTotals?.sumGirls ?? 0).toLocaleString("en-IN")}
+  1815→              </strong>{" "}
+  1816→              girls reached
+  1817→            </span>
+  1818→            <span className="text-muted-foreground">
+  1819→              <strong className="font-semibold text-foreground tabular-nums">
+  1820→                {padTotals?.sessions ?? 0}
+  1821→              </strong>{" "}
+  1822→              awareness sessions
+  1823→            </span>
+  1824→            <span className="text-muted-foreground">
+  1825→              <strong className="font-semibold text-foreground tabular-nums">
+  1826→                {padTotals?.schools ?? 0}
+  1827→              </strong>{" "}
+  1828→              schools covered
+  1829→            </span>
+  1830→          </div>
+  1831→
+  1832→          {/* filters bar */}
+  1833→          <div className="flex flex-wrap items-center gap-2">
+  1834→            <div className="relative w-full sm:w-64">
+  1835→              <Search
+  1836→                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+  1837→                aria-hidden="true"
+  1838→              />
+  1839→              <Input
+  1840→                value={padQuery}
+  1841→                onChange={(e) => setPadQuery(e.target.value)}
+  1842→                placeholder="Search school or area…"
+  1843→                aria-label="Search pad drives"
+  1844→                className="pl-8"
+  1845→              />
+  1846→            </div>
+  1847→            <select
+  1848→              aria-label="Filter by awareness session"
+  1849→              value={padSession}
+  1850→              onChange={(e) => {
+  1851→                setPadSession(e.target.value as "all" | "yes" | "no");
+  1852→                setPadPage(1);
+  1853→              }}
+  1854→              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-52")}
+  1855→            >
+  1856→              <option value="all">All drives</option>
+  1857→              <option value="yes">With awareness session</option>
+  1858→              <option value="no">Without session</option>
+  1859→            </select>
+  1860→            <select
+  1861→              aria-label="Filter pad drives by date range"
+  1862→              value={padRange}
+  1863→              onChange={(e) => {
+  1864→                setPadRange(e.target.value as DateRange);
+  1865→                setPadPage(1);
+  1866→              }}
+  1867→              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-44")}
+  1868→            >
+  1869→              {RANGE_OPTIONS.map((o) => (
+  1870→                <option key={o.value} value={o.value}>
+  1871→                  {o.label}
+  1872→                </option>
+  1873→              ))}
+  1874→            </select>
+  1875→            {isAdmin ? (
+  1876→              <select
+  1877→                aria-label="Filter pad drives by volunteer"
+  1878→                value={padVolunteer}
+  1879→                onChange={(e) => {
+  1880→                  setPadVolunteer(e.target.value);
+  1881→                  setPadPage(1);
+  1882→                }}
+  1883→                className={cn(NATIVE_SELECT_CLS, "w-full sm:w-48")}
+  1884→              >
+  1885→                <option value="">All volunteers</option>
+  1886→                {volunteers.map((v) => (
+  1887→                  <option key={v.id} value={v.id}>
+  1888→                    {v.user.name}
+  1889→                  </option>
+  1890→                ))}
+  1891→              </select>
+  1892→            ) : null}
+  1893→            {padFiltersActive ? (
+  1894→              <Button variant="ghost" size="sm" onClick={clearPadFilters}>
+  1895→                <X className="size-3.5" aria-hidden="true" /> Clear
+  1896→              </Button>
+  1897→            ) : null}
+  1898→            <span className="text-xs tabular-nums text-muted-foreground">
+  1899→              {padRows.length} drive{padRows.length === 1 ? "" : "s"}
+  1900→            </span>
+  1901→            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+  1902→              <ExportMenu
+  1903→                columns={padCsv}
+  1904→                rows={padRows}
+  1905→                filename="uar-pad-drives"
+  1906→                disabled={padRows.length === 0}
+  1907→              />
+  1908→              <ViewSwitcher value={viewPad} onChange={setViewPad} />
+  1909→              <Button size="sm" onClick={openPadCreate}>
+  1910→                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1911→              </Button>
+  1912→            </div>
+  1913→          </div>
+  1914→
+  1915→          {viewPad === "table" ? (
+  1916→            <DataTable
+  1917→              columns={padColumns}
+  1918→              rows={pagedPads}
+  1919→              rowKey={(p) => p.id}
+  1920→              loading={loading}
+  1921→              skeletonRows={6}
+  1922→              height="fill"
+  1923→              fillOffset={470}
+  1924→              onRowClick={(p) => setPadDetail(p)}
+  1925→              page={padPageSafe}
+  1926→              pages={padPages}
+  1927→              total={padRows.length}
+  1928→              pageSize={padPageSize}
+  1929→              onPage={setPadPage}
+  1930→              onPageSize={(n) => {
+  1931→                setPadPageSize(n);
+  1932→                setPadPage(1);
+  1933→              }}
+  1934→              itemLabel="pad drives"
+  1935→              empty={
+  1936→                <EmptyState
+  1937→                  icon={<Sparkles className="size-8" aria-hidden="true" />}
+  1938→                  title={
+  1939→                    padFiltersActive
+  1940→                      ? "No pad drives match these filters"
+  1941→                      : "No pad drives recorded yet"
+  1942→                  }
+  1943→                  hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+  1944→                >
+  1945→                  <Button variant="outline" onClick={openPadCreate}>
+  1946→                    <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1947→                  </Button>
+  1948→                </EmptyState>
+  1949→              }
+  1950→            />
+  1951→          ) : loading ? (
+  1952→            viewPad === "grid" ? (
+  1953→              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+  1954→                {[0, 1, 2].map((i) => (
+  1955→                  <Skeleton key={i} className="h-44 rounded-xl" />
+  1956→                ))}
+  1957→              </div>
+  1958→            ) : (
+  1959→              <div className="space-y-2" aria-busy="true">
+  1960→                {[0, 1, 2, 3].map((i) => (
+  1961→                  <Skeleton key={i} className="h-14 rounded-lg" />
+  1962→                ))}
+  1963→              </div>
+  1964→            )
+  1965→          ) : padRows.length === 0 ? (
+  1966→            <EmptyState
+  1967→              icon={<Sparkles className="size-8" aria-hidden="true" />}
+  1968→              title={
+  1969→                padFiltersActive
+  1970→                  ? "No pad drives match these filters"
+  1971→                  : "No pad drives recorded yet"
+  1972→              }
+  1973→              hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+  1974→            >
+  1975→              <Button variant="outline" onClick={openPadCreate}>
+  1976→                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1977→              </Button>
+  1978→            </EmptyState>
+  1979→          ) : viewPad === "grid" ? (
+  1980→            <div
+  1981→              className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+  1982→              role="list"
+  1983→              aria-label="Pad drives"
+  1984→            >
+  1985→              {pagedPads.map((p) => (
+  1986→                <div
+  1987→                  key={p.id}
+  1988→                  role="listitem"
+  1989→                  className="flex cursor-pointer flex-col gap-2.5 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+  1990→                  onClick={() => setPadDetail(p)}
+  1991→                >
+  1992→                  <div className="flex items-center gap-2">
+  1993→                    <span
+  1994→                      aria-hidden="true"
+  1995→                      className="flex size-9 items-center justify-center rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400"
+  1996→                    >
+  1997→                      <Sparkles className="size-4" />
+  1998→                    </span>
+  1999→                    <p className="min-w-0 flex-1 truncate font-semibold">{p.area}</p>
+  2000→                    {p.awarenessSession ? (
+
+[showing lines 1-2000 of 3055; use offset=2001 with limit to continue reading]

@@ -2,6 +2,7 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
+  ChartColumn,
   ExternalLink,
   HeartHandshake,
   LogOut,
@@ -82,6 +83,8 @@ export interface PortalLayoutProps {
   onNavigate: (key: string) => void;
   children: React.ReactNode;
   accent?: string;
+  /** Dropdown-only extras (e.g. "analytics") — handled by the host router. */
+  onNavigateExtra?: (key: "analytics") => void;
 }
 
 export function PortalLayout({
@@ -91,6 +94,7 @@ export function PortalLayout({
   onNavigate,
   children,
   accent = "emerald",
+  onNavigateExtra,
 }: PortalLayoutProps) {
   const { logout } = useAuth();
   const a = ACCENTS[accent] ?? ACCENTS.emerald;
@@ -215,6 +219,13 @@ export function PortalLayout({
                 <DropdownMenuItem onClick={() => onNavigate("profile")}>
                   <UserRound className="size-4" aria-hidden="true" />
                   Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => onNavigateExtra?.("analytics")}
+                  aria-disabled={!onNavigateExtra}
+                >
+                  <ChartColumn className="size-4" aria-hidden="true" />
+                  My analytics
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

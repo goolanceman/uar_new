@@ -1,36 +1,77 @@
 "use client";
 
 /**
- * Volunteers — round-5: DataTable for applications and the roster (fill
- * height, skeleton rows, built-in pagination), full-screen DetailSheet with
- * profile, skills, availability, area, status, tasks, distributions
- * participated and the linked application, lg FormSheet for edits, polished
- * approvals workflow (review note → ConfirmDialog → copyable temp creds),
- * status chips + clear filters and CSV exports.
+ * Volunteers — wave-6 rework. Five tabs:
+ *
+ *  1. Applications  — search + status filters, DataTable, DetailSheet with every
+ *     application field, approve (temp-creds reveal) / reject flow, CSV export.
+ *  2. Volunteers    — roster with table/grid ViewSwitcher, DetailSheet with
+ *     internal tabs (Overview / Tasks / Attendance / Activity), edit FormSheet,
+ *     "Assign to…" and "Log attendance" quick actions, CSV export.
+ *  3. Tasks         — global task board: filters (status/type/volunteer),
+ *     linked-record + AUTO badges, status advance, manual "Add task" FormSheet.
+ *  4. Attendance    — global attendance register with upsert FormSheet.
+ *  5. Analytics     — KPI StatCards + Recharts (tasks by type, status donut,
+ *     top-5 leaderboard, 6-month hours trend) from GET /api/volunteers?analytics=1.
+ *
+ * Assignments flow through POST /api/volunteer-assignments (auto-generates one
+ * VolunteerTask per volunteer, createdFrom AUTO).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
+  Archive,
   BadgeCheck,
+  Ban,
   CalendarClock,
+  CalendarDays,
   Check,
   ClipboardList,
+  Clock,
+  HeartHandshake,
+  Info,
+  KeyRound,
+  Link2,
   MapPin,
-  Pencil,
+  Megaphone,
+  MoreHorizontal,
   Package,
+  PawPrint,
+  Pencil,
+  Play,
   Plus,
+  RefreshCw,
   Search,
+  Siren,
+  Sparkles,
+  Trophy,
   UserCheck,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { toast } from "sonner";
 import { get, patch, post } from "@/lib/api-client";
 import { useMasters } from "@/hooks/use-masters";
-import { formatDate, formatDateTime, formatINR, initials, titleCase } from "@/lib/format";
-import { required } from "@/lib/validators";
-import { cn } from "@/lib/utils";
+import { formatDate, formatDateTime, initials, titleCase } from "@/lib/format";
+import { timeAgo, cn } from "@/lib/utils";
+import { humanize, StatusBadge, type Tone } from "@/components/shared/status-badge";
 import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { StatCard } from "@/components/shared/stat-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FormSheet } from "@/components/shared/form-sheet";
@@ -46,24 +87,22 @@ import {
   TextField,
   TextareaField,
 } from "@/components/shared/form-fields";
-import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import { useViewPref, ViewSwitcher } from "@/components/shared/view-switcher";
 import {
-  DataTable,
-  type DataTableColumn,
-} from "@/components/shared/data-table";
-import {
-  PaginationBar,
-  ViewSwitcher,
-  useViewPref,
-  type DataViewMode,
-} from "@/components/shared/view-switcher";
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Dialog,
   DialogContent,
@@ -72,8 +111,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-/* ---------------------------------- types ---------------------------------- */
+/* ════════════════════════════════ types ════════════════════════════════ */
 
 interface Application {
   id: string;
@@ -128,26 +174,32 @@ interface TaskRow {
   status: string;
   location?: string | null;
   scheduledDate: string;
+  notes?: string | null;
+  refType?: string | null;
+  refId?: string | null;
+  createdFrom?: string;
+  completedAt?: string | null;
+  volunteer?: {
+    id: string;
+    assignedArea?: string | null;
+    user?: { name?: string } | null;
+  };
 }
 
 interface AttendanceRow {
   id: string;
+  volunteerId: string;
   date: string;
   checkIn?: string | null;
   checkOut?: string | null;
   hours?: number | null;
   location?: string | null;
   notes?: string | null;
-}
-
-interface DistributionRow {
-  id: string;
-  type: string;
-  quantity: number;
-  value?: number | null;
-  location?: string | null;
-  distributedAt: string;
-  beneficiary?: { name: string } | null;
+  volunteer?: {
+    id: string;
+    assignedArea?: string | null;
+    user?: { name?: string } | null;
+  };
 }
 
 interface VolunteerDetail extends VolunteerRow {
@@ -161,35 +213,56 @@ interface VolunteerDetail extends VolunteerRow {
   };
 }
 
-interface EditForm {
-  skills: string;
-  availability: string;
-  assignedArea: string;
-  emergencyContact: string;
-  idProof: string;
+interface ActivityLogRow {
+  id: string;
+  action: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  details?: string | null;
+  actorName?: string | null;
+  createdAt: string;
+}
+
+interface AnalyticsData {
+  kpis: {
+    totalVolunteers: number;
+    activeVolunteers: number;
+    pendingApplications: number;
+    tasksAssigned: number;
+    tasksCompleted: number;
+    completionRate: number;
+    hoursThisMonth: number;
+  };
+  tasksByType: Array<{ type: string; count: number }>;
+  taskStatus: Array<{ status: string; count: number }>;
+  leaderboard: Array<{ volunteerId: string; name: string; assigned: number; completed: number }>;
+  monthlyHours: Array<{ key: string; label: string; hours: number }>;
+}
+
+interface DistributionLite {
+  id: string;
+  type: string;
+  quantity: number;
+  location?: string | null;
+  distributedAt: string;
+  beneficiary?: { name?: string } | null;
+}
+
+interface CampaignLite {
+  id: string;
+  title: string;
   status: string;
 }
 
-interface TaskForm {
-  title: string;
-  type: string;
-  priority: string;
-  location: string;
-  scheduledDate: string;
-}
-
-interface AttForm {
-  date: string;
-  checkIn: string;
-  checkOut: string;
-  hours: string;
-  location: string;
-  notes: string;
+interface RecordOption {
+  id: string;
+  label: string;
+  sub?: string;
 }
 
 type RuleErr = Record<string, string | undefined>;
 
-/* ------------------------------ helpers & bits ------------------------------ */
+/* ═══════════════════════════ constants & helpers ═══════════════════════ */
 
 const VOL_STATUS_OPTIONS = [
   { value: "PENDING", label: "Pending" },
@@ -204,7 +277,7 @@ const PRIORITY_OPTIONS = [
   { value: "HIGH", label: "High" },
 ];
 
-const PRIORITY_TONE: Record<string, "danger" | "warning" | "neutral"> = {
+const PRIORITY_TONE: Record<string, Tone> = {
   HIGH: "danger",
   MEDIUM: "warning",
   LOW: "neutral",
@@ -212,12 +285,69 @@ const PRIORITY_TONE: Record<string, "danger" | "warning" | "neutral"> = {
 
 const APP_FILTERS = ["PENDING", "APPROVED", "REJECTED", "ALL"];
 const VOL_FILTERS = ["ALL", "PENDING", "ACTIVE", "INACTIVE", "SUSPENDED"];
+const TASK_STATUS_FILTERS = ["ALL", "ASSIGNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
+
+const TASK_TYPE_META: Record<
+  string,
+  { label: string; cls: string; icon: React.ElementType }
+> = {
+  DISTRIBUTION: {
+    label: "Distribution",
+    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+    icon: Package,
+  },
+  KIT_SCAN: {
+    label: "Kit scanning",
+    cls: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+    icon: Sparkles,
+  },
+  INVENTORY: {
+    label: "Inventory",
+    cls: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+    icon: Archive,
+  },
+  EVENT: {
+    label: "Awareness event",
+    cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+    icon: CalendarDays,
+  },
+  RESCUE: {
+    label: "Animal rescue",
+    cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    icon: PawPrint,
+  },
+  AMBULANCE: {
+    label: "Ambulance",
+    cls: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400",
+    icon: Siren,
+  },
+};
+
+const REF_TYPE_META: Record<string, { label: string; icon: React.ElementType }> = {
+  DISTRIBUTION: { label: "Distribution", icon: Package },
+  CAMPAIGN: { label: "Campaign", icon: Megaphone },
+  EVENT: { label: "Event", icon: CalendarDays },
+  MISSION: { label: "Mission", icon: Siren },
+};
+
+const LINK_TYPE_OPTIONS = [
+  { value: "DISTRIBUTION", label: "Distribution drive" },
+  { value: "CAMPAIGN", label: "Campaign" },
+  { value: "EVENT", label: "Awareness event" },
+];
+
+const STATUS_COLORS: Record<string, string> = {
+  ASSIGNED: "#f59e0b",
+  IN_PROGRESS: "#14b8a6",
+  COMPLETED: "#10b981",
+  CANCELLED: "#f43f5e",
+};
 
 function parseList(s?: string | null): string[] {
   if (!s) return [];
   try {
     const parsed = JSON.parse(s);
-    if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === "string" && x);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
   } catch {
     // plain comma-separated string
   }
@@ -245,6 +375,131 @@ function fmtTime(iso?: string | null): string {
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function dateValue(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function todayIso(): string {
+  return dateValue(new Date());
+}
+
+function addDaysIso(days: number): string {
+  return dateValue(new Date(Date.now() + days * 86_400_000));
+}
+
+function dateOnly(iso?: string | null): string {
+  if (!iso) return todayIso();
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? todayIso() : dateValue(d);
+}
+
+function timeOnly(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function collectErrors(...pairs: Array<[string, string | null]>): RuleErr | null {
+  const out: RuleErr = {};
+  let any = false;
+  for (const [key, err] of pairs) {
+    if (err) {
+      out[key] = err;
+      any = true;
+    }
+  }
+  return any ? out : null;
+}
+
+function typeChip(t: string) {
+  const meta = TASK_TYPE_META[t] ?? {
+    label: titleCase(t) || "Task",
+    cls: "border-border bg-muted/40 text-muted-foreground",
+    icon: ClipboardList,
+  };
+  const Icon = meta.icon;
+  return (
+    <Badge
+      variant="outline"
+      className={cn("gap-1 whitespace-nowrap font-medium", meta.cls)}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+      {meta.label}
+    </Badge>
+  );
+}
+
+function priorityBadge(p: string) {
+  return (
+    <StatusBadge tone={PRIORITY_TONE[p] ?? "neutral"}>
+      {titleCase(p) || "—"}
+    </StatusBadge>
+  );
+}
+
+function autoBadge(createdFrom?: string | null) {
+  if (createdFrom !== "AUTO") return null;
+  return (
+    <Badge
+      variant="outline"
+      className="border-teal-500/30 bg-teal-500/10 px-1.5 text-[10px] font-bold tracking-wider text-teal-700 dark:text-teal-400"
+    >
+      AUTO
+    </Badge>
+  );
+}
+
+function refCell(t: TaskRow) {
+  if (!t.refType)
+    return <span className="text-xs text-muted-foreground">—</span>;
+  const meta = REF_TYPE_META[t.refType] ?? {
+    label: titleCase(t.refType),
+    icon: Link2,
+  };
+  const Icon = meta.icon;
+  return (
+    <span className="flex items-center gap-1.5">
+      <Badge
+        variant="outline"
+        className="gap-1 border-border bg-muted/40 font-medium text-muted-foreground"
+      >
+        <Icon className="size-3" aria-hidden="true" />
+        {meta.label}
+      </Badge>
+      {t.refId ? (
+        <span
+          className="hidden font-mono text-[10px] text-muted-foreground/80 lg:inline"
+          title={t.refId}
+        >
+          …{t.refId.slice(-6)}
+        </span>
+      ) : null}
+      {autoBadge(t.createdFrom)}
+    </span>
+  );
+}
+
+/** Allowed status moves for a task, in workflow order. */
+function taskTransitions(status: string): Array<{ label: string; status: string; icon: React.ElementType }> {
+  if (status === "ASSIGNED")
+    return [
+      { label: "Start", status: "IN_PROGRESS", icon: Play },
+      { label: "Complete", status: "COMPLETED", icon: Check },
+      { label: "Cancel", status: "CANCELLED", icon: Ban },
+    ];
+  if (status === "IN_PROGRESS")
+    return [
+      { label: "Complete", status: "COMPLETED", icon: Check },
+      { label: "Cancel", status: "CANCELLED", icon: Ban },
+    ];
+  return [];
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="rounded-full bg-teal-500/10 px-2 py-0.5 text-[11px] font-medium text-teal-700 dark:text-teal-400">
@@ -259,81 +514,164 @@ function StatTile({ label, value }: { label: string; value: React.ReactNode }) {
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
-      <p className="mt-0.5 text-lg font-bold leading-tight tabular-nums">{value ?? "—"}</p>
+      <p className="mt-0.5 text-lg font-bold leading-tight tabular-nums">
+        {value ?? "—"}
+      </p>
     </div>
   );
 }
 
-function collectErrors(...pairs: [string, string | null][]): RuleErr | null {
-  const out: RuleErr = {};
-  let any = false;
-  for (const [key, err] of pairs) {
-    if (err) {
-      out[key] = err;
-      any = true;
-    }
-  }
-  return any ? out : null;
-}
-
-/* ----------------------------------- view ----------------------------------- */
+/* ═══════════════════════════════ main view ═════════════════════════════ */
 
 export default function VolunteersView() {
+  const [tab, setTab] = useState("applications");
+  const [revision, setRevision] = useState(0);
+  const [volunteerDetailId, setVolunteerDetailId] = useState<string | null>(null);
+
+  const notifyChange = useCallback(() => setRevision((r) => r + 1), []);
+  const openVolunteer = useCallback((id: string) => setVolunteerDetailId(id), []);
+
+  /* module-wide KPIs power the tab badges + the Analytics tab */
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    get<AnalyticsData>("/api/volunteers?analytics=1")
+      .then((d) => {
+        if (alive) setAnalytics(d);
+      })
+      .catch(() => {
+        // analytics are decorative — stay silent
+      })
+      .finally(() => {
+        if (alive) setAnalyticsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [revision]);
+
+  const kpis = analytics?.kpis;
+
   return (
     <div className="space-y-4 sm:space-y-6">
       <PageHeader
         title="Volunteers"
-        description="Review applications, manage the active roster and track engagement."
-        icon={<BadgeCheck className="size-5" aria-hidden="true" />}
+        description="Applications, the active roster, task assignment, attendance and engagement analytics."
+        icon={<HeartHandshake className="size-5" aria-hidden="true" />}
+        actions={
+          <Button
+            variant="outline"
+            onClick={() => setRevision((r) => r + 1)}
+            aria-label="Refresh volunteers module"
+          >
+            <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+          </Button>
+        }
       />
-      <Tabs defaultValue="applications" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="applications">Applications</TabsTrigger>
-          <TabsTrigger value="volunteers">Volunteers</TabsTrigger>
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="h-auto w-full flex-wrap sm:w-auto">
+          <TabsTrigger value="applications">
+            Applications
+            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+              {analyticsLoading ? "…" : (kpis?.pendingApplications ?? 0)}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="volunteers">
+            Volunteers
+            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+              {analyticsLoading ? "…" : (kpis?.totalVolunteers ?? 0)}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="tasks">
+            Tasks
+            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+              {analyticsLoading ? "…" : (kpis?.tasksAssigned ?? 0)}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="attendance">Attendance</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
-        <TabsContent value="applications">
-          <ApplicationsTab />
+
+        <TabsContent value="applications" className="mt-4">
+          <ApplicationsTab revision={revision} onChanged={notifyChange} />
         </TabsContent>
-        <TabsContent value="volunteers">
-          <VolunteersTab />
+        <TabsContent value="volunteers" className="mt-4">
+          <VolunteersTab
+            revision={revision}
+            onChanged={notifyChange}
+            openVolunteer={openVolunteer}
+          />
+        </TabsContent>
+        <TabsContent value="tasks" className="mt-4">
+          <TasksTab
+            revision={revision}
+            onChanged={notifyChange}
+            openVolunteer={openVolunteer}
+          />
+        </TabsContent>
+        <TabsContent value="attendance" className="mt-4">
+          <AttendanceTab revision={revision} onChanged={notifyChange} />
+        </TabsContent>
+        <TabsContent value="analytics" className="mt-4">
+          <AnalyticsTab data={analytics} loading={analyticsLoading} />
         </TabsContent>
       </Tabs>
+
+      <VolunteerDetailSheet
+        volunteerId={volunteerDetailId}
+        open={!!volunteerDetailId}
+        onOpenChange={(o) => {
+          if (!o) setVolunteerDetailId(null);
+        }}
+        onChanged={notifyChange}
+      />
     </div>
   );
 }
 
-/* ============================ APPLICATIONS TAB ============================= */
+/* ═══════════════════════════ APPLICATIONS TAB ═══════════════════════════ */
 
-function ApplicationsTab() {
+function ApplicationsTab({
+  revision,
+  onChanged,
+}: {
+  revision: number;
+  onChanged: () => void;
+}) {
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("PENDING");
-  const [viewTarget, setViewTarget] = useState<Application | null>(null);
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
-  /* approve flow: FormSheet (note) → ConfirmDialog */
+  const [detail, setDetail] = useState<Application | null>(null);
+
+  /* approve flow: FormSheet (note) → ConfirmDialog → temp creds reveal */
   const [approveTarget, setApproveTarget] = useState<Application | null>(null);
   const [approvePending, setApprovePending] = useState<Application | null>(null);
   const [approveNote, setApproveNote] = useState("");
   const [approving, setApproving] = useState(false);
+  const [approvedCreds, setApprovedCreds] = useState<TempCreds | null>(null);
 
-  /* reject flow: FormSheet (note) → ConfirmDialog */
+  /* reject flow: FormSheet (reason) → ConfirmDialog */
   const [rejectTarget, setRejectTarget] = useState<Application | null>(null);
   const [rejectPending, setRejectPending] = useState<Application | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [rejecting, setRejecting] = useState(false);
 
-  const [approvedCreds, setApprovedCreds] = useState<TempCreds | null>(null);
-
-  /* table pagination */
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = filter === "ALL" ? "" : `status=${filter}`;
+      const sp = new URLSearchParams();
+      if (filter !== "ALL") sp.set("status", filter);
+      if (appliedQuery.trim()) sp.set("q", appliedQuery.trim());
       const data = await get<Application[] | { items?: Application[] }>(
-        `/api/volunteer-applications?${qs}`
+        `/api/volunteer-applications?${sp.toString()}`
       );
       const list = (Array.isArray(data) ? data : (data.items ?? [])).slice();
       list.sort((a, b) => {
@@ -347,15 +685,19 @@ function ApplicationsTab() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, appliedQuery]);
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, revision]);
 
   useEffect(() => {
-    setPage(1);
-  }, [filter, pageSize]);
+    const t = window.setTimeout(() => {
+      setAppliedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
 
   const pages = Math.max(1, Math.ceil(apps.length / pageSize));
   const pageSafe = Math.min(page, pages);
@@ -372,14 +714,17 @@ function ApplicationsTab() {
         `/api/volunteer-applications/${approvePending.id}`,
         { status: "APPROVED", reviewNote: approveNote.trim() || undefined }
       );
-      toast.success("Volunteer approved — portal unlocked");
-      const creds = parseTempCreds(res?.application?.tempCreds ?? approvePending.tempCreds);
+      const creds = parseTempCreds(
+        res?.application?.tempCreds ?? approvePending.tempCreds
+      );
+      toast.success("Volunteer approved — roster updated");
       setApprovedCreds(creds);
       setApprovePending(null);
       setApproveTarget(null);
       setApproveNote("");
-      setViewTarget(null);
+      setDetail(null);
       await load();
+      onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to approve application");
     } finally {
@@ -399,8 +744,9 @@ function ApplicationsTab() {
       setRejectPending(null);
       setRejectTarget(null);
       setRejectNote("");
-      setViewTarget(null);
+      setDetail(null);
       await load();
+      onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reject application");
     } finally {
@@ -410,48 +756,6 @@ function ApplicationsTab() {
 
   const busy = approving || rejecting;
 
-  const appActions = (a: Application) => (
-    <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-      {a.status === "PENDING" ? (
-        <>
-          <Button
-            size="sm"
-            className="min-h-9"
-            onClick={() => {
-              setApproveTarget(a);
-              setApproveNote("");
-            }}
-            aria-label={`Approve ${a.fullName}`}
-          >
-            <Check className="size-4" /> Approve
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="min-h-9 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
-            onClick={() => {
-              setRejectTarget(a);
-              setRejectNote("");
-            }}
-            aria-label={`Reject ${a.fullName}`}
-          >
-            <X className="size-4" /> Reject
-          </Button>
-        </>
-      ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          className="min-h-9"
-          onClick={() => setViewTarget(a)}
-          aria-label={`View application from ${a.fullName}`}
-        >
-          View
-        </Button>
-      )}
-    </div>
-  );
-
   const appCsv: CsvColumn<Application>[] = useMemo(
     () => [
       { header: "Name", value: (a) => a.fullName },
@@ -460,47 +764,205 @@ function ApplicationsTab() {
       { header: "City", value: (a) => a.city },
       { header: "Occupation", value: (a) => a.occupation ?? "" },
       { header: "Skills", value: (a) => parseList(a.skills).join("; ") },
-      { header: "Availability", value: (a) => a.availability ?? "" },
+      { header: "Availability", value: (a) => parseList(a.availability).join("; ") },
       { header: "Status", value: (a) => a.status },
-      { header: "Applied", value: (a) => a.createdAt },
+      { header: "Applied", value: (a) => formatDate(a.createdAt) },
+      { header: "Motivation", value: (a) => a.motivation },
       { header: "Review note", value: (a) => a.reviewNote ?? "" },
+      { header: "Reviewed at", value: (a) => (a.reviewedAt ? formatDate(a.reviewedAt) : "") },
     ],
     []
   );
 
   const columns: DataTableColumn<Application>[] = [
-    { key: "name", header: "Applicant" },
-    { key: "contact", header: "Contact", hideBelow: "md" },
-    { key: "city", header: "City", hideBelow: "sm" },
-    { key: "availability", header: "Availability", hideBelow: "lg" },
-    { key: "skills", header: "Skills", hideBelow: "lg" },
-    { key: "status", header: "Status" },
-    { key: "applied", header: "Applied", hideBelow: "md" },
-    { key: "actions", header: "", align: "right", className: "w-44" },
+    {
+      key: "name",
+      header: "Applicant",
+      accessor: (a) => (
+        <div className="flex items-center gap-2.5">
+          <Avatar className="size-8">
+            <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+              {initials(a.fullName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <p className="truncate font-medium">{a.fullName}</p>
+            {a.occupation ? (
+              <p className="truncate text-xs text-muted-foreground">{a.occupation}</p>
+            ) : null}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "contact",
+      header: "Contact",
+      hideBelow: "md",
+      accessor: (a) => (
+        <div className="min-w-0">
+          <p className="truncate text-xs text-muted-foreground">{a.email}</p>
+          <p className="truncate font-mono text-xs text-muted-foreground">{a.phone}</p>
+        </div>
+      ),
+    },
+    {
+      key: "city",
+      header: "City",
+      hideBelow: "sm",
+      accessor: (a) => <span className="text-sm">{a.city || "—"}</span>,
+    },
+    {
+      key: "skills",
+      header: "Skills",
+      hideBelow: "lg",
+      accessor: (a) => {
+        const skills = parseList(a.skills);
+        if (skills.length === 0)
+          return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <div className="flex max-w-56 flex-wrap gap-1">
+            {skills.slice(0, 3).map((s) => (
+              <Chip key={s}>{titleCase(s)}</Chip>
+            ))}
+            {skills.length > 3 ? <Chip>+{skills.length - 3}</Chip> : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "availability",
+      header: "Availability",
+      hideBelow: "lg",
+      accessor: (a) => {
+        const list = parseList(a.availability);
+        return (
+          <span className="text-xs text-muted-foreground">
+            {list.length ? list.map((s) => titleCase(s)).join(" · ") : "—"}
+          </span>
+        );
+      },
+    },
+    {
+      key: "status",
+      header: "Status",
+      accessor: (a) => <StatusBadge status={a.status} />,
+    },
+    {
+      key: "applied",
+      header: "Applied",
+      hideBelow: "md",
+      accessor: (a) => (
+        <span className="whitespace-nowrap text-xs text-muted-foreground">
+          {formatDate(a.createdAt)}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      className: "w-12",
+      accessor: (a) => (
+        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={`Actions for application from ${a.fullName}`}
+              >
+                <MoreHorizontal className="size-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => setDetail(a)}>
+                <Info className="size-4" aria-hidden="true" /> View details
+              </DropdownMenuItem>
+              {a.status === "PENDING" ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setApproveTarget(a);
+                      setApproveNote("");
+                    }}
+                  >
+                    <Check className="size-4" aria-hidden="true" /> Approve
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                    onClick={() => {
+                      setRejectTarget(a);
+                      setRejectNote("");
+                    }}
+                  >
+                    <X className="size-4" aria-hidden="true" /> Reject
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
+    },
   ];
 
   return (
     <div className="space-y-4">
-      {/* status filter */}
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter applications by status">
-        {APP_FILTERS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setFilter(t)}
-            aria-pressed={filter === t}
-            className={cn(
-              "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
-              filter === t
-                ? "border-primary bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent"
-            )}
-          >
-            {titleCase(t)}
-          </button>
-        ))}
-        <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">
+      {/* toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-64">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, email, city…"
+            aria-label="Search applications"
+            className="pl-8"
+          />
+        </div>
+
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="group"
+          aria-label="Filter applications by status"
+        >
+          {APP_FILTERS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              aria-pressed={filter === t}
+              onClick={() => {
+                setFilter(t);
+                setPage(1);
+              }}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                filter === t
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:bg-accent"
+              )}
+            >
+              {titleCase(t)}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
           {loading ? "Loading…" : `${apps.length} application${apps.length === 1 ? "" : "s"}`}
         </span>
+
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <ExportMenu
+            columns={appCsv}
+            rows={apps}
+            filename="uar-volunteer-applications"
+            disabled={apps.length === 0}
+          />
+        </div>
       </div>
 
       <DataTable
@@ -510,292 +972,256 @@ function ApplicationsTab() {
         loading={loading}
         skeletonRows={6}
         height="fill"
-        fillOffset={300}
-        onRowClick={(a) => setViewTarget(a)}
+        fillOffset={340}
+        onRowClick={(a) => setDetail(a)}
         page={pageSafe}
         pages={pages}
         total={apps.length}
         pageSize={pageSize}
         onPage={setPage}
-        onPageSize={setPageSize}
+        onPageSize={(n) => {
+          setPageSize(n);
+          setPage(1);
+        }}
         itemLabel="applications"
         empty={
           <EmptyState
-            icon={<UserCheck className="size-6" aria-hidden="true" />}
-            title={`No ${filter === "ALL" ? "" : `${filter.toLowerCase()} `}applications`}
-            hint="New volunteer applications from the public site will appear here for review."
+            icon={<UserPlus className="size-8" aria-hidden="true" />}
+            title={
+              appliedQuery.trim() || filter !== "PENDING"
+                ? "No applications match these filters"
+                : "No pending applications"
+            }
+            hint="Volunteer sign-ups from the public site land here for review — approve to activate their portal account and add them to the roster."
           />
         }
-      >
-        {(a, col) => {
-          switch (col.key) {
-            case "name":
-              return (
-                <div className="flex items-center gap-2.5">
-                  <Avatar className="size-8">
-                    <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                      {initials(a.fullName)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{a.fullName}</p>
-                    {a.occupation ? (
-                      <p className="truncate text-xs text-muted-foreground">{a.occupation}</p>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            case "contact":
-              return (
-                <div className="min-w-0">
-                  <p className="truncate text-xs text-muted-foreground">{a.email}</p>
-                  <p className="truncate font-mono text-xs text-muted-foreground">{a.phone}</p>
-                </div>
-              );
-            case "city":
-              return <span className="text-sm">{a.city || "—"}</span>;
-            case "availability":
-              return <span className="text-sm text-muted-foreground">{a.availability || "—"}</span>;
-            case "skills": {
-              const skills = parseList(a.skills);
-              return skills.length > 0 ? (
-                <div className="flex max-w-56 flex-wrap gap-1">
-                  {skills.slice(0, 3).map((s) => (
-                    <Chip key={s}>{s}</Chip>
-                  ))}
-                  {skills.length > 3 && (
-                    <span className="text-[11px] text-muted-foreground">+{skills.length - 3}</span>
-                  )}
-                </div>
-              ) : (
-                <span className="text-xs text-muted-foreground">—</span>
-              );
-            }
-            case "status":
-              return <StatusBadge status={a.status} />;
-            case "applied":
-              return <span className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(a.createdAt)}</span>;
-            case "actions":
-              return appActions(a);
-            default:
-              return null;
-          }
-        }}
-      </DataTable>
+      />
 
-      <div className="flex justify-end">
-        <ExportMenu
-          columns={appCsv}
-          rows={apps}
-          filename={`uar-volunteer-applications-${filter.toLowerCase()}`}
-          disabled={apps.length === 0}
-        />
-      </div>
-
-      {/* Application detail sheet */}
+      {/* ============================ DETAIL SHEET ============================ */}
       <DetailSheet
-        open={!!viewTarget}
-        onOpenChange={(o) => !o && setViewTarget(null)}
-        eyebrow="Volunteer application"
-        title={viewTarget?.fullName ?? "Application"}
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetail(null)}
+        eyebrow="Volunteer applications"
+        title={detail?.fullName ?? ""}
         description={
-          viewTarget
-            ? `${viewTarget.occupation ? `${viewTarget.occupation} · ` : ""}${viewTarget.city || "No city"} · applied ${formatDateTime(viewTarget.createdAt)}`
-            : ""
+          detail ? `${detail.email} · ${detail.phone}${detail.city ? ` · ${detail.city}` : ""}` : undefined
         }
-        status={viewTarget ? <StatusBadge status={viewTarget.status} /> : undefined}
+        status={detail ? <StatusBadge status={detail.status} /> : null}
         footer={
-          viewTarget && viewTarget.status === "PENDING" ? (
+          detail && detail.status === "PENDING" ? (
             <>
               <p className="text-xs text-muted-foreground">
-                Approving creates a VOLUNTEER account with temporary credentials.
+                Applied {formatDateTime(detail.createdAt)}
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex gap-2">
                 <Button
                   size="sm"
                   onClick={() => {
-                    setApproveTarget(viewTarget);
+                    setApproveTarget(detail);
                     setApproveNote("");
                   }}
-                  aria-label={`Approve ${viewTarget.fullName}`}
                 >
-                  <Check className="size-4" /> Approve
+                  <Check className="size-3.5" aria-hidden="true" /> Approve
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
                   onClick={() => {
-                    setRejectTarget(viewTarget);
+                    setRejectTarget(detail);
                     setRejectNote("");
                   }}
-                  aria-label={`Reject ${viewTarget.fullName}`}
                 >
-                  <X className="size-4" /> Reject
+                  <X className="size-3.5" aria-hidden="true" /> Reject
                 </Button>
               </div>
             </>
-          ) : undefined
+          ) : null
         }
       >
-        {viewTarget ? (
+        {detail ? (
           <>
-            <DetailSection title="Applicant" description="Identity and contact details from the public form.">
-              <DetailGrid cols={2}>
-                <DataField label="Full name" value={viewTarget.fullName} />
-                <DataField label="Email" value={viewTarget.email} copy />
-                <DataField label="Phone" value={viewTarget.phone} copy mono />
-                <DataField label="City" value={viewTarget.city} />
-                <DataField label="Occupation" value={viewTarget.occupation} />
-                <DataField label="Linked user ID" value={viewTarget.userId} mono />
-                <DataField label="Applied" value={formatDateTime(viewTarget.createdAt)} />
+            <DetailSection title="Applicant profile" description="Who wants to join the crew.">
+              <DetailGrid cols={3}>
+                <DataField label="Full name" value={detail.fullName} />
+                <DataField label="Email" value={detail.email} />
+                <DataField label="Phone" value={detail.phone} mono />
+                <DataField label="City" value={detail.city} icon={<MapPin className="size-3" aria-hidden="true" />} />
+                <DataField label="Occupation" value={detail.occupation ?? null} />
                 <DataField
-                  label="Reviewed at"
-                  value={viewTarget.reviewedAt ? formatDateTime(viewTarget.reviewedAt) : "Not reviewed"}
+                  label="Applied on"
+                  value={formatDateTime(detail.createdAt)}
+                  icon={<CalendarClock className="size-3" aria-hidden="true" />}
                 />
               </DetailGrid>
             </DetailSection>
 
-            <DetailSection title="Skills & availability" description="What the applicant offers and when.">
+            <DetailSection title="Skills & availability" description="Self-reported from the application form.">
               <div className="space-y-3">
                 <div>
-                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Skills
                   </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {parseList(viewTarget.skills).length > 0
-                      ? parseList(viewTarget.skills).map((s) => <Chip key={s}>{s}</Chip>)
-                      : <span className="text-sm text-muted-foreground">—</span>}
-                  </div>
+                  {parseList(detail.skills).length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {parseList(detail.skills).map((s) => (
+                        <Chip key={s}>{titleCase(s)}</Chip>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">None listed.</p>
+                  )}
                 </div>
                 <div>
-                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Availability
                   </p>
-                  <p className="text-sm">{viewTarget.availability || "—"}</p>
+                  {parseList(detail.availability).length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {parseList(detail.availability).map((s) => (
+                        <Chip key={s}>{titleCase(s)}</Chip>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Not specified.</p>
+                  )}
                 </div>
               </div>
             </DetailSection>
 
-            <DetailSection title="Motivation" description="Why the applicant wants to join.">
-              <blockquote className="rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-sm italic text-muted-foreground">
-                “{viewTarget.motivation}”
-              </blockquote>
+            <DetailSection title="Motivation">
+              <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed">
+                {detail.motivation}
+              </p>
             </DetailSection>
 
-            {viewTarget.reviewNote ? (
-              <DetailSection title="Review" description="Note recorded during review.">
-                <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-                  {viewTarget.reviewNote}
+            <DetailSection title="Review">
+              <DetailGrid cols={2}>
+                <DataField label="Status" value={<StatusBadge status={detail.status} />} />
+                <DataField
+                  label="Reviewed at"
+                  value={detail.reviewedAt ? formatDateTime(detail.reviewedAt) : null}
+                />
+              </DetailGrid>
+              {detail.reviewNote ? (
+                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+                  {detail.reviewNote}
                 </p>
-              </DetailSection>
-            ) : null}
+              ) : null}
+            </DetailSection>
           </>
         ) : null}
       </DetailSheet>
 
-      {/* Approve: review-note FormSheet */}
+      {/* ========================= APPROVE (FormSheet) ======================== */}
       <FormSheet
         open={!!approveTarget}
         onOpenChange={(o) => {
-          if (!o && !approving) {
-            setApproveTarget(null);
-            setApproveNote("");
-          }
+          if (!o) setApproveTarget(null);
         }}
-        title={`Approve ${approveTarget?.fullName ?? "volunteer"}`}
-        description="A VOLUNTEER account is created with temporary credentials, shown immediately after approval."
-        submitLabel="Review & approve"
-        onSubmit={() => setApprovePending(approveTarget)}
+        title="Approve volunteer"
+        description={`${approveTarget?.fullName ?? ""} gets an active portal account and joins the roster with their reported skills.`}
         size="sm"
+        submitLabel="Review approval"
+        onSubmit={() => {
+          setApprovePending(approveTarget);
+        }}
+        badge={approveTarget ? <StatusBadge status={approveTarget.status} /> : null}
       >
-        <div className="rounded-lg border bg-muted/30 p-3">
-          <DetailGrid cols={2}>
-            <DataField label="Name" value={approveTarget?.fullName} />
-            <DataField label="Email" value={approveTarget?.email} />
-            <DataField label="Phone" value={approveTarget?.phone} />
-            <DataField label="City" value={approveTarget?.city} />
-          </DetailGrid>
-        </div>
-        <TextareaField
-          label="Review note (optional)"
-          value={approveNote}
-          onChange={setApproveNote}
-          placeholder="Visible to the applicant in their portal"
-          rows={3}
-        />
+        <FormSection title="Review note" description="Optional — visible in the application record.">
+          <TextareaField
+            label="Note"
+            value={approveNote}
+            onChange={setApproveNote}
+            placeholder="e.g. Verified references, completed induction call…"
+            rows={3}
+          />
+        </FormSection>
       </FormSheet>
 
-      {/* Reject: review-note FormSheet */}
-      <FormSheet
-        open={!!rejectTarget}
-        onOpenChange={(o) => {
-          if (!o && !rejecting) {
-            setRejectTarget(null);
-            setRejectNote("");
-          }
-        }}
-        title={`Reject application from ${rejectTarget?.fullName ?? "volunteer"}`}
-        description="The applicant will not receive portal access. A short reason helps them reapply."
-        submitLabel="Continue"
-        onSubmit={() => setRejectPending(rejectTarget)}
-        size="sm"
-      >
-        <TextareaField
-          label="Review note (optional)"
-          value={rejectNote}
-          onChange={setRejectNote}
-          placeholder="Why is this application rejected? Shared with the applicant."
-          rows={3}
-        />
-      </FormSheet>
-
-      {/* Approve confirm */}
       <ConfirmDialog
         open={!!approvePending}
-        onOpenChange={(o) => !o && setApprovePending(null)}
-        title="Approve volunteer?"
+        onOpenChange={(o) => {
+          if (!o) setApprovePending(null);
+        }}
+        title="Approve this volunteer?"
         recordName={approvePending ? `${approvePending.fullName} · ${approvePending.email}` : null}
-        description="The linked account becomes a VOLUNTEER with portal access. Temporary credentials will be shown right after approval — copy them to share."
-        confirmLabel="Approve & create account"
-        cancelLabel="Go back"
+        description="The linked user account becomes ACTIVE, a Volunteer profile is created from the application, and the applicant can sign in to the volunteer portal."
+        confirmLabel="Approve volunteer"
         loading={approving}
         onConfirm={runApprove}
       />
 
-      {/* Reject confirm */}
+      {/* ========================== REJECT (FormSheet) ======================== */}
+      <FormSheet
+        open={!!rejectTarget}
+        onOpenChange={(o) => {
+          if (!o) setRejectTarget(null);
+        }}
+        title="Reject application"
+        description="The application is marked rejected. The account stays inactive and cannot sign in."
+        size="sm"
+        submitLabel="Continue rejection"
+        onSubmit={() => {
+          setRejectPending(rejectTarget);
+        }}
+      >
+        <FormSection title="Rejection reason" description="Optional — kept on the record.">
+          <TextareaField
+            label="Reason"
+            value={rejectNote}
+            onChange={setRejectNote}
+            placeholder="e.g. Cannot commit to weekend drives this quarter…"
+            rows={3}
+          />
+        </FormSection>
+      </FormSheet>
+
       <ConfirmDialog
         open={!!rejectPending}
-        onOpenChange={(o) => !o && setRejectPending(null)}
-        title="Reject application?"
+        onOpenChange={(o) => {
+          if (!o) setRejectPending(null);
+        }}
+        title="Reject this application?"
         recordName={rejectPending ? `${rejectPending.fullName} · ${rejectPending.email}` : null}
-        description="The application is marked REJECTED and no portal access is granted. This cannot be undone from here."
+        description="The applicant will not be able to sign in to the volunteer portal. You can reconsider later by setting the application back to pending."
         confirmLabel="Reject application"
-        cancelLabel="Go back"
         loading={rejecting}
         onConfirm={runReject}
       />
 
-      {/* Temp credentials dialog */}
+      {/* ===================== TEMP CREDS REVEAL (Dialog) ===================== */}
       <Dialog open={!!approvedCreds} onOpenChange={(o) => !o && setApprovedCreds(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <BadgeCheck className="size-4 text-primary" aria-hidden="true" /> Volunteer approved
+              <KeyRound className="size-4 text-primary" aria-hidden="true" />
+              Temporary portal credentials
             </DialogTitle>
             <DialogDescription>
-              Share these temporary credentials with {approvedCreds?.fullName ?? "the volunteer"} —
-              they should change the password after first sign-in.
+              Share these with {approvedCreds?.fullName ?? "the volunteer"} over a secure
+              channel. They can change the password after signing in.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-2 rounded-lg border p-3">
-              <DataField label="Login email" value={approvedCreds?.email ?? ""} mono copy />
-              <DataField label="Temporary password" value={approvedCreds?.password ?? ""} mono copy />
+          <div className="space-y-2.5 rounded-lg border bg-muted/40 p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Email
+                </p>
+                <p className="truncate text-sm font-medium">{approvedCreds?.email ?? "—"}</p>
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Credentials are shown once from the application record — copy them now.
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Temporary password
+                </p>
+                <p className="truncate font-mono text-sm font-medium">
+                  {approvedCreds?.password ?? "—"}
+                </p>
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setApprovedCreds(null)}>Done</Button>
@@ -806,486 +1232,255 @@ function ApplicationsTab() {
   );
 }
 
-/* ============================= VOLUNTEERS TAB ============================== */
+/* ═══════════════════════════ VOLUNTEERS TAB ═══════════════════════════ */
 
-const volunteerCsv: CsvColumn<VolunteerRow>[] = [
-  { header: "Name", value: (v) => v.user?.name ?? "" },
-  { header: "Email", value: (v) => v.user?.email ?? "" },
-  { header: "Phone", value: (v) => v.user?.phone ?? "" },
-  { header: "City", value: (v) => v.user?.city ?? "" },
-  { header: "Status", value: (v) => v.status },
-  { header: "Assigned area", value: (v) => v.assignedArea ?? "" },
-  { header: "Skills", value: (v) => parseList(v.skills).join("; ") },
-  { header: "Availability", value: (v) => parseList(v.availability).join("; ") },
-  { header: "Emergency contact", value: (v) => v.emergencyContact ?? "" },
-  { header: "ID proof", value: (v) => v.idProof ?? "" },
-  { header: "Joined", value: (v) => v.joinedAt },
-];
-
-const EMPTY_TASK_FORM: TaskForm = {
-  title: "",
-  type: "DISTRIBUTION",
-  priority: "MEDIUM",
-  location: "",
-  scheduledDate: "",
-};
-
-const EMPTY_ATT_FORM: AttForm = {
-  date: "",
-  checkIn: "",
-  checkOut: "",
-  hours: "",
-  location: "",
-  notes: "",
-};
-
-function VolunteersTab() {
+function VolunteersTab({
+  revision,
+  onChanged,
+  openVolunteer,
+}: {
+  revision: number;
+  onChanged: () => void;
+  openVolunteer: (id: string) => void;
+}) {
   const [vols, setVols] = useState<VolunteerRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState("");
   const [filter, setFilter] = useState("ALL");
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
   const [view, setView] = useViewPref("volunteers");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  /* edit sheet */
-  const [editOpen, setEditOpen] = useState(false);
-  const [editing, setEditing] = useState<VolunteerRow | null>(null);
-  const [form, setForm] = useState<EditForm>({
-    skills: "",
-    availability: "",
-    assignedArea: "",
-    emergencyContact: "",
-    idProof: "",
-    status: "ACTIVE",
-  });
-  const [initialForm, setInitialForm] = useState<EditForm>(form);
-  const [errors, setErrors] = useState<RuleErr>({});
-  const [saving, setSaving] = useState(false);
-
-  /* status quick actions */
-  const [statusTarget, setStatusTarget] = useState<{
-    vol: VolunteerRow;
-    next: "ACTIVE" | "SUSPENDED";
-  } | null>(null);
-  const [runningStatus, setRunningStatus] = useState(false);
-
-  /* detail sheet */
-  const [detail, setDetail] = useState<VolunteerDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [attRows, setAttRows] = useState<AttendanceRow[] | null>(null);
-  const [attLoading, setAttLoading] = useState(false);
-  const [distRows, setDistRows] = useState<DistributionRow[] | null>(null);
-  const [appLink, setAppLink] = useState<Application | null>(null);
-
-  /* assign task sheet */
-  const [taskOpen, setTaskOpen] = useState(false);
-  const [taskForm, setTaskForm] = useState<TaskForm>(EMPTY_TASK_FORM);
-  const [taskInitial, setTaskInitial] = useState<TaskForm>(EMPTY_TASK_FORM);
-  const [taskErrors, setTaskErrors] = useState<RuleErr>({});
-  const [savingTask, setSavingTask] = useState(false);
-
-  /* record attendance sheet */
-  const [attOpen, setAttOpen] = useState(false);
-  const [attForm, setAttForm] = useState<AttForm>(EMPTY_ATT_FORM);
-  const [attInitial, setAttInitial] = useState<AttForm>(EMPTY_ATT_FORM);
-  const [attErrors, setAttErrors] = useState<RuleErr>({});
-  const [savingAtt, setSavingAtt] = useState(false);
-
-  const taskTypeOptions = useMasters("TASK_TYPE");
+  const [editTarget, setEditTarget] = useState<VolunteerRow | null>(null);
+  const [assignTarget, setAssignTarget] = useState<VolunteerRow | null>(null);
+  const [attTarget, setAttTarget] = useState<VolunteerRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const v = await get<VolunteerRow[] | { items?: VolunteerRow[] }>("/api/volunteers");
-      setVols(Array.isArray(v) ? v : (v.items ?? []));
+      const sp = new URLSearchParams();
+      if (filter !== "ALL") sp.set("status", filter);
+      const rows = await get<VolunteerRow[]>(`/api/volunteers?${sp.toString()}`);
+      const list = (Array.isArray(rows) ? rows : []).slice();
+      if (appliedQuery.trim()) {
+        const q = appliedQuery.trim().toLowerCase();
+        list.sort((a, b) => {
+          const am = matchesQuery(a, q) ? 0 : 1;
+          const bm = matchesQuery(b, q) ? 0 : 1;
+          return am - bm;
+        });
+      }
+      setVols(list);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load volunteers");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filter, appliedQuery]);
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, revision]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setAppliedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
 
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return vols.filter((v) => {
-      if (filter !== "ALL" && v.status !== filter) return false;
-      if (!needle) return true;
-      const hay =
-        `${v.user?.name ?? ""} ${v.user?.email ?? ""} ${v.assignedArea ?? ""}`.toLowerCase();
-      return hay.includes(needle);
-    });
-  }, [vols, q, filter]);
+    const q = appliedQuery.trim().toLowerCase();
+    if (!q) return vols;
+    return vols.filter((v) => matchesQuery(v, q));
+  }, [vols, appliedQuery]);
 
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  useEffect(() => {
-    setPage(1);
-  }, [q, filter, pageSize]);
   const pageSafe = Math.min(page, pages);
   const paged = useMemo(
     () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
     [filtered, pageSafe, pageSize]
   );
 
-  const hasFilters = filter !== "ALL" || q.trim() !== "";
-
-  const clearFilters = () => {
-    setQ("");
-    setFilter("ALL");
-  };
-
-  const volName = (v: VolunteerRow | VolunteerDetail) => v.user?.name ?? "Volunteer";
-
-  const loadAttendance = useCallback(async (volId: string) => {
-    setAttLoading(true);
-    try {
-      const rows = await get<AttendanceRow[] | { items?: AttendanceRow[] }>(
-        `/api/volunteer-attendances?volunteerId=${encodeURIComponent(volId)}`
-      );
-      setAttRows(Array.isArray(rows) ? rows : (rows.items ?? []));
-    } catch {
-      setAttRows([]);
-    } finally {
-      setAttLoading(false);
-    }
-  }, []);
-
-  const refreshDetail = useCallback(async (volId: string) => {
-    try {
-      const d = await get<VolunteerDetail>(`/api/volunteers/${volId}`);
-      setDetail(d);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to refresh volunteer");
-    }
-  }, []);
-
-  const openDetail = (v: VolunteerRow) => {
-    setDetail({ ...v });
-    setDetailLoading(true);
-    setAttRows(null);
-    setDistRows(null);
-    setAppLink(null);
-    loadAttendance(v.id);
-    get<VolunteerDetail>(`/api/volunteers/${v.id}`)
-      .then((d) => setDetail(d))
-      .catch(() => toast.error("Failed to load volunteer profile"))
-      .finally(() => setDetailLoading(false));
-    // distributions participated (shared pool, filtered client-side)
-    get<DistributionRow[] | { items?: DistributionRow[] }>("/api/distributions?limit=200")
-      .then((data) => {
-        const list = Array.isArray(data) ? data : (data.items ?? []);
-        setDistRows(list.filter((d) => (d as unknown as { volunteerId?: string }).volunteerId === v.id));
-      })
-      .catch(() => setDistRows([]));
-    // linked volunteer application, matched by email
-    if (v.user?.email) {
-      get<Application[] | { items?: Application[] }>("/api/volunteer-applications")
-        .then((data) => {
-          const list = Array.isArray(data) ? data : (data.items ?? []);
-          setAppLink(list.find((a) => a.email.toLowerCase() === (v.user?.email ?? "").toLowerCase()) ?? null);
-        })
-        .catch(() => setAppLink(null));
-    }
-  };
-
-  /* -------------------------------- edit ---------------------------------- */
-
-  const openEdit = (v: VolunteerRow) => {
-    setEditing(v);
-    const f: EditForm = {
-      skills: parseList(v.skills).join(", "),
-      availability: parseList(v.availability).join(", "),
-      assignedArea: v.assignedArea ?? "",
-      emergencyContact: v.emergencyContact ?? "",
-      idProof: v.idProof ?? "",
-      status: v.status,
-    };
-    setForm(f);
-    setInitialForm(f);
-    setErrors({});
-    setEditOpen(true);
-  };
-
-  const saveEdit = async () => {
-    if (!editing) return;
-    setSaving(true);
-    try {
-      await patch(`/api/volunteers/${editing.id}`, {
-        skills: form.skills.trim() || null,
-        availability: form.availability.trim() || null,
-        assignedArea: form.assignedArea.trim() || null,
-        emergencyContact: form.emergencyContact.trim() || null,
-        idProof: form.idProof.trim() || null,
-        status: form.status,
-      });
-      toast.success(
-        form.status !== editing.status
-          ? `${volName(editing)} → ${titleCase(form.status)} (mirrored to the linked account)`
-          : `${volName(editing)} updated`
-      );
-      setEditOpen(false);
-      await load();
-      if (detail?.id === editing.id) await refreshDetail(editing.id);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  /* ---------------------------- status actions ----------------------------- */
-
-  const runStatusChange = async () => {
-    if (!statusTarget) return;
-    setRunningStatus(true);
-    try {
-      await patch(`/api/volunteers/${statusTarget.vol.id}`, { status: statusTarget.next });
-      toast.success(
-        `${volName(statusTarget.vol)} → ${titleCase(statusTarget.next)} (mirrored to the linked account)`
-      );
-      setStatusTarget(null);
-      await load();
-      if (detail?.id === statusTarget.vol.id) await refreshDetail(statusTarget.vol.id);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update volunteer");
-    } finally {
-      setRunningStatus(false);
-    }
-  };
-
-  /* ------------------------------ assign task ------------------------------ */
-
-  const openTaskForm = () => {
-    setTaskForm(EMPTY_TASK_FORM);
-    setTaskInitial(EMPTY_TASK_FORM);
-    setTaskErrors({});
-    setTaskOpen(true);
-  };
-
-  const saveTask = async () => {
-    if (!detail) return;
-    const errs = collectErrors(
-      ["title", required("Task title")(taskForm.title)],
-      ["scheduledDate", required("Scheduled date")(taskForm.scheduledDate)]
-    );
-    if (errs) {
-      setTaskErrors(errs);
-      return;
-    }
-    setTaskErrors({});
-    setSavingTask(true);
-    try {
-      await post("/api/volunteer-tasks", {
-        volunteerId: detail.id,
-        title: taskForm.title.trim(),
-        type: taskForm.type,
-        priority: taskForm.priority,
-        location: taskForm.location.trim() || undefined,
-        scheduledDate: taskForm.scheduledDate,
-      });
-      toast.success(`Task assigned to ${volName(detail)}`);
-      setTaskOpen(false);
-      setTaskForm(EMPTY_TASK_FORM);
-      setTaskInitial(EMPTY_TASK_FORM);
-      await refreshDetail(detail.id);
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to assign task");
-    } finally {
-      setSavingTask(false);
-    }
-  };
-
-  /* --------------------------- record attendance --------------------------- */
-
-  const openAttForm = () => {
-    setAttForm(EMPTY_ATT_FORM);
-    setAttInitial(EMPTY_ATT_FORM);
-    setAttErrors({});
-    setAttOpen(true);
-  };
-
-  const saveAtt = async () => {
-    if (!detail) return;
-    const hoursNum = attForm.hours.trim() === "" ? null : Number(attForm.hours);
-    const errs = collectErrors(
-      ["date", required("Date")(attForm.date)],
-      [
-        "hours",
-        attForm.hours.trim() === ""
-          ? null
-          : hoursNum === null || !Number.isFinite(hoursNum) || hoursNum < 0 || hoursNum > 24
-            ? "Hours must be between 0 and 24"
-            : null,
-      ],
-      [
-        "checkOut",
-        attForm.date && attForm.checkIn && attForm.checkOut && attForm.checkOut <= attForm.checkIn
-          ? "Check-out must be after check-in"
-          : null,
-      ]
-    );
-    if (errs) {
-      setAttErrors(errs);
-      return;
-    }
-    setAttErrors({});
-    setSavingAtt(true);
-    try {
-      const body: Record<string, unknown> = {
-        volunteerId: detail.id,
-        date: attForm.date,
-      };
-      if (attForm.checkIn) body.checkIn = `${attForm.date}T${attForm.checkIn}:00`;
-      if (attForm.checkOut) body.checkOut = `${attForm.date}T${attForm.checkOut}:00`;
-      if (hoursNum !== null) body.hours = hoursNum;
-      if (attForm.location.trim()) body.location = attForm.location.trim();
-      if (attForm.notes.trim()) body.notes = attForm.notes.trim();
-      await post("/api/volunteer-attendances", body);
-      toast.success("Attendance recorded");
-      setAttOpen(false);
-      setAttForm(EMPTY_ATT_FORM);
-      setAttInitial(EMPTY_ATT_FORM);
-      await loadAttendance(detail.id);
-      await refreshDetail(detail.id);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to record attendance");
-    } finally {
-      setSavingAtt(false);
-    }
-  };
-
-  /* -------------------------------- renders -------------------------------- */
-
-  const quickStatusButton = (v: VolunteerRow) =>
-    v.status === "ACTIVE" ? (
-      <Button
-        size="sm"
-        variant="outline"
-        className="min-h-9 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
-        disabled={runningStatus}
-        onClick={(e) => {
-          e.stopPropagation();
-          setStatusTarget({ vol: v, next: "SUSPENDED" });
-        }}
-        aria-label={`Suspend volunteer ${volName(v)}`}
-      >
-        Suspend
-      </Button>
-    ) : (
-      <Button
-        size="sm"
-        variant="outline"
-        className="min-h-9"
-        disabled={runningStatus}
-        onClick={(e) => {
-          e.stopPropagation();
-          setStatusTarget({ vol: v, next: "ACTIVE" });
-        }}
-        aria-label={`Activate volunteer ${volName(v)}`}
-      >
-        Activate
-      </Button>
-    );
-
-  const rowButtons = (v: VolunteerRow) => (
-    <>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-11 md:size-8"
-        aria-label={`View volunteer ${volName(v)}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          openDetail(v);
-        }}
-      >
-        <UserCheck className="size-4" />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-11 md:size-8"
-        aria-label={`Edit volunteer ${volName(v)}`}
-        onClick={(e) => {
-          e.stopPropagation();
-          openEdit(v);
-        }}
-      >
-        <Pencil className="size-4" />
-      </Button>
-      {quickStatusButton(v)}
-    </>
+  const volCsv: CsvColumn<VolunteerRow>[] = useMemo(
+    () => [
+      { header: "Name", value: (v) => v.user?.name ?? "" },
+      { header: "Email", value: (v) => v.user?.email ?? "" },
+      { header: "Phone", value: (v) => v.user?.phone ?? "" },
+      { header: "City", value: (v) => v.user?.city ?? "" },
+      { header: "Status", value: (v) => v.status },
+      { header: "Assigned area", value: (v) => v.assignedArea ?? "" },
+      { header: "Skills", value: (v) => parseList(v.skills).join("; ") },
+      { header: "Availability", value: (v) => parseList(v.availability).join("; ") },
+      { header: "Emergency contact", value: (v) => v.emergencyContact ?? "" },
+      { header: "ID proof", value: (v) => v.idProof ?? "" },
+      { header: "Joined", value: (v) => formatDate(v.joinedAt) },
+    ],
+    []
   );
 
-  /* ------------------------------- table columns ----------------------------- */
-
   const columns: DataTableColumn<VolunteerRow>[] = [
-    { key: "name", header: "Volunteer" },
-    { key: "status", header: "Status" },
-    { key: "area", header: "Assigned area", hideBelow: "lg" },
-    { key: "skills", header: "Skills", hideBelow: "lg" },
-    { key: "joined", header: "Joined", hideBelow: "sm" },
-    { key: "actions", header: "", align: "right", className: "w-40" },
+    {
+      key: "name",
+      header: "Volunteer",
+      accessor: (v) => (
+        <div className="flex items-center gap-2.5">
+          <Avatar className="size-8">
+            <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+              {initials(v.user?.name)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <p className="truncate font-medium">{v.user?.name ?? "Volunteer"}</p>
+            <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
+          </div>
+        </div>
+      ),
+    },
+    { key: "status", header: "Status", accessor: (v) => <StatusBadge status={v.status} /> },
+    {
+      key: "area",
+      header: "Area",
+      hideBelow: "md",
+      accessor: (v) => (
+        <span className="text-sm text-muted-foreground">{v.assignedArea || "—"}</span>
+      ),
+    },
+    {
+      key: "skills",
+      header: "Skills",
+      hideBelow: "lg",
+      accessor: (v) => {
+        const skills = parseList(v.skills);
+        if (!skills.length)
+          return <span className="text-xs text-muted-foreground">—</span>;
+        return (
+          <div className="flex max-w-52 flex-wrap gap-1">
+            {skills.slice(0, 2).map((s) => (
+              <Chip key={s}>{titleCase(s)}</Chip>
+            ))}
+            {skills.length > 2 ? <Chip>+{skills.length - 2}</Chip> : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "phone",
+      header: "Phone",
+      hideBelow: "lg",
+      accessor: (v) => (
+        <span className="font-mono text-xs text-muted-foreground">{v.user?.phone || "—"}</span>
+      ),
+    },
+    {
+      key: "joined",
+      header: "Joined",
+      hideBelow: "sm",
+      accessor: (v) => (
+        <span className="whitespace-nowrap text-xs text-muted-foreground">
+          {formatDate(v.joinedAt)}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      className: "w-12",
+      accessor: (v) => (
+        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={`Actions for ${v.user?.name ?? "volunteer"}`}
+              >
+                <MoreHorizontal className="size-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => openVolunteer(v.id)}>
+                <Info className="size-4" aria-hidden="true" /> View details
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setEditTarget(v)}>
+                <Pencil className="size-4" aria-hidden="true" /> Edit profile
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setAssignTarget(v)}>
+                <Link2 className="size-4" aria-hidden="true" /> Assign to…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setAttTarget(v)}>
+                <CalendarClock className="size-4" aria-hidden="true" /> Log attendance
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
+    },
   ];
+
+  const filtersActive = filter !== "ALL" || appliedQuery.trim() !== "";
 
   return (
     <div className="space-y-4">
       {/* toolbar */}
-      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-64">
-            <Search
-              className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search name, email, area…"
-              className="pl-8"
-              aria-label="Search volunteers"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter volunteers by status">
-            {VOL_FILTERS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setFilter(t)}
-                aria-pressed={filter === t}
-                className={cn(
-                  "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
-                  filter === t
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border text-muted-foreground hover:bg-accent"
-                )}
-              >
-                {t === "ALL" ? "All" : titleCase(t)}
-              </button>
-            ))}
-          </div>
-          {hasFilters && (
-            <Button variant="ghost" size="sm" className="min-h-9" onClick={clearFilters} aria-label="Clear filters">
-              Clear
-            </Button>
-          )}
-          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
-            <span className="text-xs text-muted-foreground" aria-live="polite">
-              {loading ? "Loading…" : `${filtered.length} volunteer${filtered.length === 1 ? "" : "s"}`}
-            </span>
-            <ViewSwitcher value={view} onChange={setView} options={["table", "grid", "list"]} />
-            <ExportMenu
-              columns={volunteerCsv}
-              rows={filtered}
-              filename="uar-volunteers"
-              disabled={filtered.length === 0}
-            />
-          </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-64">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, email, area…"
+            aria-label="Search volunteers"
+            className="pl-8"
+          />
+        </div>
+
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="group"
+          aria-label="Filter volunteers by status"
+        >
+          {VOL_FILTERS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              aria-pressed={filter === t}
+              onClick={() => {
+                setFilter(t);
+                setPage(1);
+              }}
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                filter === t
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:bg-accent"
+              )}
+            >
+              {titleCase(t)}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+          {loading ? "Loading…" : `${filtered.length} volunteer${filtered.length === 1 ? "" : "s"}`}
+        </span>
+
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <ExportMenu
+            columns={volCsv}
+            rows={filtered}
+            filename="uar-volunteers"
+            disabled={filtered.length === 0}
+          />
+          <ViewSwitcher value={view} onChange={setView} options={["table", "grid"]} />
         </div>
       </div>
 
@@ -1295,687 +1490,2320 @@ function VolunteersTab() {
           rows={paged}
           rowKey={(v) => v.id}
           loading={loading}
-          skeletonRows={8}
+          skeletonRows={6}
           height="fill"
-          fillOffset={330}
-          onRowClick={openDetail}
+          fillOffset={340}
+          onRowClick={(v) => openVolunteer(v.id)}
           page={pageSafe}
           pages={pages}
           total={filtered.length}
           pageSize={pageSize}
           onPage={setPage}
-          onPageSize={setPageSize}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
           itemLabel="volunteers"
           empty={
             <EmptyState
-              icon={<Users className="size-6" aria-hidden="true" />}
-              title="No volunteers found"
-              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
-            >
-              {hasFilters && (
-                <Button size="sm" variant="outline" onClick={clearFilters}>
-                  Clear filters
-                </Button>
-              )}
-            </EmptyState>
+              icon={<Users className="size-8" aria-hidden="true" />}
+              title={filtersActive ? "No volunteers match these filters" : "No volunteers on the roster yet"}
+              hint="Approve a volunteer application to add the first member to the crew."
+            />
           }
-        >
-          {(v, col) => {
-            switch (col.key) {
-              case "name":
-                return (
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      aria-hidden="true"
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                    >
-                      {initials(volName(v))}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{volName(v)}</p>
-                      <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
-                    </div>
-                  </div>
-                );
-              case "status":
-                return <StatusBadge status={v.status} />;
-              case "area":
-                return <span className="text-sm">{v.assignedArea || "—"}</span>;
-              case "skills": {
-                const skills = parseList(v.skills);
-                return skills.length > 0 ? (
-                  <div className="flex flex-wrap gap-1">
-                    {skills.slice(0, 3).map((s) => (
-                      <Chip key={s}>{s}</Chip>
-                    ))}
-                    {skills.length > 3 && (
-                      <span className="text-[11px] text-muted-foreground">+{skills.length - 3}</span>
-                    )}
-                  </div>
-                ) : (
-                  <span className="text-xs text-muted-foreground">—</span>
-                );
-              }
-              case "joined":
-                return <span className="whitespace-nowrap text-sm">{formatDate(v.joinedAt)}</span>;
-              case "actions":
-                return (
-                  <div className="flex justify-end gap-1">
-                    {rowButtons(v)}
-                  </div>
-                );
-              default:
-                return null;
-            }
-          }}
-        </DataTable>
-      ) : view === "grid" ? (
-        <>
-          {loading ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-44 rounded-xl" />
-              ))}
-            </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              icon={<Users className="size-6" aria-hidden="true" />}
-              title="No volunteers found"
-              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
-            />
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {paged.map((v) => (
-                <article
-                  key={v.id}
-                  className="card-hover flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4"
-                  onClick={() => openDetail(v)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <Avatar className="size-9">
-                        <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                          {initials(volName(v))}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{volName(v)}</p>
-                        <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
-                      </div>
-                    </div>
-                    <StatusBadge status={v.status} className="shrink-0" />
-                  </div>
-                  {v.assignedArea && (
-                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <MapPin className="size-3.5" aria-hidden="true" /> {v.assignedArea}
-                    </p>
-                  )}
-                  {parseList(v.skills).length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {parseList(v.skills).slice(0, 3).map((s) => (
-                        <Chip key={s}>{s}</Chip>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mt-auto flex flex-wrap items-center gap-1 border-t pt-3">
-                    {rowButtons(v)}
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </>
+        />
+      ) : loading ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-40 rounded-xl" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={<Users className="size-8" aria-hidden="true" />}
+          title={filtersActive ? "No volunteers match these filters" : "No volunteers on the roster yet"}
+          hint="Approve a volunteer application to add the first member to the crew."
+        />
       ) : (
-        <>
-          {loading ? (
-            <div className="space-y-2" aria-busy="true">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full rounded-lg" />
-              ))}
-            </div>
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              icon={<Users className="size-6" aria-hidden="true" />}
-              title="No volunteers found"
-              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
-            />
-          ) : (
-            <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Volunteers list">
-              {paged.map((v) => (
-                <li key={v.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
-                  <button
-                    type="button"
-                    onClick={() => openDetail(v)}
-                    className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
-                    aria-label={`View volunteer ${volName(v)}`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                    >
-                      {initials(volName(v))}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{volName(v)}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {v.assignedArea ? `${v.assignedArea} · ` : ""}
-                        {v.user?.email ?? "—"}
-                      </span>
-                    </span>
-                    <StatusBadge status={v.status} className="shrink-0" />
-                  </button>
-                  <div className="flex shrink-0 gap-0.5">{rowButtons(v)}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
+        <div
+          className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+          role="list"
+          aria-label="Volunteers"
+        >
+          {paged.map((v) => {
+            const skills = parseList(v.skills);
+            return (
+              <div
+                key={v.id}
+                role="listitem"
+                className="flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+                onClick={() => openVolunteer(v.id)}
+              >
+                <div className="flex items-start gap-3">
+                  <Avatar className="size-10">
+                    <AvatarFallback className="bg-primary/10 text-sm font-semibold text-primary">
+                      {initials(v.user?.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{v.user?.name ?? "Volunteer"}</p>
+                    <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
+                  </div>
+                  <StatusBadge status={v.status} />
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {skills.length ? (
+                    <>
+                      {skills.slice(0, 3).map((s) => (
+                        <Chip key={s}>{titleCase(s)}</Chip>
+                      ))}
+                      {skills.length > 3 ? <Chip>+{skills.length - 3}</Chip> : null}
+                    </>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">No skills listed</span>
+                  )}
+                </div>
+                <div className="mt-auto flex items-center justify-between gap-2 border-t pt-2.5 text-xs text-muted-foreground">
+                  <span className="truncate">
+                    {v.assignedArea ?? "No area assigned"}
+                  </span>
+                  <span className="shrink-0 whitespace-nowrap">Joined {formatDate(v.joinedAt)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
 
-      {/* pagination for grid/list (table paginates inside DataTable) */}
-      {view !== "table" && !loading && filtered.length > 0 ? (
-        <PaginationBar
-          page={pageSafe}
-          pages={pages}
-          total={filtered.length}
-          onPage={setPage}
-          itemLabel="volunteers"
-        />
-      ) : null}
-
-      {/* ------------------------------ edit sheet ------------------------------ */}
-      <FormSheet
-        open={editOpen}
+      <VolunteerEditFormSheet
+        open={!!editTarget}
+        volunteer={editTarget}
         onOpenChange={(o) => {
-          if (!o && !saving) setEditOpen(false);
+          if (!o) setEditTarget(null);
         }}
-        title={`Edit ${editing ? volName(editing) : "volunteer"}`}
-        description="Profile fields stored on the volunteer record."
-        submitLabel="Save changes"
-        onSubmit={saveEdit}
-        loading={saving}
-        dirty={JSON.stringify(form) !== JSON.stringify(initialForm)}
-        size="lg"
-      >
-        <FormSection title="Status" description="Roster state — mirrors to the linked account.">
-          <FieldGrid>
-            <SelectField
-              label="Volunteer status"
-              required
-              value={form.status}
-              onChange={(v) => setForm({ ...form, status: v })}
-              options={VOL_STATUS_OPTIONS}
-              hint="Mirrors to the linked account (sign-in access follows this status)."
-            />
-            <TextField
-              label="Assigned area"
-              value={form.assignedArea}
-              onChange={(v) => setForm({ ...form, assignedArea: v })}
-              placeholder="Yelahanka zone, Bengaluru"
-            />
-          </FieldGrid>
-        </FormSection>
-        <FormSection
-          title="Skills & availability"
-          description="Comma-separated lists, e.g. First aid, Teaching, Driving."
-        >
-          <FieldGrid>
-            <TextField
-              label="Skills"
-              value={form.skills}
-              onChange={(v) => setForm({ ...form, skills: v })}
-              placeholder="First aid, Teaching, Driving"
-              hint="Separate skills with commas."
-            />
-            <TextField
-              label="Availability"
-              value={form.availability}
-              onChange={(v) => setForm({ ...form, availability: v })}
-              placeholder="Weekends, Weekday evenings"
-              hint="Separate slots with commas."
-            />
-          </FieldGrid>
-        </FormSection>
-        <FormSection title="Emergency & identity" description="On-ground contact and ID reference.">
-          <FieldGrid>
-            <TextField
-              label="Emergency contact"
-              value={form.emergencyContact}
-              onChange={(v) => setForm({ ...form, emergencyContact: v })}
-              placeholder="Sunita — +91 98xxxxxx01"
-            />
-            <TextField
-              label="ID proof"
-              value={form.idProof}
-              onChange={(v) => setForm({ ...form, idProof: v })}
-              placeholder="Aadhaar last 4 / DL number"
-            />
-          </FieldGrid>
-        </FormSection>
-      </FormSheet>
-
-      {/* ---------------------------- status confirm ---------------------------- */}
-      <ConfirmDialog
-        open={!!statusTarget}
-        onOpenChange={(o) => !o && setStatusTarget(null)}
-        title={
-          statusTarget?.next === "SUSPENDED" ? "Suspend volunteer?" : "Activate volunteer?"
-        }
-        recordName={
-          statusTarget ? `${volName(statusTarget.vol)} · ${statusTarget.vol.user?.email ?? ""}` : null
-        }
-        description={
-          statusTarget?.next === "SUSPENDED"
-            ? "Sign-in will be blocked immediately and the linked account marked suspended."
-            : "The linked account will be re-enabled and the volunteer can sign in again."
-        }
-        confirmLabel={statusTarget?.next === "SUSPENDED" ? "Suspend" : "Activate"}
-        loading={runningStatus}
-        onConfirm={runStatusChange}
+        onSaved={() => {
+          setEditTarget(null);
+          load();
+          onChanged();
+        }}
       />
 
-      {/* ---------------------------- detail sheet ------------------------------ */}
+      <AssignFormSheet
+        open={!!assignTarget}
+        onOpenChange={(o) => {
+          if (!o) setAssignTarget(null);
+        }}
+        volunteerIds={assignTarget ? [assignTarget.id] : []}
+        volunteerNames={assignTarget ? [assignTarget.user?.name ?? "Volunteer"] : []}
+        onDone={() => {
+          setAssignTarget(null);
+          onChanged();
+        }}
+      />
+
+      <AttendanceFormSheet
+        open={!!attTarget}
+        onOpenChange={(o) => {
+          if (!o) setAttTarget(null);
+        }}
+        fixedVolunteerId={attTarget?.id}
+        fixedVolunteerName={attTarget?.user?.name}
+        onDone={() => {
+          setAttTarget(null);
+          onChanged();
+        }}
+      />
+    </div>
+  );
+}
+
+function matchesQuery(v: VolunteerRow, q: string): boolean {
+  return (
+    (v.user?.name ?? "").toLowerCase().includes(q) ||
+    (v.user?.email ?? "").toLowerCase().includes(q) ||
+    (v.assignedArea ?? "").toLowerCase().includes(q) ||
+    (v.user?.city ?? "").toLowerCase().includes(q)
+  );
+}
+
+/* ═══════════════════════════ TASKS TAB ═══════════════════════════ */
+
+function TasksTab({
+  revision,
+  onChanged,
+  openVolunteer,
+}: {
+  revision: number;
+  onChanged: () => void;
+  openVolunteer: (id: string) => void;
+}) {
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [vols, setVols] = useState<VolunteerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [volunteerFilter, setVolunteerFilter] = useState("");
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TaskRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [advancingId, setAdvancingId] = useState<string | null>(null);
+
+  const taskTypeOptions = useMasters("TASK_TYPE");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sp = new URLSearchParams();
+      if (statusFilter !== "ALL") sp.set("status", statusFilter);
+      if (typeFilter !== "ALL") sp.set("type", typeFilter);
+      if (volunteerFilter) sp.set("volunteerId", volunteerFilter);
+      if (appliedQuery.trim()) sp.set("q", appliedQuery.trim());
+      const rows = await get<TaskRow[]>(`/api/volunteer-tasks?${sp.toString()}`);
+      setTasks(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load tasks");
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, typeFilter, volunteerFilter, appliedQuery]);
+
+  useEffect(() => {
+    load();
+  }, [load, revision]);
+
+  useEffect(() => {
+    get<VolunteerRow[]>("/api/volunteers")
+      .then((rows) => setVols(Array.isArray(rows) ? rows : []))
+      .catch(() => setVols([]));
+  }, [revision]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setAppliedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  const pages = Math.max(1, Math.ceil(tasks.length / pageSize));
+  const pageSafe = Math.min(page, pages);
+  const paged = useMemo(
+    () => tasks.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [tasks, pageSafe, pageSize]
+  );
+
+  const advance = async (task: TaskRow, status: string) => {
+    setAdvancingId(task.id);
+    try {
+      await patch(`/api/volunteer-tasks/${task.id}`, { status });
+      toast.success(`Task ${humanize(status).toLowerCase()}`);
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update task");
+    } finally {
+      setAdvancingId(null);
+    }
+  };
+
+  const runDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/volunteer-tasks/${deleteTarget.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Delete failed");
+      toast.success("Task deleted");
+      setDeleteTarget(null);
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete task");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const taskCsv: CsvColumn<TaskRow>[] = useMemo(
+    () => [
+      { header: "Title", value: (t) => t.title },
+      { header: "Volunteer", value: (t) => t.volunteer?.user?.name ?? "" },
+      { header: "Type", value: (t) => titleCase(t.type) },
+      { header: "Priority", value: (t) => titleCase(t.priority) },
+      { header: "Status", value: (t) => t.status },
+      { header: "Scheduled", value: (t) => formatDate(t.scheduledDate) },
+      { header: "Location", value: (t) => t.location ?? "" },
+      { header: "Linked record", value: (t) => (t.refType ? `${t.refType} ${t.refId ?? ""}` : "") },
+      { header: "Source", value: (t) => t.createdFrom ?? "MANUAL" },
+      { header: "Notes", value: (t) => t.notes ?? "" },
+    ],
+    []
+  );
+
+  const columns: DataTableColumn<TaskRow>[] = [
+    {
+      key: "date",
+      header: "Scheduled",
+      className: "w-[6.5rem]",
+      accessor: (t) => (
+        <span className="whitespace-nowrap text-muted-foreground">
+          {formatDate(t.scheduledDate)}
+        </span>
+      ),
+    },
+    {
+      key: "title",
+      header: "Task",
+      accessor: (t) => (
+        <div className="min-w-0">
+          <p className="truncate font-medium">{t.title}</p>
+          {t.location ? (
+            <p className="truncate text-xs text-muted-foreground">{t.location}</p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "volunteer",
+      header: "Volunteer",
+      hideBelow: "md",
+      accessor: (t) => (
+        <span className="text-muted-foreground">{t.volunteer?.user?.name ?? "—"}</span>
+      ),
+    },
+    { key: "type", header: "Type", hideBelow: "sm", accessor: (t) => typeChip(t.type) },
+    {
+      key: "priority",
+      header: "Priority",
+      hideBelow: "lg",
+      accessor: (t) => priorityBadge(t.priority),
+    },
+    { key: "ref", header: "Linked to", hideBelow: "lg", accessor: (t) => refCell(t) },
+    { key: "status", header: "Status", accessor: (t) => <StatusBadge status={t.status} /> },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      className: "w-12",
+      accessor: (t) => {
+        const transitions = taskTransitions(t.status);
+        return (
+          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  aria-label={`Actions for task ${t.title}`}
+                >
+                  <MoreHorizontal className="size-4" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                {transitions.map((tr) => (
+                  <DropdownMenuItem
+                    key={tr.status}
+                    disabled={advancingId === t.id}
+                    onClick={() => advance(t, tr.status)}
+                  >
+                    <tr.icon className="size-4" aria-hidden="true" /> {tr.label}
+                  </DropdownMenuItem>
+                ))}
+                {transitions.length ? <DropdownMenuSeparator /> : null}
+                <DropdownMenuItem onClick={() => openVolunteer(t.volunteerId)}>
+                  <Users className="size-4" aria-hidden="true" /> View volunteer
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+                  onClick={() => setDeleteTarget(t)}
+                >
+                  <X className="size-4" aria-hidden="true" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-56">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search tasks…"
+            aria-label="Search tasks"
+            className="pl-8"
+          />
+        </div>
+
+        <select
+          aria-label="Filter by status"
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+          className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+        >
+          {TASK_STATUS_FILTERS.map((s) => (
+            <option key={s} value={s}>
+              {s === "ALL" ? "All statuses" : humanize(s)}
+            </option>
+          ))}
+        </select>
+
+        <select
+          aria-label="Filter by task type"
+          value={typeFilter}
+          onChange={(e) => {
+            setTypeFilter(e.target.value);
+            setPage(1);
+          }}
+          className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+        >
+          <option value="ALL">All types</option>
+          {taskTypeOptions.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          aria-label="Filter by volunteer"
+          value={volunteerFilter}
+          onChange={(e) => {
+            setVolunteerFilter(e.target.value);
+            setPage(1);
+          }}
+          className="flex h-9 max-w-52 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+        >
+          <option value="">All volunteers</option>
+          {vols.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.user?.name ?? "Volunteer"}
+            </option>
+          ))}
+        </select>
+
+        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+          {loading ? "Loading…" : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
+        </span>
+
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <ExportMenu
+            columns={taskCsv}
+            rows={tasks}
+            filename="uar-volunteer-tasks"
+            disabled={tasks.length === 0}
+          />
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="size-4" aria-hidden="true" /> Add task
+          </Button>
+        </div>
+      </div>
+
+      <DataTable
+        columns={columns}
+        rows={paged}
+        rowKey={(t) => t.id}
+        loading={loading}
+        skeletonRows={8}
+        height="fill"
+        fillOffset={340}
+        page={pageSafe}
+        pages={pages}
+        total={tasks.length}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={(n) => {
+          setPageSize(n);
+          setPage(1);
+        }}
+        itemLabel="tasks"
+        empty={
+          <EmptyState
+            icon={<ClipboardList className="size-8" aria-hidden="true" />}
+            title="No tasks match these filters"
+            hint="Assign volunteers to a distribution, campaign or event — tasks are generated automatically — or add one manually."
+          >
+            <Button variant="outline" onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" aria-hidden="true" /> Add task
+            </Button>
+          </EmptyState>
+        }
+      />
+
+      <TaskFormSheet
+        open={addOpen}
+        onOpenChange={(o) => {
+          if (!o) setAddOpen(false);
+        }}
+        onDone={() => {
+          setAddOpen(false);
+          load();
+          onChanged();
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+        title="Delete this task?"
+        recordName={deleteTarget?.title ?? null}
+        description="The task is permanently removed from the volunteer's board."
+        confirmLabel="Delete task"
+        loading={deleting}
+        onConfirm={runDelete}
+      />
+    </div>
+  );
+}
+
+/* ═══════════════════════════ ATTENDANCE TAB ═══════════════════════════ */
+
+function AttendanceTab({
+  revision,
+  onChanged,
+}: {
+  revision: number;
+  onChanged: () => void;
+}) {
+  const [rows, setRows] = useState<AttendanceRow[]>([]);
+  const [vols, setVols] = useState<VolunteerRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [volunteerFilter, setVolunteerFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<AttendanceRow | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sp = new URLSearchParams();
+      sp.set("limit", "200");
+      if (volunteerFilter) sp.set("volunteerId", volunteerFilter);
+      const data = await get<AttendanceRow[]>(`/api/volunteer-attendances?${sp.toString()}`);
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load attendance");
+    } finally {
+      setLoading(false);
+    }
+  }, [volunteerFilter]);
+
+  useEffect(() => {
+    load();
+  }, [load, revision]);
+
+  useEffect(() => {
+    get<VolunteerRow[]>("/api/volunteers")
+      .then((r) => setVols(Array.isArray(r) ? r : []))
+      .catch(() => setVols([]));
+  }, [revision]);
+
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const pageSafe = Math.min(page, pages);
+  const paged = useMemo(
+    () => rows.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [rows, pageSafe, pageSize]
+  );
+
+  const attCsv: CsvColumn<AttendanceRow>[] = useMemo(
+    () => [
+      { header: "Date", value: (a) => formatDate(a.date) },
+      { header: "Volunteer", value: (a) => a.volunteer?.user?.name ?? "" },
+      { header: "Check-in", value: (a) => fmtTime(a.checkIn) },
+      { header: "Check-out", value: (a) => fmtTime(a.checkOut) },
+      { header: "Hours", value: (a) => a.hours ?? "" },
+      { header: "Location", value: (a) => a.location ?? "" },
+      { header: "Notes", value: (a) => a.notes ?? "" },
+    ],
+    []
+  );
+
+  const columns: DataTableColumn<AttendanceRow>[] = [
+    {
+      key: "date",
+      header: "Date",
+      className: "w-[6.5rem]",
+      accessor: (a) => (
+        <span className="whitespace-nowrap font-medium">{formatDate(a.date)}</span>
+      ),
+    },
+    {
+      key: "volunteer",
+      header: "Volunteer",
+      accessor: (a) => (
+        <div className="min-w-0">
+          <p className="truncate font-medium">{a.volunteer?.user?.name ?? "—"}</p>
+          {a.volunteer?.assignedArea ? (
+            <p className="truncate text-xs text-muted-foreground">{a.volunteer.assignedArea}</p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "checkIn",
+      header: "Check-in",
+      hideBelow: "md",
+      accessor: (a) => (
+        <span className="whitespace-nowrap text-muted-foreground">{fmtTime(a.checkIn)}</span>
+      ),
+    },
+    {
+      key: "checkOut",
+      header: "Check-out",
+      hideBelow: "md",
+      accessor: (a) => (
+        <span className="whitespace-nowrap text-muted-foreground">{fmtTime(a.checkOut)}</span>
+      ),
+    },
+    {
+      key: "hours",
+      header: "Hours",
+      align: "right",
+      mono: true,
+      accessor: (a) =>
+        a.hours != null ? (
+          <span className="font-medium">{a.hours.toFixed(1)}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      key: "location",
+      header: "Location",
+      hideBelow: "lg",
+      accessor: (a) => (
+        <span className="block max-w-44 truncate text-muted-foreground" title={a.location ?? ""}>
+          {a.location || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "notes",
+      header: "Notes",
+      hideBelow: "lg",
+      accessor: (a) => (
+        <span className="block max-w-40 truncate text-muted-foreground" title={a.notes ?? ""}>
+          {a.notes || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      className: "w-12",
+      accessor: (a) => (
+        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label={`Edit attendance for ${a.volunteer?.user?.name ?? "volunteer"} on ${formatDate(a.date)}`}
+            onClick={() => {
+              setEditTarget(a);
+              setFormOpen(true);
+            }}
+          >
+            <Pencil className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          aria-label="Filter by volunteer"
+          value={volunteerFilter}
+          onChange={(e) => {
+            setVolunteerFilter(e.target.value);
+            setPage(1);
+          }}
+          className="flex h-9 max-w-56 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+        >
+          <option value="">All volunteers</option>
+          {vols.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.user?.name ?? "Volunteer"}
+            </option>
+          ))}
+        </select>
+
+        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+          {loading ? "Loading…" : `${rows.length} day${rows.length === 1 ? "" : "s"} logged`}
+        </span>
+
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <ExportMenu
+            columns={attCsv}
+            rows={rows}
+            filename="uar-volunteer-attendance"
+            disabled={rows.length === 0}
+          />
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditTarget(null);
+              setFormOpen(true);
+            }}
+          >
+            <Plus className="size-4" aria-hidden="true" /> Log attendance
+          </Button>
+        </div>
+      </div>
+
+      <DataTable
+        columns={columns}
+        rows={paged}
+        rowKey={(a) => a.id}
+        loading={loading}
+        skeletonRows={8}
+        height="fill"
+        fillOffset={340}
+        page={pageSafe}
+        pages={pages}
+        total={rows.length}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={(n) => {
+          setPageSize(n);
+          setPage(1);
+        }}
+        itemLabel="attendance days"
+        empty={
+          <EmptyState
+            icon={<CalendarClock className="size-8" aria-hidden="true" />}
+            title="No attendance logged yet"
+            hint="Record check-ins and hours per volunteer per day — the register upserts automatically when you log the same date again."
+          >
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditTarget(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="size-4" aria-hidden="true" /> Log attendance
+            </Button>
+          </EmptyState>
+        }
+      />
+
+      <AttendanceFormSheet
+        open={formOpen}
+        onOpenChange={(o) => {
+          if (!o) setFormOpen(false);
+        }}
+        initial={editTarget}
+        onDone={() => {
+          setFormOpen(false);
+          setEditTarget(null);
+          load();
+          onChanged();
+        }}
+      />
+    </div>
+  );
+}
+
+/* ═══════════════════════════ ANALYTICS TAB ═══════════════════════════ */
+
+const typeBarConfig: ChartConfig = { count: { label: "Tasks", color: "#10b981" } };
+const boardConfig: ChartConfig = { completed: { label: "Completed", color: "#14b8a6" } };
+const hoursConfig: ChartConfig = { hours: { label: "Hours", color: "#10b981" } };
+
+function AnalyticsTab({
+  data,
+  loading,
+}: {
+  data: AnalyticsData | null;
+  loading: boolean;
+}) {
+  const taskTypeOptions = useMasters("TASK_TYPE");
+
+  const kpis = data?.kpis;
+  const typeData = useMemo(
+    () =>
+      (data?.tasksByType ?? []).map((t) => ({
+        label:
+          taskTypeOptions.options.find((o) => o.value === t.type)?.label ??
+          titleCase(t.type),
+        count: t.count,
+      })),
+    [data?.tasksByType, taskTypeOptions.options]
+  );
+  const statusData = useMemo(
+    () => (data?.taskStatus ?? []).filter((s) => s.count > 0),
+    [data?.taskStatus]
+  );
+  const boardData = useMemo(
+    () => (data?.leaderboard ?? []).filter((l) => l.completed > 0),
+    [data?.leaderboard]
+  );
+  const hoursData = useMemo(() => data?.monthlyHours ?? [], [data?.monthlyHours]);
+  const hoursTotal = hoursData.reduce((s, m) => s + m.hours, 0);
+
+  if (loading) {
+    return (
+      <div className="space-y-4" aria-busy="true">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+            <Skeleton key={i} className="h-28 rounded-xl" />
+          ))}
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-64 rounded-xl" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* KPI strip */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <StatCard
+          label="Total volunteers"
+          value={(kpis?.totalVolunteers ?? 0).toLocaleString("en-IN")}
+          hint={`${kpis?.activeVolunteers ?? 0} active on the roster`}
+          icon={<Users className="size-5" aria-hidden="true" />}
+          accent="emerald"
+        />
+        <StatCard
+          label="Active volunteers"
+          value={(kpis?.activeVolunteers ?? 0).toLocaleString("en-IN")}
+          hint="status ACTIVE"
+          icon={<UserCheck className="size-5" aria-hidden="true" />}
+          accent="teal"
+        />
+        <StatCard
+          label="Pending applications"
+          value={(kpis?.pendingApplications ?? 0).toLocaleString("en-IN")}
+          hint="waiting for review"
+          icon={<UserPlus className="size-5" aria-hidden="true" />}
+          accent="amber"
+        />
+        <StatCard
+          label="Tasks assigned"
+          value={(kpis?.tasksAssigned ?? 0).toLocaleString("en-IN")}
+          hint="non-cancelled tasks"
+          icon={<ClipboardList className="size-5" aria-hidden="true" />}
+          accent="lime"
+        />
+        <StatCard
+          label="Tasks completed"
+          value={(kpis?.tasksCompleted ?? 0).toLocaleString("en-IN")}
+          hint="with completedAt stamp"
+          icon={<BadgeCheck className="size-5" aria-hidden="true" />}
+          accent="emerald"
+        />
+        <StatCard
+          label="Completion rate"
+          value={`${kpis?.completionRate ?? 0}%`}
+          hint="completed ÷ assigned"
+          icon={<Trophy className="size-5" aria-hidden="true" />}
+          accent="teal"
+        />
+        <StatCard
+          label="Hours this month"
+          value={(kpis?.hoursThisMonth ?? 0).toLocaleString("en-IN")}
+          hint="from the attendance register"
+          icon={<Clock className="size-5" aria-hidden="true" />}
+          accent="orange"
+        />
+        <StatCard
+          label="Hours · last 6 months"
+          value={hoursTotal.toLocaleString("en-IN")}
+          hint="trend below"
+          icon={<Activity className="size-5" aria-hidden="true" />}
+          accent="lime"
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* tasks by type */}
+        <SectionCard
+          title="Tasks by type"
+          description="Where volunteer effort is directed"
+          icon={<ClipboardList className="size-4" aria-hidden="true" />}
+        >
+          {typeData.every((t) => t.count === 0) ? (
+            <EmptyState
+              icon={<ClipboardList className="size-6" aria-hidden="true" />}
+              title="No tasks yet"
+              hint="Assign volunteers to distributions, campaigns or events to see the mix build up."
+            />
+          ) : (
+            <ChartContainer config={typeBarConfig} className="aspect-auto h-56 w-full">
+              <BarChart data={typeData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={false}
+                  interval={0}
+                  angle={-18}
+                  textAnchor="end"
+                  height={52}
+                />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={32}
+                  allowDecimals={false}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => (
+                        <span className="flex w-full items-center justify-between gap-4">
+                          <span className="text-muted-foreground">Tasks</span>
+                          <span className="font-mono font-medium tabular-nums">
+                            {Number(value)}
+                          </span>
+                        </span>
+                      )}
+                    />
+                  }
+                />
+                <Bar dataKey="count" fill="var(--color-count)" radius={[6, 6, 0, 0]} maxBarSize={44} />
+              </BarChart>
+            </ChartContainer>
+          )}
+        </SectionCard>
+
+        {/* status donut */}
+        <SectionCard
+          title="Task status distribution"
+          description="Live pipeline health"
+          icon={<Activity className="size-4" aria-hidden="true" />}
+        >
+          {statusData.length === 0 ? (
+            <EmptyState
+              icon={<Activity className="size-6" aria-hidden="true" />}
+              title="No task activity yet"
+              hint="Once tasks are assigned, their pipeline status shows here."
+            />
+          ) : (
+            <>
+              <ChartContainer config={{}} className="aspect-auto h-56 w-full">
+                <PieChart>
+                  <Pie
+                    data={statusData}
+                    dataKey="count"
+                    nameKey="status"
+                    innerRadius="55%"
+                    outerRadius="85%"
+                    paddingAngle={2}
+                    strokeWidth={0}
+                  >
+                    {statusData.map((s) => (
+                      <Cell key={s.status} fill={STATUS_COLORS[s.status] ?? "#10b981"} />
+                    ))}
+                  </Pie>
+                  <ChartTooltip
+                    content={
+                      <ChartTooltipContent
+                        formatter={(value, name) => (
+                          <span className="flex w-full items-center justify-between gap-4">
+                            <span className="text-muted-foreground">{humanize(String(name))}</span>
+                            <span className="font-mono font-medium tabular-nums">
+                              {Number(value)}
+                            </span>
+                          </span>
+                        )}
+                      />
+                    }
+                  />
+                </PieChart>
+              </ChartContainer>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
+                {statusData.map((s) => (
+                  <li key={s.status} className="flex items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: STATUS_COLORS[s.status] ?? "#10b981" }}
+                    />
+                    <span>{humanize(s.status)}</span>
+                    <span className="font-medium tabular-nums">{s.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </SectionCard>
+
+        {/* leaderboard */}
+        <SectionCard
+          title="Volunteer leaderboard"
+          description="Top 5 by completed tasks"
+          icon={<Trophy className="size-4" aria-hidden="true" />}
+        >
+          {boardData.length === 0 ? (
+            <EmptyState
+              icon={<Trophy className="size-6" aria-hidden="true" />}
+              title="No completed tasks yet"
+              hint="The leaderboard fills up as volunteers complete their assigned work."
+            />
+          ) : (
+            <ChartContainer config={boardConfig} className="aspect-auto h-56 w-full">
+              <BarChart
+                data={boardData}
+                layout="vertical"
+                margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  tick={{ fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={120}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => (
+                        <span className="flex w-full items-center justify-between gap-4">
+                          <span className="text-muted-foreground">Completed</span>
+                          <span className="font-mono font-medium tabular-nums">
+                            {Number(value)}
+                          </span>
+                        </span>
+                      )}
+                    />
+                  }
+                />
+                <Bar
+                  dataKey="completed"
+                  fill="var(--color-completed)"
+                  radius={[0, 6, 6, 0]}
+                  maxBarSize={26}
+                />
+              </BarChart>
+            </ChartContainer>
+          )}
+        </SectionCard>
+
+        {/* monthly hours */}
+        <SectionCard
+          title="Monthly hours trend"
+          description="Hours logged over the last 6 months"
+          icon={<Activity className="size-4" aria-hidden="true" />}
+        >
+          {hoursTotal === 0 ? (
+            <EmptyState
+              icon={<CalendarClock className="size-6" aria-hidden="true" />}
+              title="No hours logged yet"
+              hint="Log volunteer attendance to build the hours trend."
+            />
+          ) : (
+            <ChartContainer config={hoursConfig} className="aspect-auto h-56 w-full">
+              <AreaChart data={hoursData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="volHoursFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={36}
+                  allowDecimals={false}
+                />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value) => (
+                        <span className="flex w-full items-center justify-between gap-4">
+                          <span className="text-muted-foreground">Hours</span>
+                          <span className="font-mono font-medium tabular-nums">
+                            {Number(value).toFixed(1)}
+                          </span>
+                        </span>
+                      )}
+                    />
+                  }
+                />
+                <Area
+                  type="monotone"
+                  dataKey="hours"
+                  stroke="var(--color-hours)"
+                  strokeWidth={2}
+                  fill="url(#volHoursFill)"
+                />
+              </AreaChart>
+            </ChartContainer>
+          )}
+        </SectionCard>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════ VOLUNTEER DETAIL SHEET ═══════════════════════ */
+
+function VolunteerDetailSheet({
+  volunteerId,
+  open,
+  onOpenChange,
+  onChanged,
+}: {
+  volunteerId: string | null;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onChanged: () => void;
+}) {
+  const [detail, setDetail] = useState<VolunteerDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState("overview");
+  const [statusDraft, setStatusDraft] = useState("PENDING");
+  const [savingStatus, setSavingStatus] = useState(false);
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [attOpen, setAttOpen] = useState(false);
+
+  const [logs, setLogs] = useState<ActivityLogRow[]>([]);
+
+  const load = useCallback(async () => {
+    if (!volunteerId) return;
+    setLoading(true);
+    try {
+      const d = await get<VolunteerDetail>(`/api/volunteers/${volunteerId}`);
+      setDetail(d);
+      setStatusDraft(d?.status ?? "PENDING");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load volunteer");
+      onOpenChange(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [volunteerId]);
+
+  useEffect(() => {
+    if (open && volunteerId) {
+      setTab("overview");
+      void load();
+      get<ActivityLogRow[]>("/api/activity-logs?limit=150")
+        .then((rows) => setLogs(Array.isArray(rows) ? rows : []))
+        .catch(() => setLogs([]));
+    }
+  }, [open, volunteerId, load]);
+
+  const relevantLogs = useMemo(() => {
+    if (!detail) return [];
+    const email = (detail.user?.email ?? "").toLowerCase();
+    const name = (detail.user?.name ?? "").toLowerCase();
+    return logs
+      .filter((l) => {
+        const hay = `${l.details ?? ""} ${l.action}`.toLowerCase();
+        return (
+          (detail.id && hay.includes(detail.id.toLowerCase())) ||
+          (email.length > 4 && hay.includes(email)) ||
+          (name.length > 3 && hay.includes(name))
+        );
+      })
+      .slice(0, 20);
+  }, [logs, detail]);
+
+  const saveStatus = async () => {
+    if (!detail) return;
+    setSavingStatus(true);
+    try {
+      await patch(`/api/volunteers/${detail.id}`, { status: statusDraft });
+      toast.success(
+        statusDraft === "SUSPENDED"
+          ? "Volunteer suspended — sign-in blocked"
+          : `Volunteer marked ${humanize(statusDraft).toLowerCase()}`
+      );
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update status");
+    } finally {
+      setSavingStatus(false);
+    }
+  };
+
+  const refreshSelf = useCallback(() => {
+    void load();
+    onChanged();
+  }, [load, onChanged]);
+
+  return (
+    <>
       <DetailSheet
-        open={!!detail}
-        onOpenChange={(o) => !o && setDetail(null)}
-        eyebrow="Volunteer"
-        title={detail ? volName(detail) : "Volunteer"}
+        open={open}
+        onOpenChange={onOpenChange}
+        loading={loading}
+        eyebrow="Volunteers"
+        title={detail?.user?.name ?? "Volunteer"}
         description={
           detail
-            ? `${detail.user?.email ?? ""} · joined ${formatDate(detail.joinedAt)}${detail.assignedArea ? ` · ${detail.assignedArea}` : ""}`
-            : "Loading…"
+            ? `${detail.user?.email ?? "—"}${detail.user?.city ? ` · ${detail.user.city}` : ""}${
+                detail.assignedArea ? ` · ${detail.assignedArea}` : ""
+              }`
+            : undefined
         }
-        status={detail ? <StatusBadge status={detail.status} /> : undefined}
+        status={detail ? <StatusBadge status={detail.status} /> : null}
         actions={
           detail ? (
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => openEdit(detail)}
-                aria-label="Edit volunteer profile"
-              >
+              <Button variant="outline" size="sm" onClick={() => setAssignOpen(true)}>
+                <Link2 className="size-3.5" aria-hidden="true" /> Assign
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
                 <Pencil className="size-3.5" aria-hidden="true" /> Edit
               </Button>
-              {quickStatusButton(detail)}
             </>
-          ) : undefined
+          ) : null
+        }
+        footer={
+          detail ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Joined {formatDate(detail.joinedAt)} · ID{" "}
+                <span className="font-mono">{detail.id.slice(-8)}</span>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setAttOpen(true)}>
+                  <CalendarClock className="size-3.5" aria-hidden="true" /> Log attendance
+                </Button>
+              </div>
+            </>
+          ) : null
         }
       >
-        {!detail ? (
-          <div className="space-y-3" aria-busy="true">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-16 rounded-lg" />
-              ))}
-            </div>
-            <Skeleton className="h-40 rounded-xl" />
-          </div>
-        ) : (
-          <>
-            {/* engagement strip */}
-            <DetailSection title="Engagement" description="Tasks and attendance summary.">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {detail ? (
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList className="flex w-full flex-wrap">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="tasks">
+                Tasks
+                <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+                  {detail.tasks?.length ?? 0}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="attendance">
+                Attendance
+                <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+                  {detail.attendances?.length ?? 0}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="activity">Activity</TabsTrigger>
+            </TabsList>
+
+            {/* ---------------------------- OVERVIEW ---------------------------- */}
+            <TabsContent value="overview" className="mt-5 space-y-6">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <StatTile
                   label="Tasks assigned"
-                  value={detail.stats ? detail.stats.tasksAssigned : "—"}
+                  value={detail.stats?.tasksAssigned ?? 0}
                 />
                 <StatTile
                   label="Completed"
-                  value={detail.stats ? detail.stats.tasksCompleted : "—"}
+                  value={detail.stats?.tasksCompleted ?? 0}
                 />
-                <StatTile
-                  label="Days present"
-                  value={detail.stats ? detail.stats.daysPresent : "—"}
-                />
+                <StatTile label="Days present" value={detail.stats?.daysPresent ?? 0} />
                 <StatTile
                   label="Total hours"
-                  value={detail.stats ? `${detail.stats.totalHours} h` : "—"}
+                  value={detail.stats?.totalHours ?? 0}
                 />
               </div>
-            </DetailSection>
 
-            <DetailSection title="Profile" description="Identity and roster fields.">
-              <DetailGrid cols={2}>
-                <DataField label="Full name" value={detail.user?.name} />
-                <DataField label="Email" value={detail.user?.email} copy />
-                <DataField label="Phone" value={detail.user?.phone} copy mono />
-                <DataField label="City" value={detail.user?.city} />
-                <DataField
-                  label="Account status"
-                  value={detail.user?.status ? <StatusBadge status={detail.user.status} /> : ""}
-                />
-                <DataField
-                  label="Volunteer status"
-                  value={<StatusBadge status={detail.status} />}
-                />
-                <DataField label="Assigned area" value={detail.assignedArea} />
-                <DataField label="Emergency contact" value={detail.emergencyContact} copy />
-                <DataField label="ID proof" value={detail.idProof} />
-                <DataField label="Joined" value={formatDate(detail.joinedAt)} />
-              </DetailGrid>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <div>
-                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Skills
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {parseList(detail.skills).length > 0
-                      ? parseList(detail.skills).map((s) => <Chip key={s}>{s}</Chip>)
-                      : <span className="text-sm text-muted-foreground">—</span>}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Availability
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {parseList(detail.availability).length > 0
-                      ? parseList(detail.availability).map((s) => (
+              <DetailSection title="Profile" description="Account and roster details.">
+                <DetailGrid cols={3}>
+                  <DataField label="Name" value={detail.user?.name ?? null} />
+                  <DataField label="Email" value={detail.user?.email ?? null} />
+                  <DataField label="Phone" value={detail.user?.phone ?? null} mono />
+                  <DataField label="City" value={detail.user?.city ?? null} />
+                  <DataField
+                    label="Account status"
+                    value={<StatusBadge status={detail.user?.status ?? detail.status} />}
+                  />
+                  <DataField
+                    label="Joined"
+                    value={formatDate(detail.joinedAt)}
+                    icon={<CalendarClock className="size-3" aria-hidden="true" />}
+                  />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection
+                title="Skills & availability"
+                description="Synced from the approved application; editable below."
+                actions={
+                  <Button variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
+                    <Pencil className="size-3.5" aria-hidden="true" /> Edit
+                  </Button>
+                }
+              >
+                <div className="space-y-3">
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Skills
+                    </p>
+                    {parseList(detail.skills).length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {parseList(detail.skills).map((s) => (
                           <Chip key={s}>{titleCase(s)}</Chip>
-                        ))
-                      : <span className="text-sm text-muted-foreground">—</span>}
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No skills recorded.</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Availability
+                    </p>
+                    {parseList(detail.availability).length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {parseList(detail.availability).map((s) => (
+                          <Chip key={s}>{titleCase(s)}</Chip>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Not specified.</p>
+                    )}
                   </div>
                 </div>
-              </div>
-            </DetailSection>
+              </DetailSection>
 
-            {/* tasks */}
-            <DetailSection
-              title="Tasks"
-              description="All tasks linked to this volunteer."
-              actions={
-                <Button size="sm" onClick={openTaskForm}>
-                  <Plus className="size-4" aria-hidden="true" /> Assign task
-                </Button>
-              }
-            >
-              {!detail.tasks ? (
-                <div className="space-y-2" aria-busy="true">
-                  {[0, 1].map((i) => (
-                    <Skeleton key={i} className="h-16 rounded-lg" />
-                  ))}
+              <DetailSection title="Field assignment" description="Where this volunteer operates.">
+                <DetailGrid cols={3}>
+                  <DataField label="Assigned area" value={detail.assignedArea ?? null} icon={<MapPin className="size-3" aria-hidden="true" />} />
+                  <DataField label="Emergency contact" value={detail.emergencyContact ?? null} />
+                  <DataField label="ID proof" value={detail.idProof ?? null} mono />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection
+                title="Status management"
+                description="Mirrors onto the user account — SUSPENDED blocks sign-in, ACTIVE enables it."
+              >
+                <div className="flex flex-wrap items-end gap-3">
+                  <SelectField
+                    label="Volunteer status"
+                    value={statusDraft}
+                    onChange={setStatusDraft}
+                    options={VOL_STATUS_OPTIONS}
+                    className="w-full sm:w-56"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={saveStatus}
+                    disabled={savingStatus || statusDraft === detail.status}
+                  >
+                    <Check className="size-4" aria-hidden="true" /> Save status
+                  </Button>
                 </div>
-              ) : detail.tasks.length === 0 ? (
+              </DetailSection>
+            </TabsContent>
+
+            {/* ----------------------------- TASKS ------------------------------ */}
+            <TabsContent value="tasks" className="mt-5 space-y-3">
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setAssignOpen(true)}>
+                  <Link2 className="size-3.5" aria-hidden="true" /> Assign to record
+                </Button>
+              </div>
+              {(detail.tasks ?? []).length === 0 ? (
                 <EmptyState
                   icon={<ClipboardList className="size-6" aria-hidden="true" />}
                   title="No tasks yet"
-                  hint="Assign the first task — it will appear in the volunteer's portal."
-                />
-              ) : (
-                <ul
-                  className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
-                  aria-label="Volunteer tasks"
+                  hint="Assign this volunteer to a distribution, campaign or event — a task is created automatically."
                 >
-                  {detail.tasks.map((t) => (
-                    <li key={t.id} className="rounded-lg border p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="min-w-0 truncate text-sm font-medium">{t.title}</p>
-                        <StatusBadge
-                          status={t.priority}
-                          tone={PRIORITY_TONE[t.priority] ?? "neutral"}
-                          className="shrink-0"
-                        />
-                      </div>
-                      <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <CalendarClock className="size-3" aria-hidden="true" />{" "}
-                          {formatDateTime(t.scheduledDate)}
-                        </span>
-                        {t.location && (
-                          <span className="flex items-center gap-1">
-                            <MapPin className="size-3" aria-hidden="true" /> {t.location}
-                          </span>
-                        )}
-                        <span>{titleCase(t.type)}</span>
-                      </p>
-                      <div className="mt-1.5">
-                        <StatusBadge status={t.status} />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </DetailSection>
-
-            {/* distributions participated */}
-            <DetailSection
-              title="Distributions participated"
-              description="Aid hand-outs recorded against this volunteer."
-            >
-              {distRows === null ? (
-                <div className="space-y-2" aria-busy="true">
-                  {[0, 1].map((i) => (
-                    <Skeleton key={i} className="h-12 rounded-lg" />
-                  ))}
-                </div>
-              ) : distRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No distributions recorded for this volunteer yet.
-                </p>
+                  <Button variant="outline" onClick={() => setAssignOpen(true)}>
+                    <Link2 className="size-4" aria-hidden="true" /> Assign now
+                  </Button>
+                </EmptyState>
               ) : (
-                <ul
-                  className="max-h-80 space-y-1.5 overflow-y-auto scrollbar-thin"
-                  aria-label="Distributions participated"
-                >
-                  {distRows.map((d) => (
-                    <li key={d.id} className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm">
-                      <Package className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">
-                          {titleCase(d.type)}
-                          {d.beneficiary?.name ? ` → ${d.beneficiary.name}` : ""}
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {d.location || "No location"} · {formatDateTime(d.distributedAt)}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-right text-xs tabular-nums">
-                        <span className="block font-medium">×{d.quantity}</span>
-                        {d.value ? (
-                          <span className="block text-muted-foreground">{formatINR(d.value)}</span>
-                        ) : null}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                (detail.tasks ?? []).map((t) => (
+                  <TaskLine key={t.id} task={t} onChanged={refreshSelf} />
+                ))
               )}
-            </DetailSection>
+            </TabsContent>
 
-            {/* attendance */}
-            <DetailSection
-              title="Attendance"
-              description="Recorded days, check-ins and hours."
-              actions={
-                <Button size="sm" variant="outline" onClick={openAttForm}>
-                  <Plus className="size-4" aria-hidden="true" /> Record
+            {/* --------------------------- ATTENDANCE ---------------------------- */}
+            <TabsContent value="attendance" className="mt-5 space-y-3">
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setAttOpen(true)}>
+                  <Plus className="size-3.5" aria-hidden="true" /> Log attendance
                 </Button>
-              }
-            >
-              {attLoading || attRows === null ? (
-                <div className="space-y-2" aria-busy="true">
-                  {[0, 1, 2].map((i) => (
-                    <Skeleton key={i} className="h-10 rounded-lg" />
-                  ))}
-                </div>
-              ) : attRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No attendance recorded yet.</p>
+              </div>
+              {(detail.attendances ?? []).length === 0 ? (
+                <EmptyState
+                  icon={<CalendarClock className="size-6" aria-hidden="true" />}
+                  title="No attendance logged"
+                  hint="Record check-ins and hours for each volunteering day — logging the same date again updates the entry."
+                >
+                  <Button variant="outline" onClick={() => setAttOpen(true)}>
+                    <Plus className="size-4" aria-hidden="true" /> Log first day
+                  </Button>
+                </EmptyState>
               ) : (
-                <div className="max-h-80 overflow-y-auto rounded-lg border scrollbar-thin">
+                <div className="overflow-hidden rounded-lg border">
                   <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-card">
-                      <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                        <th scope="col" className="px-3 py-2 font-semibold">Date</th>
-                        <th scope="col" className="px-3 py-2 font-semibold">In</th>
-                        <th scope="col" className="px-3 py-2 font-semibold">Out</th>
-                        <th scope="col" className="px-3 py-2 text-right font-semibold">Hours</th>
-                        <th scope="col" className="hidden px-3 py-2 font-semibold sm:table-cell">Location</th>
+                    <thead className="bg-muted/70">
+                      <tr className="border-b text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-3 py-2">Date</th>
+                        <th scope="col" className="px-3 py-2">In</th>
+                        <th scope="col" className="px-3 py-2">Out</th>
+                        <th scope="col" className="px-3 py-2 text-right">Hours</th>
+                        <th scope="col" className="px-3 py-2">Location</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {attRows.map((r) => (
-                        <tr key={r.id} className="border-b last:border-b-0">
-                          <td className="whitespace-nowrap px-3 py-2">{formatDate(r.date)}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{fmtTime(r.checkIn)}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{fmtTime(r.checkOut)}</td>
-                          <td className="px-3 py-2 text-right font-medium tabular-nums">
-                            {r.hours !== null && r.hours !== undefined ? r.hours : "—"}
+                      {(detail.attendances ?? []).map((a) => (
+                        <tr key={a.id} className="border-b last:border-b-0">
+                          <td className="px-3 py-2 font-medium">{formatDate(a.date)}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{fmtTime(a.checkIn)}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{fmtTime(a.checkOut)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums">
+                            {a.hours != null ? a.hours.toFixed(1) : "—"}
                           </td>
-                          <td className="hidden max-w-40 truncate px-3 py-2 sm:table-cell">
-                            {r.location || "—"}
-                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{a.location || "—"}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               )}
-            </DetailSection>
+            </TabsContent>
 
-            {/* application link */}
-            <DetailSection
-              title="Application"
-              description="The volunteer application this roster entry came from."
-            >
-              {appLink === null ? (
-                <p className="text-sm text-muted-foreground">
-                  No matching application on file — this volunteer may have been onboarded directly.
-                </p>
+            {/* ---------------------------- ACTIVITY ----------------------------- */}
+            <TabsContent value="activity" className="mt-5 space-y-2">
+              {relevantLogs.length === 0 ? (
+                <EmptyState
+                  icon={<Activity className="size-6" aria-hidden="true" />}
+                  title="No recent activity"
+                  hint="Status changes, task assignments and attendance edits for this volunteer will appear here."
+                />
               ) : (
-                <DetailGrid cols={2}>
-                  <DataField label="Applied as" value={appLink.fullName} />
-                  <DataField label="Application status" value={<StatusBadge status={appLink.status} />} />
-                  <DataField label="Applied on" value={formatDateTime(appLink.createdAt)} />
-                  <DataField
-                    label="Reviewed at"
-                    value={appLink.reviewedAt ? formatDateTime(appLink.reviewedAt) : "Not reviewed"}
-                  />
-                  <DataField label="Review note" value={appLink.reviewNote} className="sm:col-span-2" />
-                  <DataField label="Motivation" value={appLink.motivation} className="sm:col-span-2" />
-                </DetailGrid>
+                relevantLogs.map((l) => (
+                  <div
+                    key={l.id}
+                    className="flex items-start gap-3 rounded-lg border p-3"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-teal-500/10 text-teal-600 dark:text-teal-400"
+                    >
+                      <Activity className="size-3.5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{humanize(l.action)}</p>
+                      {l.details ? (
+                        <p className="truncate text-xs text-muted-foreground" title={l.details}>
+                          {l.details}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {timeAgo(l.createdAt)}
+                    </span>
+                  </div>
+                ))
               )}
-            </DetailSection>
-          </>
-        )}
+            </TabsContent>
+          </Tabs>
+        ) : null}
       </DetailSheet>
 
-      {/* --------------------------- assign task sheet --------------------------- */}
-      <FormSheet
-        open={taskOpen}
+      <VolunteerEditFormSheet
+        open={editOpen}
+        volunteer={detail}
         onOpenChange={(o) => {
-          if (!o && !savingTask) setTaskOpen(false);
+          if (!o) setEditOpen(false);
         }}
-        title={`Assign task — ${detail ? volName(detail) : "volunteer"}`}
-        submitLabel="Assign task"
-        onSubmit={saveTask}
-        loading={savingTask}
-        dirty={JSON.stringify(taskForm) !== JSON.stringify(taskInitial)}
-        size="md"
-      >
-        <TextField
-          label="Task title"
-          required
-          value={taskForm.title}
-          onChange={(v) => setTaskForm({ ...taskForm, title: v })}
-          placeholder="Weekend ration drive — Yelahanka"
-          error={taskErrors.title}
+        onSaved={() => {
+          setEditOpen(false);
+          refreshSelf();
+        }}
+      />
+
+      <AssignFormSheet
+        open={assignOpen}
+        onOpenChange={(o) => {
+          if (!o) setAssignOpen(false);
+        }}
+        volunteerIds={detail ? [detail.id] : []}
+        volunteerNames={detail ? [detail.user?.name ?? "Volunteer"] : []}
+        defaults={{ location: detail?.assignedArea ?? "" }}
+        onDone={() => {
+          setAssignOpen(false);
+          refreshSelf();
+        }}
+      />
+
+      <AttendanceFormSheet
+        open={attOpen}
+        onOpenChange={(o) => {
+          if (!o) setAttOpen(false);
+        }}
+        fixedVolunteerId={detail?.id}
+        fixedVolunteerName={detail?.user?.name}
+        onDone={() => {
+          setAttOpen(false);
+          refreshSelf();
+        }}
+      />
+    </>
+  );
+}
+
+/* ═══════════════════════ shared: task row with advance ═════════════════ */
+
+function TaskLine({ task, onChanged }: { task: TaskRow; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const advance = async (status: string) => {
+    setBusy(true);
+    try {
+      await patch(`/api/volunteer-tasks/${task.id}`, { status });
+      toast.success(`Task ${humanize(status).toLowerCase()}`);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update task");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const transitions = taskTransitions(task.status);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2.5 rounded-lg border p-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <p className="truncate text-sm font-medium">{task.title}</p>
+          {typeChip(task.type)}
+          {priorityBadge(task.priority)}
+          {autoBadge(task.createdFrom)}
+        </div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {formatDateTime(task.scheduledDate)}
+          {task.location ? ` · ${task.location}` : ""}
+        </p>
+        {refCell(task) !== null && task.refType ? (
+          <div className="mt-1.5">{refCell(task)}</div>
+        ) : null}
+      </div>
+      <StatusBadge status={task.status} />
+      {transitions.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {transitions.map((tr) => (
+            <Button
+              key={tr.status}
+              size="sm"
+              variant="outline"
+              className="h-8 min-h-8 px-2.5 text-xs"
+              disabled={busy}
+              onClick={() => advance(tr.status)}
+            >
+              {tr.label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ═══════════════════════ VOLUNTEER EDIT FORMSHEET ══════════════════════ */
+
+const EMPTY_EDIT: {
+  status: string;
+  assignedArea: string;
+  emergencyContact: string;
+  idProof: string;
+  skills: string[];
+  availability: string[];
+} = {
+  status: "PENDING",
+  assignedArea: "",
+  emergencyContact: "",
+  idProof: "",
+  skills: [],
+  availability: [],
+};
+
+function VolunteerEditFormSheet({
+  open,
+  volunteer,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean;
+  volunteer: VolunteerRow | null;
+  onOpenChange: (o: boolean) => void;
+  onSaved: () => void;
+}) {
+  const skillOptions = useMasters("SKILL");
+  const availOptions = useMasters("AVAILABILITY");
+
+  const [form, setForm] = useState(EMPTY_EDIT);
+  const [snapshot, setSnapshot] = useState(EMPTY_EDIT);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open && volunteer) {
+      const next = {
+        status: volunteer.status,
+        assignedArea: volunteer.assignedArea ?? "",
+        emergencyContact: volunteer.emergencyContact ?? "",
+        idProof: volunteer.idProof ?? "",
+        skills: parseList(volunteer.skills),
+        availability: parseList(volunteer.availability),
+      };
+      setForm(next);
+      setSnapshot(next);
+    }
+  }, [open, volunteer]);
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(snapshot);
+
+  const toggle = (key: "skills" | "availability", value: string) => {
+    setForm((f) => ({
+      ...f,
+      [key]: f[key].includes(value)
+        ? f[key].filter((x) => x !== value)
+        : [...f[key], value],
+    }));
+  };
+
+  const chipEditor = (key: "skills" | "availability") => {
+    const opts = key === "skills" ? skillOptions : availOptions;
+    const extra = form[key].filter((v) => !opts.options.some((o) => o.value === v));
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {opts.options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={form[key].includes(o.value)}
+            onClick={() => toggle(key, o.value)}
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+              form[key].includes(o.value)
+                ? "border-teal-500/40 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+                : "border-border bg-background text-muted-foreground hover:bg-accent"
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+        {extra.map((v) => (
+          <button
+            key={v}
+            type="button"
+            aria-pressed
+            onClick={() => toggle(key, v)}
+            className="rounded-full border border-teal-500/40 bg-teal-500/10 px-2.5 py-1 text-xs font-medium text-teal-700 dark:text-teal-400"
+          >
+            {titleCase(v)} ✕
+          </button>
+        ))}
+        {form[key].length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Tap to add {key === "skills" ? "skills" : "availability windows"}.
+          </p>
+        ) : null}
+      </div>
+    );
+  };
+
+  const save = async () => {
+    if (!volunteer) return;
+    setSaving(true);
+    try {
+      await patch(`/api/volunteers/${volunteer.id}`, {
+        status: form.status,
+        assignedArea: form.assignedArea.trim() || undefined,
+        emergencyContact: form.emergencyContact.trim() || undefined,
+        idProof: form.idProof.trim() || undefined,
+        skills: form.skills.length ? JSON.stringify(form.skills) : undefined,
+        availability: form.availability.length ? JSON.stringify(form.availability) : undefined,
+      });
+      toast.success("Volunteer profile updated");
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update volunteer");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Edit volunteer profile"
+      description={volunteer?.user?.name ? `Editing ${volunteer.user.name}` : undefined}
+      size="md"
+      submitLabel="Save profile"
+      loading={saving}
+      dirty={dirty}
+      onSubmit={save}
+    >
+      <FormSection title="Status" description="Mirrors onto the user account for sign-in gating.">
+        <SelectField
+          label="Volunteer status"
+          value={form.status}
+          onChange={(v) => setForm((f) => ({ ...f, status: v }))}
+          options={VOL_STATUS_OPTIONS}
         />
+      </FormSection>
+
+      <FormSection title="Field assignment">
+        <FieldGrid>
+          <TextField
+            label="Assigned area"
+            value={form.assignedArea}
+            onChange={(v) => setForm((f) => ({ ...f, assignedArea: v }))}
+            placeholder="e.g. Jayanagar, Bengaluru"
+          />
+          <TextField
+            label="Emergency contact"
+            value={form.emergencyContact}
+            onChange={(v) => setForm((f) => ({ ...f, emergencyContact: v }))}
+            placeholder="Name · phone"
+          />
+          <TextField
+            label="ID proof reference"
+            value={form.idProof}
+            onChange={(v) => setForm((f) => ({ ...f, idProof: v }))}
+            placeholder="e.g. Aadhaar ****1234"
+            hint="Reference only — never upload documents here."
+          />
+        </FieldGrid>
+      </FormSection>
+
+      <FormSection title="Skills" description="Shown on the roster and used to match assignments.">
+        {chipEditor("skills")}
+      </FormSection>
+
+      <FormSection title="Availability">
+        {chipEditor("availability")}
+      </FormSection>
+    </FormSheet>
+  );
+}
+
+/* ═══════════════════════════ ASSIGN FORMSHEET ══════════════════════════ */
+
+function AssignFormSheet({
+  open,
+  onOpenChange,
+  volunteerIds,
+  volunteerNames,
+  defaults,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  volunteerIds: string[];
+  volunteerNames: string[];
+  defaults?: { location?: string };
+  onDone?: () => void;
+}) {
+  const [linkType, setLinkType] = useState("DISTRIBUTION");
+  const [refId, setRefId] = useState("");
+  const [eventRef, setEventRef] = useState("");
+  const [records, setRecords] = useState<RecordOption[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [scheduledDate, setScheduledDate] = useState(addDaysIso(3));
+  const [priority, setPriority] = useState("MEDIUM");
+  const [location, setLocation] = useState("");
+  const [notes, setNotes] = useState("");
+  const [errors, setErrors] = useState<RuleErr>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setLinkType("DISTRIBUTION");
+      setRefId("");
+      setEventRef("");
+      setScheduledDate(addDaysIso(3));
+      setPriority("MEDIUM");
+      setLocation(defaults?.location ?? "");
+      setNotes("");
+      setErrors({});
+    }
+  }, [open]);
+
+  /* load record options for the chosen link type */
+  useEffect(() => {
+    if (!open || linkType === "EVENT") {
+      setRecords([]);
+      setRecordsLoading(false);
+      return;
+    }
+    let alive = true;
+    setRecordsLoading(true);
+    const run = async () => {
+      try {
+        if (linkType === "DISTRIBUTION") {
+          const data = await get<DistributionLite[] | { items?: DistributionLite[] }>(
+            "/api/distributions?limit=50"
+          );
+          const rows = Array.isArray(data) ? data : (data.items ?? []);
+          if (alive)
+            setRecords(
+              rows.map((r) => ({
+                id: r.id,
+                label: r.beneficiary?.name
+                  ? `${titleCase(r.type)} — ${r.beneficiary.name}`
+                  : `${titleCase(r.type)} drive`,
+                sub: `${formatDate(r.distributedAt)} · ${r.quantity} unit${r.quantity === 1 ? "" : "s"}${
+                  r.location ? ` · ${r.location}` : ""
+                }`,
+              }))
+            );
+        } else {
+          const rows = await get<CampaignLite[]>("/api/campaigns");
+          if (alive)
+            setRecords(
+              (Array.isArray(rows) ? rows : []).map((c) => ({
+                id: c.id,
+                label: c.title,
+                sub: titleCase(c.status),
+              }))
+            );
+        }
+      } catch {
+        if (alive) setRecords([]);
+      } finally {
+        if (alive) setRecordsLoading(false);
+      }
+    };
+    void run();
+    return () => {
+      alive = false;
+    };
+  }, [open, linkType]);
+
+  const save = async () => {
+    const chosenRefId = linkType === "EVENT" ? eventRef.trim() : refId;
+    const errs = collectErrors(
+      ["refId", chosenRefId ? null : linkType === "EVENT" ? "Enter the event name or reference" : "Select a record"],
+      ["volunteerIds", volunteerIds.length ? null : "No volunteer selected"]
+    );
+    setErrors(errs ?? {});
+    if (errs) return;
+
+    setSaving(true);
+    try {
+      const res = await post<{ tasks?: unknown[]; skipped?: number }>(
+        "/api/volunteer-assignments",
+        {
+          refType: linkType,
+          refId: chosenRefId,
+          volunteerIds,
+          ...(scheduledDate
+            ? { scheduledDate: new Date(`${scheduledDate}T09:00:00`).toISOString() }
+            : {}),
+          ...(priority ? { priority } : {}),
+          ...(location.trim() ? { location: location.trim() } : {}),
+          ...(notes.trim() ? { notes: notes.trim() } : {}),
+        }
+      );
+      const created = res?.tasks?.length ?? 0;
+      const skipped = res?.skipped ?? 0;
+      if (created === 0) {
+        toast.info("All selected volunteers were already assigned — nothing created");
+      } else {
+        toast.success(
+          `${created} task${created === 1 ? "" : "s"} created${
+            skipped > 0 ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : ""
+          }`
+        );
+      }
+      onOpenChange(false);
+      onDone?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create assignments");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Assign to record"
+      description="Creates one task per volunteer, linked to the chosen record. Duplicates are skipped automatically."
+      size="md"
+      submitLabel="Create assignments"
+      loading={saving}
+      dirty
+      onSubmit={save}
+      badge={
+        <Badge
+          variant="outline"
+          className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+        >
+          {volunteerIds.length} volunteer{volunteerIds.length === 1 ? "" : "s"}
+        </Badge>
+      }
+    >
+      {volunteerNames.length ? (
+        <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Assigning
+          </p>
+          <p className="mt-0.5 text-sm font-medium">{volunteerNames.join(", ")}</p>
+        </div>
+      ) : null}
+
+      <FormSection title="Link type" description="What kind of record is this crew supporting?">
         <FieldGrid>
           <SelectField
-            label="Type"
-            required
-            value={taskForm.type}
-            onChange={(v) => setTaskForm({ ...taskForm, type: v })}
-            options={taskTypeOptions.options}
+            label="Link type"
+            value={linkType}
+            onChange={(v) => {
+              setLinkType(v);
+              setRefId("");
+              setEventRef("");
+              setErrors({});
+            }}
+            options={LINK_TYPE_OPTIONS}
+          />
+          {linkType === "EVENT" ? (
+            <TextField
+              label="Event name / reference"
+              value={eventRef}
+              onChange={setEventRef}
+              placeholder="e.g. School safety workshop — Govt HS Jayanagar"
+              error={errors.refId}
+              hint="There is no events register yet — the name becomes the record reference."
+            />
+          ) : (
+            <SelectField
+              label="Record"
+              value={refId}
+              onChange={(v) => {
+                setRefId(v);
+                setErrors({});
+              }}
+              options={
+                recordsLoading
+                  ? []
+                  : records.map((r) => ({
+                      value: r.id,
+                      label: r.sub ? `${r.label} · ${r.sub}` : r.label,
+                    }))
+              }
+              placeholder={recordsLoading ? "Loading records…" : "Select a record"}
+              error={errors.refId}
+              disabled={recordsLoading}
+            />
+          )}
+        </FieldGrid>
+      </FormSection>
+
+      <FormSection title="Schedule" description="Defaults to three days out at 09:00.">
+        <FieldGrid>
+          <TextField
+            label="Scheduled date"
+            type="date"
+            value={scheduledDate}
+            onChange={setScheduledDate}
+            min={todayIso()}
           />
           <SelectField
             label="Priority"
-            required
-            value={taskForm.priority}
-            onChange={(v) => setTaskForm({ ...taskForm, priority: v })}
+            value={priority}
+            onChange={setPriority}
             options={PRIORITY_OPTIONS}
           />
+          <TextField
+            label="Location"
+            value={location}
+            onChange={setLocation}
+            placeholder="e.g. Jayanagar, Bengaluru"
+            className="sm:col-span-2"
+          />
         </FieldGrid>
-        <TextField
-          label="Location"
-          value={taskForm.location}
-          onChange={(v) => setTaskForm({ ...taskForm, location: v })}
-          placeholder="Community hall, Sahakar Nagar"
+        <TextareaField
+          label="Notes for the volunteer"
+          value={notes}
+          onChange={setNotes}
+          placeholder="Anything the crew should prepare…"
+          rows={3}
         />
-        <TextField
-          label="Scheduled date"
-          required
-          type="date"
-          value={taskForm.scheduledDate}
-          onChange={(v) => setTaskForm({ ...taskForm, scheduledDate: v })}
-          error={taskErrors.scheduledDate}
-        />
-      </FormSheet>
+      </FormSection>
+    </FormSheet>
+  );
+}
 
-      {/* ------------------------ record attendance sheet ------------------------ */}
-      <FormSheet
-        open={attOpen}
-        onOpenChange={(o) => {
-          if (!o && !savingAtt) setAttOpen(false);
-        }}
-        title="Record attendance"
-        description="One row per volunteer per date — saving the same date again updates that day."
-        submitLabel="Save attendance"
-        onSubmit={saveAtt}
-        loading={savingAtt}
-        dirty={JSON.stringify(attForm) !== JSON.stringify(attInitial)}
-        size="md"
-      >
+/* ═══════════════════════════ TASK FORMSHEET ════════════════════════════ */
+
+function TaskFormSheet({
+  open,
+  onOpenChange,
+  fixedVolunteerId,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  fixedVolunteerId?: string;
+  onDone?: () => void;
+}) {
+  const [vols, setVols] = useState<VolunteerRow[]>([]);
+  const [volunteerId, setVolunteerId] = useState("");
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState("DISTRIBUTION");
+  const [priority, setPriority] = useState("MEDIUM");
+  const [location, setLocation] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [description, setDescription] = useState("");
+  const [errors, setErrors] = useState<RuleErr>({});
+  const [saving, setSaving] = useState(false);
+
+  const taskTypeOptions = useMasters("TASK_TYPE");
+
+  useEffect(() => {
+    if (!open) return;
+    setVolunteerId(fixedVolunteerId ?? "");
+    setTitle("");
+    setType("DISTRIBUTION");
+    setPriority("MEDIUM");
+    setLocation("");
+    setDescription("");
+    setErrors({});
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    setScheduledDate(
+      `${dateValue(tomorrow)}T09:00`
+    );
+    get<VolunteerRow[]>("/api/volunteers")
+      .then((rows) => setVols(Array.isArray(rows) ? rows : []))
+      .catch(() => setVols([]));
+  }, [open]);
+
+  const save = async () => {
+    const errs = collectErrors(
+      ["volunteerId", volunteerId ? null : "Select a volunteer"],
+      ["title", requiredText(title, "Title")],
+      ["scheduledDate", scheduledDate ? null : "Pick a date and time"]
+    );
+    setErrors(errs ?? {});
+    if (errs) return;
+
+    setSaving(true);
+    try {
+      await post("/api/volunteer-tasks", {
+        volunteerId,
+        title: title.trim(),
+        type,
+        priority,
+        location: location.trim() || undefined,
+        scheduledDate,
+        description: description.trim() || undefined,
+      });
+      toast.success("Task assigned");
+      onOpenChange(false);
+      onDone?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create task");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add task"
+      description="Manual task — created from this board (tasks from assignments are marked AUTO)."
+      size="md"
+      submitLabel="Assign task"
+      loading={saving}
+      dirty
+      onSubmit={save}
+    >
+      <FormSection title="Task">
         <FieldGrid>
+          <SelectField
+            label="Volunteer"
+            value={volunteerId}
+            onChange={(v) => {
+              setVolunteerId(v);
+              setErrors((e) => ({ ...e, volunteerId: undefined }));
+            }}
+            options={vols.map((v) => ({
+              value: v.id,
+              label: `${v.user?.name ?? "Volunteer"}${v.assignedArea ? ` — ${v.assignedArea}` : ""}`,
+            }))}
+            placeholder={vols.length ? "Select volunteer" : "Loading volunteers…"}
+            error={errors.volunteerId}
+            disabled={vols.length === 0}
+          />
+          <SelectField
+            label="Task type"
+            value={type}
+            onChange={setType}
+            options={taskTypeOptions.options}
+          />
+          <TextField
+            label="Title"
+            value={title}
+            onChange={(v) => {
+              setTitle(v);
+              setErrors((e) => ({ ...e, title: undefined }));
+            }}
+            placeholder="e.g. Ration kit drive — Ward 12"
+            error={errors.title}
+            className="sm:col-span-2"
+          />
+          <SelectField
+            label="Priority"
+            value={priority}
+            onChange={setPriority}
+            options={PRIORITY_OPTIONS}
+          />
+          <TextField
+            label="Scheduled for"
+            type="datetime-local"
+            value={scheduledDate}
+            onChange={(v) => {
+              setScheduledDate(v);
+              setErrors((e) => ({ ...e, scheduledDate: undefined }));
+            }}
+            error={errors.scheduledDate}
+          />
+          <TextField
+            label="Location"
+            value={location}
+            onChange={setLocation}
+            placeholder="e.g. Community hall, BTM Layout"
+            className="sm:col-span-2"
+          />
+        </FieldGrid>
+        <TextareaField
+          label="Description"
+          value={description}
+          onChange={setDescription}
+          placeholder="What needs doing, materials, contacts…"
+          rows={3}
+        />
+      </FormSection>
+    </FormSheet>
+  );
+}
+
+/* ═══════════════════════ ATTENDANCE FORMSHEET ══════════════════════════ */
+
+function AttendanceFormSheet({
+  open,
+  onOpenChange,
+  fixedVolunteerId,
+  fixedVolunteerName,
+  initial,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  fixedVolunteerId?: string;
+  fixedVolunteerName?: string;
+  initial?: AttendanceRow | null;
+  onDone?: () => void;
+}) {
+  const [vols, setVols] = useState<VolunteerRow[]>([]);
+  const [volunteerId, setVolunteerId] = useState("");
+  const [date, setDate] = useState(todayIso());
+  const [checkIn, setCheckIn] = useState("");
+  const [checkOut, setCheckOut] = useState("");
+  const [hours, setHours] = useState("");
+  const [location, setLocation] = useState("");
+  const [notes, setNotes] = useState("");
+  const [errors, setErrors] = useState<RuleErr>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setVolunteerId(fixedVolunteerId ?? initial?.volunteerId ?? "");
+    setDate(initial ? dateOnly(initial.date) : todayIso());
+    setCheckIn(initial ? timeOnly(initial.checkIn) : "");
+    setCheckOut(initial ? timeOnly(initial.checkOut) : "");
+    setHours(initial?.hours != null ? String(initial.hours) : "");
+    setLocation(initial?.location ?? "");
+    setNotes(initial?.notes ?? "");
+    setErrors({});
+    get<VolunteerRow[]>("/api/volunteers")
+      .then((rows) => setVols(Array.isArray(rows) ? rows : []))
+      .catch(() => setVols([]));
+  }, [open]);
+
+  const save = async () => {
+    const errs = collectErrors(
+      ["volunteerId", volunteerId ? null : "Select a volunteer"],
+      ["date", date ? null : "Pick the day"]
+    );
+    setErrors(errs ?? {});
+    if (errs) return;
+
+    if (hours.trim() !== "") {
+      const h = Number(hours);
+      if (!Number.isFinite(h) || h < 0 || h > 24) {
+        setErrors({ hours: "Hours must be between 0 and 24" });
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = { volunteerId, date };
+      if (checkIn) payload.checkIn = new Date(`${date}T${checkIn}:00`).toISOString();
+      if (checkOut) payload.checkOut = new Date(`${date}T${checkOut}:00`).toISOString();
+      if (hours.trim() !== "") payload.hours = Number(hours);
+      if (location.trim()) payload.location = location.trim();
+      if (notes.trim()) payload.notes = notes.trim();
+
+      await post("/api/volunteer-attendances", payload);
+      toast.success(
+        initial ? "Attendance updated" : "Attendance logged — hours derived from check-in/out when left blank"
+      );
+      onOpenChange(false);
+      onDone?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save attendance");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={initial ? "Edit attendance" : "Log attendance"}
+      description="One entry per volunteer per day — logging the same date again updates it."
+      size="md"
+      submitLabel={initial ? "Save attendance" : "Log day"}
+      loading={saving}
+      dirty
+      onSubmit={save}
+    >
+      <FormSection title="Who & when">
+        <FieldGrid>
+          <SelectField
+            label="Volunteer"
+            value={volunteerId}
+            onChange={(v) => {
+              setVolunteerId(v);
+              setErrors((e) => ({ ...e, volunteerId: undefined }));
+            }}
+            options={
+              fixedVolunteerId && fixedVolunteerName
+                ? [{ value: fixedVolunteerId, label: fixedVolunteerName }]
+                : vols.map((v) => ({
+                    value: v.id,
+                    label: v.user?.name ?? "Volunteer",
+                  }))
+            }
+            placeholder={fixedVolunteerId ? fixedVolunteerName ?? "Volunteer" : "Select volunteer"}
+            error={errors.volunteerId}
+            disabled={!!fixedVolunteerId}
+          />
           <TextField
             label="Date"
-            required
             type="date"
-            value={attForm.date}
-            onChange={(v) => setAttForm({ ...attForm, date: v })}
-            error={attErrors.date}
+            value={date}
+            onChange={(v) => {
+              setDate(v);
+              setErrors((e) => ({ ...e, date: undefined }));
+            }}
+            error={errors.date}
+            max={todayIso()}
           />
-          <TextField
-            label="Hours"
-            type="number"
-            min="0"
-            max="24"
-            step="0.5"
-            value={attForm.hours}
-            onChange={(v) => setAttForm({ ...attForm, hours: v })}
-            placeholder="0–24"
-            error={attErrors.hours}
-          />
-        </FieldGrid>
-        <FieldGrid>
           <TextField
             label="Check-in"
             type="time"
-            value={attForm.checkIn}
-            onChange={(v) => setAttForm({ ...attForm, checkIn: v })}
+            value={checkIn}
+            onChange={setCheckIn}
+            hint="Leave blank if unknown"
           />
           <TextField
             label="Check-out"
             type="time"
-            value={attForm.checkOut}
-            onChange={(v) => setAttForm({ ...attForm, checkOut: v })}
-            error={attErrors.checkOut}
+            value={checkOut}
+            onChange={setCheckOut}
+            hint="Leave blank if unknown"
+          />
+          <TextField
+            label="Hours"
+            type="number"
+            value={hours}
+            onChange={setHours}
+            min="0"
+            max="24"
+            step="0.25"
+            placeholder="e.g. 4.5"
+            error={errors.hours}
+            hint="Auto-computed from check-in/out when left blank"
+          />
+          <TextField
+            label="Location"
+            value={location}
+            onChange={setLocation}
+            placeholder="e.g. Community kitchen, Indiranagar"
           />
         </FieldGrid>
-        <TextField
-          label="Location"
-          value={attForm.location}
-          onChange={(v) => setAttForm({ ...attForm, location: v })}
-          placeholder="Distribution centre, Hebbal"
-        />
         <TextareaField
           label="Notes"
-          value={attForm.notes}
-          onChange={(v) => setAttForm({ ...attForm, notes: v })}
-          placeholder="Optional context for the day"
+          value={notes}
+          onChange={setNotes}
+          placeholder="Anything worth remembering about the day…"
           rows={2}
         />
-      </FormSheet>
-    </div>
+      </FormSection>
+    </FormSheet>
   );
+}
+
+/* ═══════════════════════════ tiny validators ═══════════════════════════ */
+
+function requiredText(v: string, label: string): string | null {
+  return v.trim() ? null : `${label} is required`;
 }

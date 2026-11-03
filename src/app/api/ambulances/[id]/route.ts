@@ -23,6 +23,15 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (!existing) throw new ApiError("Ambulance not found", 404);
 
     const data: Prisma.AmbulanceUpdateInput = {};
+    if (body.code !== undefined) {
+      const code = String(body.code).trim().toUpperCase();
+      if (!code) throw new ApiError("code cannot be empty", 400);
+      if (code !== existing.code) {
+        const clash = await db.ambulance.findUnique({ where: { code } });
+        if (clash) throw new ApiError("Ambulance code already exists", 409);
+      }
+      data.code = code;
+    }
     if (body.type !== undefined) {
       const type = String(body.type).trim().toUpperCase();
       if (!["BLS", "ALS", "PTV", "NEONATAL"].includes(type))

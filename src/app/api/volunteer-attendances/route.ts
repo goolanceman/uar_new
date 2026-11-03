@@ -59,12 +59,21 @@ export async function POST(req: NextRequest) {
     if (Number.isNaN(date.getTime())) throw new ApiError("Date is invalid", 400);
     const day = new Date(date.toISOString().slice(0, 10));
 
-    const hours = body?.hours !== undefined && body.hours !== null ? Number(body.hours) : null;
-    if (hours !== null && (!Number.isFinite(hours) || hours < 0 || hours > 24))
+    const hoursInput =
+      body?.hours !== undefined && body.hours !== null && String(body.hours).trim() !== ""
+        ? Number(body.hours)
+        : null;
+    if (hoursInput !== null && (!Number.isFinite(hoursInput) || hoursInput < 0 || hoursInput > 24))
       throw new ApiError("Hours must be between 0 and 24", 400);
 
     const checkIn = body?.checkIn ? new Date(String(body.checkIn)) : null;
     const checkOut = body?.checkOut ? new Date(String(body.checkOut)) : null;
+
+    // When the admin didn't type hours, derive them from the check-in/out pair.
+    let hours: number | null = hoursInput;
+    if (hours === null && checkIn && checkOut && checkOut.getTime() > checkIn.getTime()) {
+      hours = Math.round(((checkOut.getTime() - checkIn.getTime()) / 3_600_000) * 100) / 100;
+    }
 
     const row = await db.volunteerAttendance.upsert({
       where: { volunteerId_date: { volunteerId, date: day } },

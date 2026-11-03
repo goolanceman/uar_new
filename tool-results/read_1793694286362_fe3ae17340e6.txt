@@ -1,0 +1,1256 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Animal Welfare — Angel Paws (admin), rebuilt on the round-3 design system.
+     5→ *
+     6→ * - Toolbar: debounced search + species/status filters + ViewSwitcher
+     7→ *   (table / grid / list, persisted) + CSV export + "Add animal"
+     8→ * - Create/Edit via FormSheet (lg) with inline validation, dirty tracking
+     9→ *   and an unsaved-changes guard
+    10→ * - Detail Sheet: rescue profile, health flags, pledges and the
+    11→ *   adopt / foster / critical / delete actions
+    12→ * - Adoption flow kept: adopt Dialog with user search + certificate issuance
+    13→ */
+    14→
+    15→import { useCallback, useEffect, useMemo, useState } from "react";
+    16→import {
+    17→  Bird,
+    18→  Cat,
+    19→  Dog,
+    20→  Eye,
+    21→  HeartPulse,
+    22→  MapPin,
+    23→  Milk,
+    24→  MoreHorizontal,
+    25→  PawPrint,
+    26→  Pencil,
+    27→  Plus,
+    28→  Scissors,
+    29→  Search,
+    30→  Syringe,
+    31→  Trash2,
+    32→  UserCheck,
+    33→} from "lucide-react";
+    34→import { toast } from "sonner";
+    35→import { del, get, patch, post } from "@/lib/api-client";
+    36→import { labelOf, useMasters } from "@/hooks/use-masters";
+    37→import { formatINR, formatINRCompact, initials, titleCase } from "@/lib/format";
+    38→import { cn } from "@/lib/utils";
+    39→import { required } from "@/lib/validators";
+    40→import { PageHeader } from "@/components/shared/page-header";
+    41→import { SectionCard } from "@/components/shared/section-card";
+    42→import { StatCard } from "@/components/shared/stat-card";
+    43→import { DataField } from "@/components/shared/data-field";
+    44→import { EmptyState } from "@/components/shared/empty-state";
+    45→import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+    46→import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
+    47→import {
+    48→  PaginationBar,
+    49→  PageSizeSelect,
+    50→  useViewPref,
+    51→  ViewSwitcher,
+    52→  type DataViewMode,
+    53→} from "@/components/shared/view-switcher";
+    54→import {
+    55→  FieldGrid,
+    56→  FormSection,
+    57→  SelectField,
+    58→  SwitchField,
+    59→  TextareaField,
+    60→  TextField,
+    61→} from "@/components/shared/form-fields";
+    62→import { FormSheet } from "@/components/shared/form-sheet";
+    63→import { Button } from "@/components/ui/button";
+    64→import { Input } from "@/components/ui/input";
+    65→import { Skeleton } from "@/components/ui/skeleton";
+    66→import { Badge } from "@/components/ui/badge";
+    67→import {
+    68→  DropdownMenu,
+    69→  DropdownMenuContent,
+    70→  DropdownMenuItem,
+    71→  DropdownMenuSeparator,
+    72→  DropdownMenuTrigger,
+    73→} from "@/components/ui/dropdown-menu";
+    74→import {
+    75→  Dialog,
+    76→  DialogContent,
+    77→  DialogDescription,
+    78→  DialogFooter,
+    79→  DialogHeader,
+    80→  DialogTitle,
+    81→} from "@/components/ui/dialog";
+    82→import {
+    83→  Select,
+    84→  SelectContent,
+    85→  SelectItem,
+    86→  SelectTrigger,
+    87→  SelectValue,
+    88→} from "@/components/ui/select";
+    89→import {
+    90→  Sheet,
+    91→  SheetContent,
+    92→  SheetDescription,
+    93→  SheetHeader,
+    94→  SheetTitle,
+    95→} from "@/components/ui/sheet";
+    96→import {
+    97→  Table,
+    98→  TableBody,
+    99→  TableCell,
+   100→  TableHead,
+   101→  TableHeader,
+   102→  TableRow,
+   103→} from "@/components/ui/table";
+   104→import { Label } from "@/components/ui/label";
+   105→import { Switch } from "@/components/ui/switch";
+   106→
+   107→/* ---------------------------------- types ---------------------------------- */
+   108→
+   109→interface AnimalPledge {
+   110→  id: string;
+   111→  animalId?: string | null;
+   112→  shelterFund?: string | null;
+   113→  donorName: string;
+   114→  kind: string;
+   115→  amount: number;
+   116→  frequency: string;
+   117→  status: string;
+   118→}
+   119→
+   120→interface Animal {
+   121→  id: string;
+   122→  name: string;
+   123→  species: string;
+   124→  breed?: string | null;
+   125→  ageMonths: number;
+   126→  gender: string;
+   127→  story: string;
+   128→  healthStatus?: string | null;
+   129→  vaccinated: boolean;
+   130→  sterilized: boolean;
+   131→  location: string;
+   132→  status: string;
+   133→  monthlyFood: number;
+   134→  adoptedById?: string | null;
+   135→  adoptedByName?: string | null;
+   136→  pledges?: AnimalPledge[];
+   137→}
+   138→
+   139→interface AnimalForm {
+   140→  name: string;
+   141→  species: string;
+   142→  breed: string;
+   143→  ageMonths: string;
+   144→  gender: string;
+   145→  story: string;
+   146→  healthStatus: string;
+   147→  vaccinated: boolean;
+   148→  sterilized: boolean;
+   149→  location: string;
+   150→  monthlyFood: string;
+   151→}
+   152→
+   153→interface UserLite {
+   154→  id: string;
+   155→  name: string;
+   156→  email: string;
+   157→  role: string;
+   158→}
+   159→
+   160→/* ------------------------------- chip styles ------------------------------- */
+   161→
+   162→const ANIMAL_STATUS: Record<string, string> = {
+   163→  AVAILABLE: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+   164→  FOSTERED: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+   165→  ADOPTED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   166→  CRITICAL: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 animate-pulse",
+   167→};
+   168→
+   169→const PLEDGE_STATUS_CLS: Record<string, string> = {
+   170→  ACTIVE: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   171→  COMPLETED: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+   172→  CANCELLED: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+   173→};
+   174→
+   175→const SPECIES_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+   176→  DOG: Dog,
+   177→  CAT: Cat,
+   178→  COW: Milk,
+   179→  BIRD: Bird,
+   180→  OTHER: PawPrint,
+   181→};
+   182→
+   183→const ANIMAL_STATUSES = ["AVAILABLE", "FOSTERED", "ADOPTED", "CRITICAL"];
+   184→
+   185→const EMPTY_FORM: AnimalForm = {
+   186→  name: "",
+   187→  species: "DOG",
+   188→  breed: "",
+   189→  ageMonths: "12",
+   190→  gender: "MALE",
+   191→  story: "",
+   192→  healthStatus: "",
+   193→  vaccinated: false,
+   194→  sterilized: false,
+   195→  location: "",
+   196→  monthlyFood: "",
+   197→};
+   198→
+   199→function ageText(months: number): string {
+   200→  const m = Math.max(0, Math.trunc(Number(months ?? 0)));
+   201→  if (m < 12) return `${m} months`;
+   202→  const y = Math.floor(m / 12);
+   203→  const rest = m % 12;
+   204→  return rest ? `${y}y ${rest}m` : `${y} year${y === 1 ? "" : "s"}`;
+   205→}
+   206→
+   207→function validateAnimalForm(f: AnimalForm): Record<string, string | null> {
+   208→  const age = f.ageMonths.trim() === "" ? NaN : Number(f.ageMonths);
+   209→  const food = f.monthlyFood.trim() === "" ? 0 : Number(f.monthlyFood);
+   210→  return {
+   211→    name: required("Name")(f.name),
+   212→    ageMonths:
+   213→      Number.isFinite(age) && age >= 0 && age <= 600
+   214→        ? null
+   215→        : "Age must be between 0 and 600 months",
+   216→    story: required("Story")(f.story),
+   217→    location: required("Location")(f.location),
+   218→    monthlyFood:
+   219→      Number.isFinite(food) && food >= 0 && food <= 1_000_000
+   220→        ? null
+   221→        : "Enter a valid monthly food amount (₹0 or more)",
+   222→  };
+   223→}
+   224→
+   225→function ViewSkeleton({ view }: { view: DataViewMode }) {
+   226→  if (view === "table") {
+   227→    return (
+   228→      <div className="space-y-2 rounded-xl border bg-card p-4" aria-busy="true">
+   229→        {Array.from({ length: 7 }).map((_, i) => (
+   230→          <Skeleton key={i} className="h-11 w-full" />
+   231→        ))}
+   232→      </div>
+   233→    );
+   234→  }
+   235→  if (view === "list") {
+   236→    return (
+   237→      <div className="space-y-2 rounded-xl border bg-card p-4" aria-busy="true">
+   238→        {Array.from({ length: 8 }).map((_, i) => (
+   239→          <Skeleton key={i} className="h-12 w-full" />
+   240→        ))}
+   241→      </div>
+   242→    );
+   243→  }
+   244→  return (
+   245→    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+   246→      {Array.from({ length: 6 }).map((_, i) => (
+   247→        <Skeleton key={i} className="h-64 rounded-xl" />
+   248→      ))}
+   249→    </div>
+   250→  );
+   251→}
+   252→
+   253→/* ---------------------------------- view ----------------------------------- */
+   254→
+   255→export default function AnimalsView() {
+   256→  const [animals, setAnimals] = useState<Animal[]>([]);
+   257→  const [loading, setLoading] = useState(true);
+   258→  const [saving, setSaving] = useState(false);
+   259→
+   260→  // filters (search debounced into `query`)
+   261→  const [search, setSearch] = useState("");
+   262→  const [query, setQuery] = useState("");
+   263→  const [speciesFilter, setSpeciesFilter] = useState("ALL");
+   264→  const [statusFilter, setStatusFilter] = useState("ALL");
+   265→
+   266→  // view + pagination
+   267→  const [view, setView] = useViewPref("animals", "grid");
+   268→  const [page, setPage] = useState(1);
+   269→  const [pageSize, setPageSize] = useState(10);
+   270→
+   271→  // form sheet
+   272→  const [formOpen, setFormOpen] = useState(false);
+   273→  const [editing, setEditing] = useState<Animal | null>(null);
+   274→  const [form, setForm] = useState<AnimalForm>(EMPTY_FORM);
+   275→  const [snapshot, setSnapshot] = useState(JSON.stringify(EMPTY_FORM));
+   276→  const [confirmDiscard, setConfirmDiscard] = useState(false);
+   277→
+   278→  // detail sheet + confirm
+   279→  const [sheet, setSheet] = useState<Animal | null>(null);
+   280→  const [deleteTarget, setDeleteTarget] = useState<Animal | null>(null);
+   281→
+   282→  /* adopt dialog state */
+   283→  const [adoptTarget, setAdoptTarget] = useState<Animal | null>(null);
+   284→  const [adopterName, setAdopterName] = useState("");
+   285→  const [userQuery, setUserQuery] = useState("");
+   286→  const [userMatches, setUserMatches] = useState<UserLite[]>([]);
+   287→  const [adoptUserId, setAdoptUserId] = useState<string | null>(null);
+   288→  const [searchingUsers, setSearchingUsers] = useState(false);
+   289→  const [adopting, setAdopting] = useState(false);
+   290→
+   291→  const speciesOptions = useMasters("ANIMAL_SPECIES");
+   292→
+   293→  const load = useCallback(async () => {
+   294→    try {
+   295→      const data = await get<Animal[]>("/api/animals");
+   296→      setAnimals(Array.isArray(data) ? data : []);
+   297→    } catch (e) {
+   298→      toast.error(e instanceof Error ? e.message : "Failed to load animals");
+   299→    } finally {
+   300→      setLoading(false);
+   301→    }
+   302→  }, []);
+   303→
+   304→  useEffect(() => {
+   305→    load();
+   306→  }, [load]);
+   307→
+   308→  // debounce search 300ms
+   309→  useEffect(() => {
+   310→    const t = window.setTimeout(() => setQuery(search), 300);
+   311→    return () => window.clearTimeout(t);
+   312→  }, [search]);
+   313→
+   314→  // reset pagination when the result set changes
+   315→  useEffect(() => {
+   316→    setPage(1);
+   317→  }, [query, speciesFilter, statusFilter, pageSize]);
+   318→
+   319→  const filtered = useMemo(() => {
+   320→    const q = query.trim().toLowerCase();
+   321→    return animals.filter((a) => {
+   322→      if (speciesFilter !== "ALL" && a.species !== speciesFilter) return false;
+   323→      if (statusFilter !== "ALL" && a.status !== statusFilter) return false;
+   324→      if (q && !`${a.name}`.toLowerCase().includes(q) && !`${a.location ?? ""}`.toLowerCase().includes(q) && !`${a.breed ?? ""}`.toLowerCase().includes(q))
+   325→        return false;
+   326→      return true;
+   327→    });
+   328→  }, [animals, query, speciesFilter, statusFilter]);
+   329→
+   330→  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+   331→  const safePage = Math.min(page, pages);
+   332→  const paged = useMemo(
+   333→    () => filtered.slice((safePage - 1) * pageSize, safePage * pageSize),
+   334→    [filtered, safePage, pageSize]
+   335→  );
+   336→
+   337→  const counts = useMemo(
+   338→    () => ({
+   339→      total: animals.length,
+   340→      available: animals.filter((a) => a.status === "AVAILABLE").length,
+   341→      adopted: animals.filter((a) => a.status === "ADOPTED").length,
+   342→      critical: animals.filter((a) => a.status === "CRITICAL").length,
+   343→    }),
+   344→    [animals]
+   345→  );
+   346→
+   347→  /* ------------------------------- validation ------------------------------ */
+   348→
+   349→  const errors = useMemo(() => validateAnimalForm(form), [form]);
+   350→  const errorCount = useMemo(() => Object.values(errors).filter(Boolean).length, [errors]);
+   351→  const dirty = JSON.stringify(form) !== snapshot;
+   352→
+   353→  /* ------------------------------ form actions ----------------------------- */
+   354→
+   355→  const handleFormOpenChange = (open: boolean) => {
+   356→    if (!open && dirty) {
+   357→      setConfirmDiscard(true);
+   358→      return;
+   359→    }
+   360→    setFormOpen(false);
+   361→  };
+   362→
+   363→  const openCreate = () => {
+   364→    setEditing(null);
+   365→    const f = { ...EMPTY_FORM, species: speciesOptions.options[0]?.value ?? "DOG" };
+   366→    setForm(f);
+   367→    setSnapshot(JSON.stringify(f));
+   368→    setFormOpen(true);
+   369→  };
+   370→
+   371→  const openEdit = (a: Animal) => {
+   372→    setEditing(a);
+   373→    const f: AnimalForm = {
+   374→      name: a.name ?? "",
+   375→      species: a.species ?? "DOG",
+   376→      breed: a.breed ?? "",
+   377→      ageMonths: String(a.ageMonths ?? 12),
+   378→      gender: a.gender ?? "MALE",
+   379→      story: a.story ?? "",
+   380→      healthStatus: a.healthStatus ?? "",
+   381→      vaccinated: !!a.vaccinated,
+   382→      sterilized: !!a.sterilized,
+   383→      location: a.location ?? "",
+   384→      monthlyFood: String(a.monthlyFood ?? 0),
+   385→    };
+   386→    setForm(f);
+   387→    setSnapshot(JSON.stringify(f));
+   388→    setFormOpen(true);
+   389→  };
+   390→
+   391→  const save = async () => {
+   392→    if (errorCount > 0) {
+   393→      toast.error(`${errorCount} field(s) need attention`);
+   394→      return;
+   395→    }
+   396→    setSaving(true);
+   397→    try {
+   398→      const body = {
+   399→        name: form.name.trim(),
+   400→        species: form.species,
+   401→        breed: form.breed.trim(),
+   402→        ageMonths: Math.trunc(Number(form.ageMonths || 0)),
+   403→        gender: form.gender,
+   404→        story: form.story.trim(),
+   405→        healthStatus: form.healthStatus.trim(),
+   406→        vaccinated: form.vaccinated,
+   407→        sterilized: form.sterilized,
+   408→        location: form.location.trim(),
+   409→        monthlyFood: Number(form.monthlyFood || 0),
+   410→      };
+   411→      if (editing) {
+   412→        await patch(`/api/animals/${editing.id}`, body);
+   413→        toast.success(`${editing.name} updated`);
+   414→      } else {
+   415→        await post("/api/animals", body);
+   416→        toast.success(`${body.name} added to Angel Paws`);
+   417→      }
+   418→      setFormOpen(false);
+   419→      setSheet(null);
+   420→      await load();
+   421→    } catch (e) {
+   422→      toast.error(e instanceof Error ? e.message : "Save failed");
+   423→    } finally {
+   424→      setSaving(false);
+   425→    }
+   426→  };
+   427→
+   428→  const setStatus = async (a: Animal, status: string) => {
+   429→    try {
+   430→      await patch(`/api/animals/${a.id}`, { status });
+   431→      toast.success(`${a.name} marked ${titleCase(status).toLowerCase()}`);
+   432→      setSheet((prev) => (prev && prev.id === a.id ? { ...prev, status } : prev));
+   433→      await load();
+   434→    } catch (e) {
+   435→      toast.error(e instanceof Error ? e.message : "Update failed");
+   436→    }
+   437→  };
+   438→
+   439→  /* ------------------------------ adopt dialog ----------------------------- */
+   440→
+   441→  const openAdopt = (a: Animal) => {
+   442→    setAdoptTarget(a);
+   443→    setAdopterName(a.adoptedByName ?? "");
+   444→    setAdoptUserId(a.adoptedById ?? null);
+   445→    setUserQuery("");
+   446→    setUserMatches([]);
+   447→  };
+   448→
+   449→  const searchUsers = async () => {
+   450→    if (!userQuery.trim()) return;
+   451→    setSearchingUsers(true);
+   452→    try {
+   453→      const rows = await get<UserLite[]>(`/api/users?q=${encodeURIComponent(userQuery.trim())}`);
+   454→      setUserMatches(Array.isArray(rows) ? rows.slice(0, 6) : []);
+   455→    } catch {
+   456→      setUserMatches([]);
+   457→      toast.error("User search unavailable");
+   458→    } finally {
+   459→      setSearchingUsers(false);
+   460→    }
+   461→  };
+   462→
+   463→  const confirmAdopt = async () => {
+   464→    if (!adoptTarget) return;
+   465→    const adopter = adopterName.trim();
+   466→    if (!adopter) {
+   467→      toast.error("Adopter name is required");
+   468→      return;
+   469→    }
+   470→    setAdopting(true);
+   471→    try {
+   472→      await patch(`/api/animals/${adoptTarget.id}`, {
+   473→        status: "ADOPTED",
+   474→        adoptedByName: adopter,
+   475→        adoptedById: adoptUserId ?? undefined,
+   476→      });
+   477→      const res = await post<{ certificate?: { code?: string } }>("/api/certificates", {
+   478→        type: "ANIMAL_ADOPTION",
+   479→        recipientName: adopter,
+   480→        userId: adoptUserId ?? undefined,
+   481→        title: "Animal Adoption Certificate",
+   482→        description: `Adoption of ${adoptTarget.name} (${titleCase(adoptTarget.species)})`,
+   483→        meta: JSON.stringify({ animal: adoptTarget.name, species: adoptTarget.species }),
+   484→      });
+   485→      const code = res?.certificate?.code;
+   486→      if (code) {
+   487→        toast.success(`${adoptTarget.name} adopted by ${adopter} — certificate ${code} issued`, {
+   488→          action: {
+   489→            label: "Open",
+   490→            onClick: () => window.open(`/api/certificates/${code}/html`, "_blank"),
+   491→          },
+   492→        });
+   493→      } else {
+   494→        toast.success(`${adoptTarget.name} adopted by ${adopter}`);
+   495→      }
+   496→      setAdoptTarget(null);
+   497→      setSheet(null);
+   498→      await load();
+   499→    } catch (e) {
+   500→      toast.error(e instanceof Error ? e.message : "Adoption failed");
+   501→    } finally {
+   502→      setAdopting(false);
+   503→    }
+   504→  };
+   505→
+   506→  const remove = async () => {
+   507→    if (!deleteTarget) return;
+   508→    setSaving(true);
+   509→    try {
+   510→      await del(`/api/animals/${deleteTarget.id}`);
+   511→      toast.success(`${deleteTarget.name} removed`);
+   512→      setDeleteTarget(null);
+   513→      setSheet(null);
+   514→      await load();
+   515→    } catch (e) {
+   516→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   517→    } finally {
+   518→      setSaving(false);
+   519→    }
+   520→  };
+   521→
+   522→  /* ------------------------------ actions menu ----------------------------- */
+   523→
+   524→  const RowMenu = ({ a }: { a: Animal }) => (
+   525→    <DropdownMenu>
+   526→      <DropdownMenuTrigger asChild>
+   527→        <Button
+   528→          variant="ghost"
+   529→          size="icon"
+   530→          className="size-11 md:size-8"
+   531→          aria-label={`Actions for ${a.name}`}
+   532→          onClick={(e) => e.stopPropagation()}
+   533→        >
+   534→          <MoreHorizontal className="size-4" />
+   535→        </Button>
+   536→      </DropdownMenuTrigger>
+   537→      <DropdownMenuContent align="end" className="w-52" onClick={(e) => e.stopPropagation()}>
+   538→        <DropdownMenuItem onSelect={() => setSheet(a)}>
+   539→          <Eye className="size-4" /> View details
+   540→        </DropdownMenuItem>
+   541→        <DropdownMenuItem onSelect={() => openEdit(a)}>
+   542→          <Pencil className="size-4" /> Edit
+   543→        </DropdownMenuItem>
+   544→        {a.status !== "ADOPTED" && (
+   545→          <DropdownMenuItem onSelect={() => openAdopt(a)}>
+   546→            <UserCheck className="size-4" /> Mark adopted…
+   547→          </DropdownMenuItem>
+   548→        )}
+   549→        {a.status === "FOSTERED" ? (
+   550→          <DropdownMenuItem onSelect={() => void setStatus(a, "AVAILABLE")}>
+   551→            <PawPrint className="size-4" /> End foster
+   552→          </DropdownMenuItem>
+   553→        ) : (
+   554→          <DropdownMenuItem onSelect={() => void setStatus(a, "FOSTERED")} disabled={a.status === "ADOPTED"}>
+   555→            <PawPrint className="size-4" /> Send to foster
+   556→          </DropdownMenuItem>
+   557→        )}
+   558→        {a.status === "CRITICAL" ? (
+   559→          <DropdownMenuItem onSelect={() => void setStatus(a, "AVAILABLE")}>
+   560→            <HeartPulse className="size-4" /> Mark stable
+   561→          </DropdownMenuItem>
+   562→        ) : (
+   563→          <DropdownMenuItem onSelect={() => void setStatus(a, "CRITICAL")} className="text-red-600 focus:text-red-600 dark:text-red-400">
+   564→            <HeartPulse className="size-4" /> Critical rescue
+   565→          </DropdownMenuItem>
+   566→        )}
+   567→        <DropdownMenuSeparator />
+   568→        <DropdownMenuItem
+   569→          onSelect={() => setDeleteTarget(a)}
+   570→          className="text-red-600 focus:text-red-600 dark:text-red-400"
+   571→        >
+   572→          <Trash2 className="size-4" /> Delete
+   573→        </DropdownMenuItem>
+   574→      </DropdownMenuContent>
+   575→    </DropdownMenu>
+   576→  );
+   577→
+   578→  /* --------------------------------- CSV ----------------------------------- */
+   579→
+   580→  const csvColumns: CsvColumn<Animal>[] = [
+   581→    { header: "Name", value: (a) => a.name },
+   582→    { header: "Species", value: (a) => labelOf(speciesOptions.options, a.species) },
+   583→    { header: "Breed", value: (a) => a.breed ?? "" },
+   584→    { header: "Age (months)", value: (a) => a.ageMonths },
+   585→    { header: "Age", value: (a) => ageText(a.ageMonths) },
+   586→    { header: "Gender", value: (a) => titleCase(a.gender) },
+   587→    { header: "Health status", value: (a) => a.healthStatus ?? "" },
+   588→    { header: "Vaccinated", value: (a) => (a.vaccinated ? "Yes" : "No") },
+   589→    { header: "Sterilized", value: (a) => (a.sterilized ? "Yes" : "No") },
+   590→    { header: "Location", value: (a) => a.location },
+   591→    { header: "Monthly food (INR)", value: (a) => a.monthlyFood },
+   592→    { header: "Status", value: (a) => a.status },
+   593→    { header: "Adopted by", value: (a) => a.adoptedByName ?? "" },
+   594→    { header: "Pledges", value: (a) => (a.pledges ?? []).length },
+   595→  ];
+   596→
+   597→  /* -------------------------------- render --------------------------------- */
+   598→
+   599→  return (
+   600→    <div className="space-y-4 sm:space-y-6">
+   601→      <PageHeader
+   602→        title="Animal Welfare"
+   603→        description="Angel Paws — rescue residents, foster families and adoptions."
+   604→        icon={<PawPrint className="size-5" aria-hidden="true" />}
+   605→        actions={
+   606→          <Button onClick={openCreate} aria-label="Add animal">
+   607→            <Plus className="size-4" aria-hidden="true" /> Add animal
+   608→          </Button>
+   609→        }
+   610→      />
+   611→
+   612→      {/* stats */}
+   613→      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+   614→        <StatCard label="Residents" value={counts.total} accent="lime" icon={<PawPrint className="size-5" aria-hidden="true" />} loading={loading} />
+   615→        <StatCard label="Available" value={counts.available} accent="emerald" icon={<HeartPulse className="size-5" aria-hidden="true" />} loading={loading} />
+   616→        <StatCard label="Adopted" value={counts.adopted} accent="teal" icon={<UserCheck className="size-5" aria-hidden="true" />} loading={loading} />
+   617→        <StatCard label="Critical rescues" value={counts.critical} accent="red" icon={<HeartPulse className="size-5" aria-hidden="true" />} loading={loading} hint="Need urgent care" />
+   618→      </div>
+   619→
+   620→      <SectionCard
+   621→        title="Rescue directory"
+   622→        icon={<PawPrint className="size-4" aria-hidden="true" />}
+   623→        description={loading ? "Loading residents…" : `${filtered.length} of ${animals.length} residents`}
+   624→        bodyClassName="space-y-4"
+   625→        actions={
+   626→          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+   627→            <div className="relative w-full sm:w-48">
+   628→              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+   629→              <Input
+   630→                value={search}
+   631→                onChange={(e) => setSearch(e.target.value)}
+   632→                placeholder="Search name, breed or place…"
+   633→                className="pl-9"
+   634→                aria-label="Search animals"
+   635→              />
+   636→            </div>
+   637→            <Select value={speciesFilter} onValueChange={setSpeciesFilter}>
+   638→              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by species">
+   639→                <SelectValue placeholder="All species" />
+   640→              </SelectTrigger>
+   641→              <SelectContent>
+   642→                <SelectItem value="ALL">All species</SelectItem>
+   643→                {speciesOptions.options.map((o) => (
+   644→                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+   645→                ))}
+   646→              </SelectContent>
+   647→            </Select>
+   648→            <Select value={statusFilter} onValueChange={setStatusFilter}>
+   649→              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by status">
+   650→                <SelectValue placeholder="All statuses" />
+   651→              </SelectTrigger>
+   652→              <SelectContent>
+   653→                <SelectItem value="ALL">All statuses</SelectItem>
+   654→                {ANIMAL_STATUSES.map((s) => (
+   655→                  <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+   656→                ))}
+   657→              </SelectContent>
+   658→            </Select>
+   659→            <ViewSwitcher value={view} onChange={setView} />
+   660→            <ExportMenu columns={csvColumns} rows={filtered} filename="uar-animals" disabled={loading || filtered.length === 0} />
+   661→          </div>
+   662→        }
+   663→      >
+   664→        {loading ? (
+   665→          <ViewSkeleton view={view} />
+   666→        ) : filtered.length === 0 ? (
+   667→          <EmptyState
+   668→            icon={<PawPrint className="size-6" aria-hidden="true" />}
+   669→            title={animals.length === 0 ? "No residents yet" : "No animals match the filters"}
+   670→            hint={
+   671→              animals.length === 0
+   672→                ? "Add rescued animals so donors can sponsor food and medical care."
+   673→                : "Try a different search term, species or status filter."
+   674→            }
+   675→          >
+   676→            {animals.length === 0 ? (
+   677→              <Button size="sm" onClick={openCreate}>
+   678→                <Plus className="size-4" aria-hidden="true" /> Add animal
+   679→              </Button>
+   680→            ) : (
+   681→              <Button
+   682→                size="sm"
+   683→                variant="outline"
+   684→                onClick={() => {
+   685→                  setSearch("");
+   686→                  setQuery("");
+   687→                  setSpeciesFilter("ALL");
+   688→                  setStatusFilter("ALL");
+   689→                }}
+   690→              >
+   691→                Clear filters
+   692→              </Button>
+   693→            )}
+   694→          </EmptyState>
+   695→        ) : view === "table" ? (
+   696→          <>
+   697→            <div className="overflow-x-auto rounded-xl border bg-card">
+   698→              <Table>
+   699→                <TableHeader>
+   700→                  <TableRow className="bg-muted/50 hover:bg-muted/50">
+   701→                    <TableHead>Resident</TableHead>
+   702→                    <TableHead className="hidden lg:table-cell">Age / gender</TableHead>
+   703→                    <TableHead className="hidden xl:table-cell">Health</TableHead>
+   704→                    <TableHead className="hidden md:table-cell">Care flags</TableHead>
+   705→                    <TableHead className="text-right">Food / mo</TableHead>
+   706→                    <TableHead>Status</TableHead>
+   707→                    <TableHead className="w-12 text-right">
+   708→                      <span className="sr-only">Actions</span>
+   709→                    </TableHead>
+   710→                  </TableRow>
+   711→                </TableHeader>
+   712→                <TableBody>
+   713→                  {paged.map((a) => {
+   714→                    const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   715→                    return (
+   716→                      <TableRow
+   717→                        key={a.id}
+   718→                        className="cursor-pointer"
+   719→                        onClick={() => setSheet(a)}
+   720→                        aria-label={`Open details for ${a.name}`}
+   721→                      >
+   722→                        <TableCell>
+   723→                          <div className="flex items-center gap-2.5">
+   724→                            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   725→                              <Icon className="size-4" aria-hidden="true" />
+   726→                            </span>
+   727→                            <div className="min-w-0">
+   728→                              <p className="truncate text-sm font-medium">{a.name}</p>
+   729→                              <p className="truncate text-[11px] text-muted-foreground">
+   730→                                {labelOf(speciesOptions.options, a.species)}
+   731→                                {a.breed ? ` · ${a.breed}` : ""} · {a.location}
+   732→                              </p>
+   733→                            </div>
+   734→                          </div>
+   735→                        </TableCell>
+   736→                        <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">
+   737→                          {ageText(a.ageMonths)} · {a.gender === "FEMALE" ? "♀" : a.gender === "MALE" ? "♂" : "—"}
+   738→                        </TableCell>
+   739→                        <TableCell className="hidden max-w-40 truncate text-sm text-muted-foreground xl:table-cell">
+   740→                          {a.healthStatus || "No issues noted"}
+   741→                        </TableCell>
+   742→                        <TableCell className="hidden md:table-cell">
+   743→                          <div className="flex gap-1">
+   744→                            {a.vaccinated && (
+   745→                              <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" aria-label="Vaccinated">
+   746→                                <Syringe className="size-3" aria-hidden="true" /> Vacc
+   747→                              </Badge>
+   748→                            )}
+   749→                            {a.sterilized && (
+   750→                              <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400" aria-label="Sterilized">
+   751→                                <Scissors className="size-3" aria-hidden="true" /> Ster
+   752→                              </Badge>
+   753→                            )}
+   754→                            {!a.vaccinated && !a.sterilized && <span className="text-xs text-muted-foreground">—</span>}
+   755→                          </div>
+   756→                        </TableCell>
+   757→                        <TableCell className="text-right text-sm font-medium">{formatINR(a.monthlyFood)}</TableCell>
+   758→                        <TableCell>
+   759→                          <Badge variant="outline" className={cn(ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   760→                            {titleCase(a.status)}
+   761→                          </Badge>
+   762→                        </TableCell>
+   763→                        <TableCell className="text-right">
+   764→                          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+   765→                            <RowMenu a={a} />
+   766→                          </div>
+   767→                        </TableCell>
+   768→                      </TableRow>
+   769→                    );
+   770→                  })}
+   771→                </TableBody>
+   772→              </Table>
+   773→            </div>
+   774→            <div className="flex flex-wrap items-center justify-between gap-2">
+   775→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   776→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   777→            </div>
+   778→          </>
+   779→        ) : view === "list" ? (
+   780→          <>
+   781→            <ul className="divide-y rounded-xl border bg-card">
+   782→              {paged.map((a) => {
+   783→                const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   784→                return (
+   785→                  <li key={a.id}>
+   786→                    <button
+   787→                      type="button"
+   788→                      onClick={() => setSheet(a)}
+   789→                      aria-label={`Open details for ${a.name}`}
+   790→                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
+   791→                    >
+   792→                      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   793→                        <Icon className="size-4" aria-hidden="true" />
+   794→                      </span>
+   795→                      <div className="min-w-0 flex-1">
+   796→                        <p className="truncate text-sm font-medium">{a.name}</p>
+   797→                        <p className="truncate text-xs text-muted-foreground">
+   798→                          {labelOf(speciesOptions.options, a.species)}
+   799→                          {a.breed ? ` · ${a.breed}` : ""} · {ageText(a.ageMonths)} · {a.location}
+   800→                        </p>
+   801→                      </div>
+   802→                      <div className="hidden shrink-0 items-center gap-1 sm:flex">
+   803→                        {a.vaccinated && <Syringe className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-label="Vaccinated" />}
+   804→                        {a.sterilized && <Scissors className="size-3.5 text-teal-600 dark:text-teal-400" aria-label="Sterilized" />}
+   805→                      </div>
+   806→                      <span className="hidden shrink-0 text-sm font-medium sm:block">{formatINRCompact(a.monthlyFood)}</span>
+   807→                      <Badge variant="outline" className={cn("shrink-0", ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   808→                        {titleCase(a.status)}
+   809→                      </Badge>
+   810→                      <div onClick={(e) => e.stopPropagation()}>
+   811→                        <RowMenu a={a} />
+   812→                      </div>
+   813→                    </button>
+   814→                  </li>
+   815→                );
+   816→              })}
+   817→            </ul>
+   818→            <div className="flex flex-wrap items-center justify-between gap-2">
+   819→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   820→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   821→            </div>
+   822→          </>
+   823→        ) : (
+   824→          <>
+   825→            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   826→              {paged.map((a) => {
+   827→                const Icon = SPECIES_ICONS[a.species] ?? PawPrint;
+   828→                return (
+   829→                  <button
+   830→                    key={a.id}
+   831→                    type="button"
+   832→                    onClick={() => setSheet(a)}
+   833→                    aria-label={`Open details for ${a.name}`}
+   834→                    className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-lime-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+   835→                  >
+   836→                    <div className="flex items-start gap-3">
+   837→                      <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+   838→                        <Icon className="size-5" aria-hidden="true" />
+   839→                      </span>
+   840→                      <div className="min-w-0 flex-1">
+   841→                        <p className="truncate font-semibold leading-tight">{a.name}</p>
+   842→                        <p className="truncate text-xs text-muted-foreground">
+   843→                          {labelOf(speciesOptions.options, a.species)}
+   844→                          {a.breed ? ` · ${a.breed}` : ""} · {ageText(a.ageMonths)}
+   845→                        </p>
+   846→                      </div>
+   847→                      <Badge variant="outline" className={cn("shrink-0", ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE)}>
+   848→                        {titleCase(a.status)}
+   849→                      </Badge>
+   850→                    </div>
+   851→
+   852→                    <div className="flex flex-wrap gap-1.5">
+   853→                      <Badge variant="outline">{a.gender === "FEMALE" ? "♀ Female" : a.gender === "MALE" ? "♂ Male" : "Unknown"}</Badge>
+   854→                      <Badge
+   855→                        variant="outline"
+   856→                        className={a.vaccinated ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}
+   857→                      >
+   858→                        <Syringe className="size-3" aria-hidden="true" />
+   859→                        {a.vaccinated ? "Vaccinated" : "Not vaccinated"}
+   860→                      </Badge>
+   861→                      <Badge
+   862→                        variant="outline"
+   863→                        className={a.sterilized ? "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400" : "text-muted-foreground"}
+   864→                      >
+   865→                        <Scissors className="size-3" aria-hidden="true" />
+   866→                        {a.sterilized ? "Sterilized" : "Not sterilized"}
+   867→                      </Badge>
+   868→                    </div>
+   869→
+   870→                    <p className="line-clamp-2 text-xs text-muted-foreground">{a.story}</p>
+   871→
+   872→                    <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3 text-xs">
+   873→                      <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
+   874→                        <MapPin className="size-3.5 shrink-0" aria-hidden="true" />
+   875→                        <span className="truncate">{a.location}</span>
+   876→                      </span>
+   877→                      <span className="whitespace-nowrap font-medium">{formatINR(a.monthlyFood)}/mo food</span>
+   878→                    </div>
+   879→                  </button>
+   880→                );
+   881→              })}
+   882→            </div>
+   883→            <div className="flex flex-wrap items-center justify-between gap-2">
+   884→              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="residents" />
+   885→              <PageSizeSelect value={pageSize} onChange={setPageSize} />
+   886→            </div>
+   887→          </>
+   888→        )}
+   889→      </SectionCard>
+   890→
+   891→      {/* ============================== DETAIL SHEET ============================= */}
+   892→      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+   893→        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg">
+   894→          {sheet && (
+   895→            <div className="space-y-5 p-5">
+   896→              <SheetHeader className="p-0 text-left">
+   897→                <SheetTitle className="flex items-center gap-2">
+   898→                  {sheet.name}
+   899→                  <Badge variant="outline" className={cn("ml-auto", ANIMAL_STATUS[sheet.status] ?? "")}>
+   900→                    {titleCase(sheet.status)}
+   901→                  </Badge>
+   902→                </SheetTitle>
+   903→                <SheetDescription>
+   904→                  {labelOf(speciesOptions.options, sheet.species)} · Angel Paws resident
+   905→                </SheetDescription>
+   906→              </SheetHeader>
+   907→
+   908→              <div className="grid grid-cols-2 gap-3">
+   909→                <DataField label="Breed" value={sheet.breed || "—"} />
+   910→                <DataField label="Age" value={ageText(sheet.ageMonths)} />
+   911→                <DataField label="Gender" value={titleCase(sheet.gender)} />
+   912→                <DataField label="Monthly food" value={formatINR(sheet.monthlyFood)} />
+   913→                <DataField label="Location" value={sheet.location} icon={<MapPin className="size-3.5" aria-hidden="true" />} />
+   914→                <DataField label="Health" value={sheet.healthStatus || "No issues noted"} />
+   915→              </div>
+   916→
+   917→              <div className="grid grid-cols-2 gap-3">
+   918→                <div className="flex items-center justify-between gap-2 rounded-lg border p-3">
+   919→                  <Label htmlFor="sheet-vacc" className="text-xs">
+   920→                    Vaccinated
+   921→                  </Label>
+   922→                  <Switch id="sheet-vacc" checked={!!sheet.vaccinated} disabled aria-label="Vaccinated" />
+   923→                </div>
+   924→                <div className="flex items-center justify-between gap-2 rounded-lg border p-3">
+   925→                  <Label htmlFor="sheet-ster" className="text-xs">
+   926→                    Sterilized
+   927→                  </Label>
+   928→                  <Switch id="sheet-ster" checked={!!sheet.sterilized} disabled aria-label="Sterilized" />
+   929→                </div>
+   930→              </div>
+   931→
+   932→              <SectionCard title="Story">
+   933→                <p className="text-sm leading-relaxed text-muted-foreground">{sheet.story}</p>
+   934→              </SectionCard>
+   935→
+   936→              {sheet.adoptedByName ? (
+   937→                <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
+   938→                  <span className="flex size-9 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-400">
+   939→                    <UserCheck className="size-4" aria-hidden="true" />
+   940→                  </span>
+   941→                  <div className="min-w-0">
+   942→                    <p className="text-xs text-muted-foreground">Adopted by</p>
+   943→                    <p className="truncate text-sm font-semibold">{sheet.adoptedByName}</p>
+   944→                  </div>
+   945→                </div>
+   946→              ) : null}
+   947→
+   948→              <SectionCard title={`Pledges (${(sheet.pledges ?? []).length})`}>
+   949→                {(sheet.pledges ?? []).length === 0 ? (
+   950→                  <p className="text-sm text-muted-foreground">No pledges yet — donors can sponsor food, medical care or shelter.</p>
+   951→                ) : (
+   952→                  <ul className="max-h-60 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+   953→                    {(sheet.pledges ?? []).map((pl) => (
+   954→                      <li key={pl.id} className="flex items-center gap-2 rounded-lg border p-2.5 text-sm">
+   955→                        <div className="min-w-0 flex-1">
+   956→                          <p className="truncate font-medium">{pl.donorName}</p>
+   957→                          <p className="text-xs text-muted-foreground">
+   958→                            {titleCase(pl.kind)} · {formatINR(pl.amount)} · {titleCase(pl.frequency)}
+   959→                          </p>
+   960→                        </div>
+   961→                        <Badge variant="outline" className={cn("shrink-0", PLEDGE_STATUS_CLS[pl.status] ?? "")}>
+   962→                          {titleCase(pl.status)}
+   963→                        </Badge>
+   964→                      </li>
+   965→                    ))}
+   966→                  </ul>
+   967→                )}
+   968→              </SectionCard>
+   969→
+   970→              <div className="flex flex-wrap gap-2 border-t pt-4">
+   971→                {sheet.status !== "ADOPTED" && (
+   972→                  <Button variant="outline" size="sm" onClick={() => openAdopt(sheet)}>
+   973→                    <UserCheck className="size-3.5" aria-hidden="true" /> Mark adopted
+   974→                  </Button>
+   975→                )}
+   976→                {sheet.status === "FOSTERED" ? (
+   977→                  <Button
+   978→                    variant="outline"
+   979→                    size="sm"
+   980→                    onClick={() => void setStatus(sheet, "AVAILABLE")}
+   981→                    aria-label={`Return ${sheet.name} from foster care`}
+   982→                  >
+   983→                    End foster
+   984→                  </Button>
+   985→                ) : (
+   986→                  <Button
+   987→                    variant="outline"
+   988→                    size="sm"
+   989→                    disabled={sheet.status === "ADOPTED"}
+   990→                    onClick={() => void setStatus(sheet, "FOSTERED")}
+   991→                    aria-label={`Send ${sheet.name} to foster care`}
+   992→                  >
+   993→                    Foster
+   994→                  </Button>
+   995→                )}
+   996→                {sheet.status === "CRITICAL" ? (
+   997→                  <Button variant="outline" size="sm" onClick={() => void setStatus(sheet, "AVAILABLE")}>
+   998→                    Mark stable
+   999→                  </Button>
+  1000→                ) : (
+  1001→                  <Button
+  1002→                    variant="outline"
+  1003→                    size="sm"
+  1004→                    className="border-red-500/40 text-red-700 hover:bg-red-500/10 dark:text-red-400"
+  1005→                    onClick={() => void setStatus(sheet, "CRITICAL")}
+  1006→                  >
+  1007→                    <HeartPulse className="size-3.5" aria-hidden="true" /> Critical rescue
+  1008→                  </Button>
+  1009→                )}
+  1010→                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+  1011→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+  1012→                </Button>
+  1013→                <Button
+  1014→                  variant="outline"
+  1015→                  size="sm"
+  1016→                  className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+  1017→                  onClick={() => setDeleteTarget(sheet)}
+  1018→                  aria-label={`Delete ${sheet.name}`}
+  1019→                >
+  1020→                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+  1021→                </Button>
+  1022→              </div>
+  1023→            </div>
+  1024→          )}
+  1025→        </SheetContent>
+  1026→      </Sheet>
+  1027→
+  1028→      {/* ============================ ADOPT DIALOG =============================== */}
+  1029→      <Dialog open={!!adoptTarget} onOpenChange={(o) => !o && setAdoptTarget(null)}>
+  1030→        <DialogContent className="sm:max-w-md">
+  1031→          <DialogHeader>
+  1032→            <DialogTitle>Mark {adoptTarget?.name} as adopted</DialogTitle>
+  1033→            <DialogDescription>
+  1034→              Records the adopter and issues an Animal Adoption Certificate.
+  1035→            </DialogDescription>
+  1036→          </DialogHeader>
+  1037→          <div className="grid gap-4">
+  1038→            <div className="grid gap-2">
+  1039→              <Label htmlFor="adopt-name">Adopter name *</Label>
+  1040→              <Input
+  1041→                id="adopt-name"
+  1042→                value={adopterName}
+  1043→                onChange={(e) => setAdopterName(e.target.value)}
+  1044→                placeholder="Ravi Kumar"
+  1045→              />
+  1046→            </div>
+  1047→            <div className="grid gap-2">
+  1048→              <Label htmlFor="adopt-search">Link an existing account (optional)</Label>
+  1049→              <div className="flex gap-2">
+  1050→                <Input
+  1051→                  id="adopt-search"
+  1052→                  value={userQuery}
+  1053→                  onChange={(e) => setUserQuery(e.target.value)}
+  1054→                  placeholder="Search by name or email…"
+  1055→                  onKeyDown={(e) => {
+  1056→                    if (e.key === "Enter") {
+  1057→                      e.preventDefault();
+  1058→                      void searchUsers();
+  1059→                    }
+  1060→                  }}
+  1061→                />
+  1062→                <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" onClick={() => void searchUsers()} aria-label="Search users" disabled={searchingUsers}>
+  1063→                  <Search className="size-4" aria-hidden="true" />
+  1064→                </Button>
+  1065→              </div>
+  1066→              {userMatches.length > 0 && (
+  1067→                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-1 scrollbar-thin">
+  1068→                  {userMatches.map((u) => (
+  1069→                    <li key={u.id}>
+  1070→                      <button
+  1071→                        type="button"
+  1072→                        onClick={() => {
+  1073→                          setAdoptUserId(u.id);
+  1074→                          setAdopterName(u.name);
+  1075→                          setUserMatches([]);
+  1076→                        }}
+  1077→                        className={cn(
+  1078→                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent",
+  1079→                          adoptUserId === u.id && "bg-accent"
+  1080→                        )}
+  1081→                      >
+  1082→                        <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
+  1083→                          {initials(u.name)}
+  1084→                        </span>
+  1085→                        <span className="min-w-0 flex-1 truncate">{u.name}</span>
+  1086→                        <span className="truncate text-xs text-muted-foreground">{u.email}</span>
+  1087→                      </button>
+  1088→                    </li>
+  1089→                  ))}
+  1090→                </ul>
+  1091→              )}
+  1092→              {adoptUserId && (
+  1093→                <p className="text-xs text-muted-foreground">Account linked — the certificate will appear in their portal.</p>
+  1094→              )}
+  1095→            </div>
+  1096→          </div>
+  1097→          <DialogFooter>
+  1098→            <Button variant="outline" onClick={() => setAdoptTarget(null)}>
+  1099→              Cancel
+  1100→            </Button>
+  1101→            <Button onClick={() => void confirmAdopt()} disabled={adopting}>
+  1102→              {adopting ? "Confirming…" : "Confirm adoption"}
+  1103→            </Button>
+  1104→          </DialogFooter>
+  1105→        </DialogContent>
+  1106→      </Dialog>
+  1107→
+  1108→      {/* ============================ CREATE / EDIT ============================= */}
+  1109→      <FormSheet
+  1110→        open={formOpen}
+  1111→        onOpenChange={handleFormOpenChange}
+  1112→        title={editing ? `Edit ${editing.name}` : "Add animal"}
+  1113→        description="Rescue profile shown on the public Angel Paws page."
+  1114→        onSubmit={save}
+  1115→        submitLabel={editing ? "Save changes" : "Add animal"}
+  1116→        loading={saving}
+  1117→        dirty={dirty}
+  1118→        size="lg"
+  1119→        footerExtra={
+  1120→          errorCount > 0 ? (
+  1121→            <span className="font-medium text-destructive">{errorCount} field(s) need attention</span>
+  1122→          ) : null
+  1123→        }
+  1124→      >
+  1125→        <FormSection title="Profile" description="Identity and basic facts about this resident.">
+  1126→          <FieldGrid>
+  1127→            <TextField
+  1128→              label="Name"
+  1129→              required
+  1130→              value={form.name}
+  1131→              onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+  1132→              placeholder="Simba"
+  1133→              error={errors.name}
+  1134→            />
+  1135→            <SelectField
+  1136→              label="Species"
+  1137→              value={form.species}
+  1138→              onChange={(v) => setForm((f) => ({ ...f, species: v }))}
+  1139→              options={speciesOptions.options.length > 0 ? speciesOptions.options : [{ value: "OTHER", label: "Other" }]}
+  1140→              placeholder="Select species"
+  1141→            />
+  1142→          </FieldGrid>
+  1143→          <FieldGrid>
+  1144→            <TextField
+  1145→              label="Breed"
+  1146→              value={form.breed}
+  1147→              onChange={(v) => setForm((f) => ({ ...f, breed: v }))}
+  1148→              placeholder="Indie / mix"
+  1149→            />
+  1150→            <TextField
+  1151→              label="Age (months)"
+  1152→              type="number"
+  1153→              min="0"
+  1154→              value={form.ageMonths}
+  1155→              onChange={(v) => setForm((f) => ({ ...f, ageMonths: v }))}
+  1156→              placeholder="12"
+  1157→              error={errors.ageMonths}
+  1158→            />
+  1159→          </FieldGrid>
+  1160→          <SelectField
+  1161→            label="Gender"
+  1162→            value={form.gender}
+  1163→            onChange={(v) => setForm((f) => ({ ...f, gender: v }))}
+  1164→            options={[
+  1165→              { value: "MALE", label: "Male" },
+  1166→              { value: "FEMALE", label: "Female" },
+  1167→              { value: "UNKNOWN", label: "Unknown" },
+  1168→            ]}
+  1169→          />
+  1170→        </FormSection>
+  1171→
+  1172→        <FormSection title="Health & care" description="Medical flags and the monthly cost of care.">
+  1173→          <TextField
+  1174→            label="Health status"
+  1175→            value={form.healthStatus}
+  1176→            onChange={(v) => setForm((f) => ({ ...f, healthStatus: v }))}
+  1177→            placeholder="Recovering from mange"
+  1178→            hint="Leave blank if there are no issues."
+  1179→          />
+  1180→          <FieldGrid>
+  1181→            <SwitchField
+  1182→              label="Vaccinated"
+  1183→              hint="Rabies and core vaccines"
+  1184→              checked={form.vaccinated}
+  1185→              onChange={(v) => setForm((f) => ({ ...f, vaccinated: v }))}
+  1186→            />
+  1187→            <SwitchField
+  1188→              label="Sterilized"
+  1189→              hint="Spayed or neutered"
+  1190→              checked={form.sterilized}
+  1191→              onChange={(v) => setForm((f) => ({ ...f, sterilized: v }))}
+  1192→            />
+  1193→          </FieldGrid>
+  1194→          <FieldGrid>
+  1195→            <TextField
+  1196→              label="Location"
+  1197→              required
+  1198→              value={form.location}
+  1199→              onChange={(v) => setForm((f) => ({ ...f, location: v }))}
+  1200→              placeholder="UAR shelter, Hebbal"
+  1201→              error={errors.location}
+  1202→            />
+  1203→            <TextField
+  1204→              label="Monthly food cost"
+  1205→              type="number"
+  1206→              min="0"
+  1207→              prefix="₹"
+  1208→              value={form.monthlyFood}
+  1209→              onChange={(v) => setForm((f) => ({ ...f, monthlyFood: v }))}
+  1210→              placeholder="1500"
+  1211→              hint="₹0 if not yet known."
+  1212→              error={errors.monthlyFood}
+  1213→            />
+  1214→          </FieldGrid>
+  1215→        </FormSection>
+  1216→
+  1217→        <FormSection title="Story" description="The rescue journey — shown on the public adoption page.">
+  1218→          <TextareaField
+  1219→            label="Story"
+  1220→            required
+  1221→            rows={4}
+  1222→            value={form.story}
+  1223→            onChange={(v) => setForm((f) => ({ ...f, story: v }))}
+  1224→            placeholder="Rescued from a busy junction with an injured leg…"
+  1225→            error={errors.story}
+  1226→          />
+  1227→        </FormSection>
+  1228→      </FormSheet>
+  1229→
+  1230→      {/* ============================ DELETE CONFIRM ============================ */}
+  1231→      <ConfirmDialog
+  1232→        open={!!deleteTarget}
+  1233→        onOpenChange={(o) => !o && setDeleteTarget(null)}
+  1234→        title={`Remove ${deleteTarget?.name ?? "resident"}?`}
+  1235→        recordName={deleteTarget ? `${deleteTarget.name} · ${labelOf(speciesOptions.options, deleteTarget.species)}` : null}
+  1236→        description="This deletes the rescue profile and its pledge history permanently."
+  1237→        confirmLabel="Delete resident"
+  1238→        loading={saving}
+  1239→        onConfirm={remove}
+  1240→      />
+  1241→
+  1242→      <ConfirmDialog
+  1243→        open={confirmDiscard}
+  1244→        onOpenChange={setConfirmDiscard}
+  1245→        title="Discard unsaved changes?"
+  1246→        description="Your edits to this resident haven't been saved yet. Closing now will lose them."
+  1247→        confirmLabel="Discard"
+  1248→        onConfirm={() => {
+  1249→          setFormOpen(false);
+  1250→          setConfirmDiscard(false);
+  1251→        }}
+  1252→      />
+  1253→    </div>
+  1254→  );
+  1255→}
+  1256→

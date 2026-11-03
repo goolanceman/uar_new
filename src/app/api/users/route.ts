@@ -11,6 +11,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"];
+
 // GET /api/users?q&role&status — admin directory
 export async function GET(req: NextRequest) {
   try {
@@ -71,9 +73,11 @@ export async function POST(req: NextRequest) {
     const role = String(body?.role ?? "DONOR");
     const phone = body?.phone ? String(body.phone).trim() : null;
     const city = body?.city ? String(body.city).trim() : null;
+    const about = body?.about ? String(body.about) : null;
 
     if (!name || !email || !password || !role)
       throw new ApiError("Name, email, password and role are required", 400);
+    if (!ROLES.includes(role)) throw new ApiError("Invalid role", 400);
     if (!/^\S+@\S+\.\S+$/.test(email))
       throw new ApiError("Please enter a valid email address", 400);
     if (password.length < 6)
@@ -93,6 +97,7 @@ export async function POST(req: NextRequest) {
         role,
         phone,
         city,
+        about,
         status: role === "VOLUNTEER" ? "PENDING" : "ACTIVE",
         isActive: role !== "VOLUNTEER",
       },

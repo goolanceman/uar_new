@@ -5,11 +5,14 @@
  *
  * Features per design spec:
  *  - Sticky header + vertically scrollable body inside a fixed height that
- *    adapts to the screen (`height="fill"` → calc(100vh - offset))
+ *    adapts to the screen (`height="fill"` → calc(100vh - offset)); any
+ *    max-h-* class also works and ALWAYS yields an inner scroll area.
  *  - Loading skeleton rows (no layout shift)
  *  - Premium pagination footer: page-size selector, compact numbered
  *    pagination, range counts, first/last buttons
  *  - Empty state hook, row click support, column alignment
+ *  - Columns keyed "actions" with a blank header automatically get a proper
+ *    (screen-reader visible) "Actions" caption so the header is never missing.
  *  - Fully theme-aware (light + dark tokens)
  *
  * Usage:
@@ -109,12 +112,8 @@ export function DataTable<T>({
   itemLabel = "records",
   className,
 }: DataTableProps<T>) {
-  const heightClass =
-    height === "fill"
-      ? { maxHeight: `calc(100vh - ${fillOffset}px)`, minHeight: 240 }
-      : height === "auto"
-        ? undefined
-        : { maxHeight: undefined, className: height };
+  const isFill = height === "fill";
+  const isAuto = height === "auto";
 
   const showPager =
     page !== undefined && pages !== undefined && total !== undefined && onPage;
@@ -138,31 +137,48 @@ export function DataTable<T>({
 
   return (
     <div className={cn("flex min-w-0 flex-col", className)}>
+      {/* Outer card: flex column so the scroll area can always be constrained */}
       <div
         className={cn(
-          "overflow-hidden rounded-xl border bg-card shadow-xs",
-          height !== "auto" && height !== "fill" ? height : ""
+          "flex flex-col overflow-hidden rounded-xl border bg-card shadow-xs",
+          !isAuto && !isFill && height ? height : ""
         )}
-        style={height === "fill" ? heightClass : undefined}
+        style={
+          isFill
+            ? { maxHeight: `calc(100vh - ${fillOffset}px)`, minHeight: 240 }
+            : undefined
+        }
       >
-        <div className="overflow-auto" style={height === "fill" ? { maxHeight: "100%", height: "100%" } : undefined}>
+        {/* Inner scroll region: flex-1 + min-h-0 guarantees scrolling */}
+        <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full caption-bottom border-collapse text-sm">
             <thead className="sticky top-0 z-[1] bg-muted/70 backdrop-blur">
               <tr className="border-b">
-                {columns.map((c) => (
-                  <th
-                    key={c.key}
-                    scope="col"
-                    className={cn(
-                      "h-10 whitespace-nowrap px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
-                      ALIGN[c.align ?? "left"],
-                      c.hideBelow ? HIDE[c.hideBelow] : "",
-                      c.className
-                    )}
-                  >
-                    {c.header}
-                  </th>
-                ))}
+                {columns.map((c) => {
+                  // Auto-caption for blank action columns so the header is
+                  // never missing (visible to screen readers, styled subtly).
+                  const isBlankAction =
+                    c.key === "actions" &&
+                    (c.header === "" || c.header === undefined || c.header === null);
+                  return (
+                    <th
+                      key={c.key}
+                      scope="col"
+                      className={cn(
+                        "h-10 whitespace-nowrap px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+                        isBlankAction ? "text-right" : ALIGN[c.align ?? "left"],
+                        c.hideBelow ? HIDE[c.hideBelow] : "",
+                        c.className
+                      )}
+                    >
+                      {isBlankAction ? (
+                        <span className="text-muted-foreground/70">Actions</span>
+                      ) : (
+                        c.header
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>

@@ -13,6 +13,50 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"];
+const STATUSES = ["ACTIVE", "PENDING", "SUSPENDED"];
+
+const userSelect = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  status: true,
+  isActive: true,
+  phone: true,
+  city: true,
+  pan: true,
+  about: true,
+  avatar: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+// GET /api/users/:id (ADMIN) — full record + recent audit-trail entries for
+// the detail sheet's Activity tab.
+export async function GET(_req: NextRequest, ctx: Ctx) {
+  try {
+    await requireRole("ADMIN");
+    const { id } = await ctx.params;
+
+    const user = await db.user.findUnique({
+      where: { id },
+      select: userSelect,
+    });
+    if (!user) throw new ApiError("User not found", 404);
+
+    const activityLogs = await db.activityLog.findMany({
+      where: { userId: id },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+    });
+
+    return json({ user, activityLogs });
+  } catch (e) {
+    return handleError(e);
+  }
+}
+
 // PATCH /api/users/:id — admin edits a user
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
@@ -30,7 +74,21 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       if (!name) throw new ApiError("Name cannot be empty", 400);
       data.name = name;
     }
-    if (body?.role !== undefined) data.role = String(body.role);
+    if (body?.role !== undefined) {
+      const role = String(body.role);
+      if (!ROLES.includes(role)) throw new ApiError("Invalid role", 400);
+      // Guard: never demote the last remaining ADMIN out of the console.
+      if (target.role === "ADMIN" && role !== "ADMIN") {
+        const adminCount = await db.user.count({ where: { role: "ADMIN" } });
+        if (adminCount <= 1)
+          throw new ApiError("You cannot change the role of the only administrator", 409);
+      }
+      data.role = role;
+    }
+    if (body?.status !== undefined) {
+      const status = String(body.status);
+      if (!STATUSES.includes(status)) throw new ApiError("Invalid status", 400);
+    }
     if (body?.email !== undefined) {
       const email = String(body.email).trim().toLowerCase();
       if (!/^\S+@\S+\.\S+$/.test(email))
@@ -67,11 +125,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if (Object.keys(data).length === 0)
       throw new ApiError("Nothing to update", 400);
 
+    // Guard: an admin cannot lock themselves out of the console.
+    if (data.isActive === false && id === session.userId)
+      throw new ApiError("You cannot deactivate your own account", 409);
+
     const user = await db.user.update({ where: { id }, data });
 
     await logActivity(
       session.name,
-      "USER_UPDATE",
+      data.password ? "PASSWORD_RESET" : "USER_UPDATE",
       "USER",
       `${user.email} → ${Object.keys(data).join(", ")}`,
       session.userId

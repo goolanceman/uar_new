@@ -1,0 +1,702 @@
+  1805→            </span>
+  1806→            <span className="text-muted-foreground">
+  1807→              <strong className="font-semibold text-foreground tabular-nums">
+  1808→                {(padTotals?.sumPads ?? 0).toLocaleString("en-IN")}
+  1809→              </strong>{" "}
+  1810→              pads distributed
+  1811→            </span>
+  1812→            <span className="text-muted-foreground">
+  1813→              <strong className="font-semibold text-foreground tabular-nums">
+  1814→                {(padTotals?.sumGirls ?? 0).toLocaleString("en-IN")}
+  1815→              </strong>{" "}
+  1816→              girls reached
+  1817→            </span>
+  1818→            <span className="text-muted-foreground">
+  1819→              <strong className="font-semibold text-foreground tabular-nums">
+  1820→                {padTotals?.sessions ?? 0}
+  1821→              </strong>{" "}
+  1822→              awareness sessions
+  1823→            </span>
+  1824→            <span className="text-muted-foreground">
+  1825→              <strong className="font-semibold text-foreground tabular-nums">
+  1826→                {padTotals?.schools ?? 0}
+  1827→              </strong>{" "}
+  1828→              schools covered
+  1829→            </span>
+  1830→          </div>
+  1831→
+  1832→          {/* filters bar */}
+  1833→          <div className="flex flex-wrap items-center gap-2">
+  1834→            <div className="relative w-full sm:w-64">
+  1835→              <Search
+  1836→                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+  1837→                aria-hidden="true"
+  1838→              />
+  1839→              <Input
+  1840→                value={padQuery}
+  1841→                onChange={(e) => setPadQuery(e.target.value)}
+  1842→                placeholder="Search school or area…"
+  1843→                aria-label="Search pad drives"
+  1844→                className="pl-8"
+  1845→              />
+  1846→            </div>
+  1847→            <select
+  1848→              aria-label="Filter by awareness session"
+  1849→              value={padSession}
+  1850→              onChange={(e) => {
+  1851→                setPadSession(e.target.value as "all" | "yes" | "no");
+  1852→                setPadPage(1);
+  1853→              }}
+  1854→              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-52")}
+  1855→            >
+  1856→              <option value="all">All drives</option>
+  1857→              <option value="yes">With awareness session</option>
+  1858→              <option value="no">Without session</option>
+  1859→            </select>
+  1860→            <select
+  1861→              aria-label="Filter pad drives by date range"
+  1862→              value={padRange}
+  1863→              onChange={(e) => {
+  1864→                setPadRange(e.target.value as DateRange);
+  1865→                setPadPage(1);
+  1866→              }}
+  1867→              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-44")}
+  1868→            >
+  1869→              {RANGE_OPTIONS.map((o) => (
+  1870→                <option key={o.value} value={o.value}>
+  1871→                  {o.label}
+  1872→                </option>
+  1873→              ))}
+  1874→            </select>
+  1875→            {isAdmin ? (
+  1876→              <select
+  1877→                aria-label="Filter pad drives by volunteer"
+  1878→                value={padVolunteer}
+  1879→                onChange={(e) => {
+  1880→                  setPadVolunteer(e.target.value);
+  1881→                  setPadPage(1);
+  1882→                }}
+  1883→                className={cn(NATIVE_SELECT_CLS, "w-full sm:w-48")}
+  1884→              >
+  1885→                <option value="">All volunteers</option>
+  1886→                {volunteers.map((v) => (
+  1887→                  <option key={v.id} value={v.id}>
+  1888→                    {v.user.name}
+  1889→                  </option>
+  1890→                ))}
+  1891→              </select>
+  1892→            ) : null}
+  1893→            {padFiltersActive ? (
+  1894→              <Button variant="ghost" size="sm" onClick={clearPadFilters}>
+  1895→                <X className="size-3.5" aria-hidden="true" /> Clear
+  1896→              </Button>
+  1897→            ) : null}
+  1898→            <span className="text-xs tabular-nums text-muted-foreground">
+  1899→              {padRows.length} drive{padRows.length === 1 ? "" : "s"}
+  1900→            </span>
+  1901→            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+  1902→              <ExportMenu
+  1903→                columns={padCsv}
+  1904→                rows={padRows}
+  1905→                filename="uar-pad-drives"
+  1906→                disabled={padRows.length === 0}
+  1907→              />
+  1908→              <ViewSwitcher value={viewPad} onChange={setViewPad} />
+  1909→              <Button size="sm" onClick={openPadCreate}>
+  1910→                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1911→              </Button>
+  1912→            </div>
+  1913→          </div>
+  1914→
+  1915→          {viewPad === "table" ? (
+  1916→            <DataTable
+  1917→              columns={padColumns}
+  1918→              rows={pagedPads}
+  1919→              rowKey={(p) => p.id}
+  1920→              loading={loading}
+  1921→              skeletonRows={6}
+  1922→              height="fill"
+  1923→              fillOffset={470}
+  1924→              onRowClick={(p) => setPadDetail(p)}
+  1925→              page={padPageSafe}
+  1926→              pages={padPages}
+  1927→              total={padRows.length}
+  1928→              pageSize={padPageSize}
+  1929→              onPage={setPadPage}
+  1930→              onPageSize={(n) => {
+  1931→                setPadPageSize(n);
+  1932→                setPadPage(1);
+  1933→              }}
+  1934→              itemLabel="pad drives"
+  1935→              empty={
+  1936→                <EmptyState
+  1937→                  icon={<Sparkles className="size-8" aria-hidden="true" />}
+  1938→                  title={
+  1939→                    padFiltersActive
+  1940→                      ? "No pad drives match these filters"
+  1941→                      : "No pad drives recorded yet"
+  1942→                  }
+  1943→                  hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+  1944→                >
+  1945→                  <Button variant="outline" onClick={openPadCreate}>
+  1946→                    <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1947→                  </Button>
+  1948→                </EmptyState>
+  1949→              }
+  1950→            />
+  1951→          ) : loading ? (
+  1952→            viewPad === "grid" ? (
+  1953→              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+  1954→                {[0, 1, 2].map((i) => (
+  1955→                  <Skeleton key={i} className="h-44 rounded-xl" />
+  1956→                ))}
+  1957→              </div>
+  1958→            ) : (
+  1959→              <div className="space-y-2" aria-busy="true">
+  1960→                {[0, 1, 2, 3].map((i) => (
+  1961→                  <Skeleton key={i} className="h-14 rounded-lg" />
+  1962→                ))}
+  1963→              </div>
+  1964→            )
+  1965→          ) : padRows.length === 0 ? (
+  1966→            <EmptyState
+  1967→              icon={<Sparkles className="size-8" aria-hidden="true" />}
+  1968→              title={
+  1969→                padFiltersActive
+  1970→                  ? "No pad drives match these filters"
+  1971→                  : "No pad drives recorded yet"
+  1972→              }
+  1973→              hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+  1974→            >
+  1975→              <Button variant="outline" onClick={openPadCreate}>
+  1976→                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+  1977→              </Button>
+  1978→            </EmptyState>
+  1979→          ) : viewPad === "grid" ? (
+  1980→            <div
+  1981→              className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+  1982→              role="list"
+  1983→              aria-label="Pad drives"
+  1984→            >
+  1985→              {pagedPads.map((p) => (
+  1986→                <div
+  1987→                  key={p.id}
+  1988→                  role="listitem"
+  1989→                  className="flex cursor-pointer flex-col gap-2.5 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+  1990→                  onClick={() => setPadDetail(p)}
+  1991→                >
+  1992→                  <div className="flex items-center gap-2">
+  1993→                    <span
+  1994→                      aria-hidden="true"
+  1995→                      className="flex size-9 items-center justify-center rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400"
+  1996→                    >
+  1997→                      <Sparkles className="size-4" />
+  1998→                    </span>
+  1999→                    <p className="min-w-0 flex-1 truncate font-semibold">{p.area}</p>
+  2000→                    {p.awarenessSession ? (
+  2001→                      <Badge
+  2002→                        variant="outline"
+  2003→                        className="shrink-0 border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+  2004→                      >
+  2005→                        Session
+  2006→                      </Badge>
+  2007→                    ) : null}
+  2008→                  </div>
+  2009→                  <p className="text-xs text-muted-foreground">
+  2010→                    {formatDate(p.distributionDate)} · {p.schoolName || "Community visit"}
+  2011→                  </p>
+  2012→                  <p className="text-sm">
+  2013→                    <strong className="font-semibold">{p.padsDistributed}</strong> pads ·{" "}
+  2014→                    <strong className="font-semibold">{p.girlsCount}</strong> girls
+  2015→                    {p.girlsCount > 0 ? (
+  2016→                      <span className="text-muted-foreground">
+  2017→                        {" "}
+  2018→                        · {(p.padsDistributed / p.girlsCount).toFixed(1)}/girl
+  2019→                      </span>
+  2020→                    ) : null}
+  2021→                  </p>
+  2022→                  <div className="mt-auto flex items-center border-t pt-3">{padRowMenu(p)}</div>
+  2023→                </div>
+  2024→              ))}
+  2025→            </div>
+  2026→          ) : (
+  2027→            <div
+  2028→              className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+  2029→              role="list"
+  2030→              aria-label="Pad drives"
+  2031→            >
+  2032→              {pagedPads.map((p) => (
+  2033→                <div
+  2034→                  key={p.id}
+  2035→                  role="listitem"
+  2036→                  className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent/40"
+  2037→                  onClick={() => setPadDetail(p)}
+  2038→                >
+  2039→                  <span
+  2040→                    aria-hidden="true"
+  2041→                    className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400"
+  2042→                  >
+  2043→                    <Sparkles className="size-4" />
+  2044→                  </span>
+  2045→                  <div className="min-w-0 flex-1">
+  2046→                    <p className="truncate text-sm font-medium">{p.area}</p>
+  2047→                    <p className="truncate text-xs text-muted-foreground">
+  2048→                      {p.schoolName || "Community visit"} · {formatDate(p.distributionDate)}
+  2049→                    </p>
+  2050→                  </div>
+  2051→                  <span className="hidden text-sm tabular-nums sm:block">
+  2052→                    {p.padsDistributed} pads · {p.girlsCount} girls
+  2053→                  </span>
+  2054→                  {padRowMenu(p)}
+  2055→                </div>
+  2056→              ))}
+  2057→            </div>
+  2058→          )}
+  2059→
+  2060→          {/* school registry mini-panel */}
+  2061→          <SectionCard
+  2062→            title="School registry"
+  2063→            description={`${schools.length} school${schools.length === 1 ? "" : "s"} on file — powers the school picker in the drive form.`}
+  2064→            icon={<School className="size-5" aria-hidden="true" />}
+  2065→            actions={
+  2066→              <Button size="sm" variant="outline" onClick={openSchoolCreate}>
+  2067→                <Plus className="size-4" aria-hidden="true" /> Register school
+  2068→              </Button>
+  2069→            }
+  2070→          >
+  2071→            {loading ? (
+  2072→              <div className="space-y-2" aria-busy="true">
+  2073→                {[0, 1, 2].map((i) => (
+  2074→                  <Skeleton key={i} className="h-10 rounded-lg" />
+  2075→                ))}
+  2076→              </div>
+  2077→            ) : schools.length === 0 ? (
+  2078→              <EmptyState
+  2079→                icon={<School className="size-6" aria-hidden="true" />}
+  2080→                title="No schools registered yet"
+  2081→                hint="Register schools here, or just type a new school name in the drive form — it registers automatically."
+  2082→              >
+  2083→                <Button variant="outline" size="sm" onClick={openSchoolCreate}>
+  2084→                  <Plus className="size-4" aria-hidden="true" /> Register school
+  2085→                </Button>
+  2086→              </EmptyState>
+  2087→            ) : (
+  2088→              <ul className="max-h-64 space-y-1.5 overflow-y-auto text-sm scrollbar-thin">
+  2089→                {schools.map((s) => (
+  2090→                  <li
+  2091→                    key={s.id}
+  2092→                    className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5"
+  2093→                  >
+  2094→                    <span className="min-w-0 flex-1 truncate font-medium">
+  2095→                      {s.schoolName}
+  2096→                      {s.city ? (
+  2097→                        <span className="font-normal text-muted-foreground"> — {s.city}</span>
+  2098→                      ) : null}
+  2099→                    </span>
+  2100→                    <Badge variant="outline">{s.visitsCount} visits</Badge>
+  2101→                    <Badge variant="outline">{s.totalGirls} girls</Badge>
+  2102→                    {!s.isActive ? (
+  2103→                      <Badge variant="outline" className="text-muted-foreground">
+  2104→                        Inactive
+  2105→                      </Badge>
+  2106→                    ) : null}
+  2107→                    {s.lastVisited ? (
+  2108→                      <span className="text-xs text-muted-foreground">
+  2109→                        last {formatDate(s.lastVisited)}
+  2110→                      </span>
+  2111→                    ) : null}
+  2112→                  </li>
+  2113→                ))}
+  2114→              </ul>
+  2115→            )}
+  2116→          </SectionCard>
+  2117→        </TabsContent>
+  2118→      </Tabs>
+  2119→
+  2120→      {/* ========================= DISTRIBUTION DETAIL ========================= */}
+  2121→      <DetailSheet
+  2122→        open={!!detail}
+  2123→        onOpenChange={(o) => !o && setDetail(null)}
+  2124→        eyebrow="Distributions"
+  2125→        title={
+  2126→          detail
+  2127→            ? `${(TYPE_META[detail.type] ?? TYPE_META.OTHER).label} · ${formatDate(detail.distributedAt)}`
+  2128→            : ""
+  2129→        }
+  2130→        description={detail?.location ?? undefined}
+  2131→        status={detail ? typeChip(detail.type) : null}
+  2132→        footer={
+  2133→          detail ? (
+  2134→            <>
+  2135→              <p className="text-xs text-muted-foreground">
+  2136→                Recorded {detail.createdAt ? formatDateTime(detail.createdAt) : formatDate(detail.distributedAt)}
+  2137→              </p>
+  2138→              <div className="flex gap-2">
+  2139→                <Button variant="outline" size="sm" onClick={() => openDistEdit(detail)}>
+  2140→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+  2141→                </Button>
+  2142→                <Button
+  2143→                  variant="outline"
+  2144→                  size="sm"
+  2145→                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+  2146→                  onClick={() => setDeleteTarget(detail)}
+  2147→                >
+  2148→                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+  2149→                </Button>
+  2150→              </div>
+  2151→            </>
+  2152→          ) : null
+  2153→        }
+  2154→      >
+  2155→        {detail ? (
+  2156→          <>
+  2157→            <DetailSection title="Overview" description="What moved, for whom, and where.">
+  2158→              <DetailGrid cols={4}>
+  2159→                <DataField
+  2160→                  label="Beneficiary"
+  2161→                  value={detail.beneficiary?.name ?? "Community hand-out"}
+  2162→                />
+  2163→                <DataField label="Quantity" value={detail.quantity.toLocaleString("en-IN")} />
+  2164→                <DataField
+  2165→                  label="Estimated value"
+  2166→                  value={detail.value != null ? formatINR(detail.value) : null}
+  2167→                  mono
+  2168→                />
+  2169→                <DataField label="Location" value={detail.location ?? null} icon={<MapPin className="size-3" aria-hidden="true" />} />
+  2170→                <DataField label="Volunteer" value={detail.volunteer?.user?.name ?? null} />
+  2171→                <DataField label="Campaign" value={detail.campaign?.title ?? null} icon={<Megaphone className="size-3" aria-hidden="true" />} />
+  2172→                <DataField
+  2173→                  label="Distributed on"
+  2174→                  value={formatDateTime(detail.distributedAt)}
+  2175→                  icon={<CalendarDays className="size-3" aria-hidden="true" />}
+  2176→                />
+  2177→                <DataField
+  2178→                  label="Reference"
+  2179→                  value={detail.id}
+  2180→                  mono
+  2181→                  copy
+  2182→                />
+  2183→              </DetailGrid>
+  2184→            </DetailSection>
+  2185→
+  2186→            <DetailSection title="Items" description="Item-level breakdown recorded in the field.">
+  2187→              {parseItems(detail.items).length === 0 ? (
+  2188→                <p className="text-sm text-muted-foreground">
+  2189→                  No item breakdown recorded — quantity {detail.quantity} ×{" "}
+  2190→                  {(TYPE_META[detail.type] ?? TYPE_META.OTHER).label.toLowerCase()}.
+  2191→                </p>
+  2192→              ) : (
+  2193→                <div className="overflow-hidden rounded-lg border">
+  2194→                  <table className="w-full text-sm">
+  2195→                    <thead className="bg-muted/70">
+  2196→                      <tr className="border-b text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+  2197→                        <th scope="col" className="px-3 py-2">Item</th>
+  2198→                        <th scope="col" className="px-3 py-2 text-right">Qty</th>
+  2199→                        <th scope="col" className="px-3 py-2">Unit</th>
+  2200→                      </tr>
+  2201→                    </thead>
+  2202→                    <tbody>
+  2203→                      {parseItems(detail.items).map((i, idx) => (
+  2204→                        <tr key={idx} className="border-b last:border-b-0">
+  2205→                          <td className="px-3 py-2">{String(i?.name ?? i)}</td>
+  2206→                          <td className="px-3 py-2 text-right font-mono tabular-nums">
+  2207→                            {String(i?.qty ?? 1)}
+  2208→                          </td>
+  2209→                          <td className="px-3 py-2 text-muted-foreground">
+  2210→                            {i?.unit ? String(i.unit) : "—"}
+  2211→                          </td>
+  2212→                        </tr>
+  2213→                      ))}
+  2214→                    </tbody>
+  2215→                  </table>
+  2216→                </div>
+  2217→              )}
+  2218→            </DetailSection>
+  2219→
+  2220→            <DetailSection title="Linked records" description="People and campaigns connected to this distribution.">
+  2221→              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+  2222→                <div className="rounded-lg border p-4">
+  2223→                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+  2224→                    Beneficiary
+  2225→                  </p>
+  2226→                  {detail.beneficiary ? (
+  2227→                    <div className="mt-1.5 space-y-1.5">
+  2228→                      <p className="font-medium">{detail.beneficiary.name}</p>
+  2229→                      <div className="flex flex-wrap items-center gap-1.5">
+  2230→                        {urgencyBadge(detail.beneficiary.urgencyLevel)}
+  2231→                        <Badge variant="outline">
+  2232→                          {titleCase(detail.beneficiary.category)}
+  2233→                        </Badge>
+  2234→                      </div>
+  2235→                      <p className="text-xs text-muted-foreground">
+  2236→                        Family of {detail.beneficiary.familyMembers}
+  2237→                        {detail.beneficiary.city ? ` · ${detail.beneficiary.city}` : ""}
+  2238→                      </p>
+  2239→                    </div>
+  2240→                  ) : (
+  2241→                    <p className="mt-1.5 text-sm text-muted-foreground">
+  2242→                      Community hand-out — no individual case linked.
+  2243→                    </p>
+  2244→                  )}
+  2245→                </div>
+  2246→                <div className="rounded-lg border p-4">
+  2247→                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+  2248→                    Volunteer
+  2249→                  </p>
+  2250→                  <p className="mt-1.5 font-medium">
+  2251→                    {detail.volunteer?.user?.name ?? "Not attributed"}
+  2252→                  </p>
+  2253→                  <p className="text-xs text-muted-foreground">
+  2254→                    {detail.volunteer
+  2255→                      ? "Field volunteer on record for this distribution"
+  2256→                      : "Recorded without a volunteer profile"}
+  2257→                  </p>
+  2258→                </div>
+  2259→                <div className="rounded-lg border p-4">
+  2260→                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+  2261→                    Campaign
+  2262→                  </p>
+  2263→                  {detail.campaign ? (
+  2264→                    <div className="mt-1.5 space-y-1.5">
+  2265→                      <p className="font-medium">{detail.campaign.title}</p>
+  2266→                      {detail.campaign.targetAmount ? (
+  2267→                        <>
+  2268→                          <Progress
+  2269→                            value={Math.min(
+  2270→                              100,
+  2271→                              Math.round(
+  2272→                                ((detail.campaign.raisedAmount ?? 0) /
+  2273→                                  detail.campaign.targetAmount) *
+  2274→                                  100
+  2275→                              )
+  2276→                            )}
+  2277→                            className="h-1.5"
+  2278→                            aria-label="Campaign progress"
+  2279→                          />
+  2280→                          <p className="text-xs text-muted-foreground">
+  2281→                            {formatINRCompact(detail.campaign.raisedAmount ?? 0)} of{" "}
+  2282→                            {formatINRCompact(detail.campaign.targetAmount)} ·{" "}
+  2283→                            {titleCase(detail.campaign.status ?? "")}
+  2284→                          </p>
+  2285→                        </>
+  2286→                      ) : (
+  2287→                        <p className="text-xs text-muted-foreground">
+  2288→                          {titleCase(detail.campaign.status ?? "")}
+  2289→                        </p>
+  2290→                      )}
+  2291→                    </div>
+  2292→                  ) : (
+  2293→                    <p className="mt-1.5 text-sm text-muted-foreground">
+  2294→                      Not linked to a campaign.
+  2295→                    </p>
+  2296→                  )}
+  2297→                </div>
+  2298→              </div>
+  2299→            </DetailSection>
+  2300→
+  2301→            <DetailSection
+  2302→              title="Impact estimate"
+  2303→              description="Rough field math — assumptions are indicative, not audited figures."
+  2304→            >
+  2305→              <div className="space-y-2">
+  2306→                {(
+  2307→                  IMPACT_PER_TYPE[detail.type] ??
+  2308→                  IMPACT_PER_TYPE.OTHER
+  2309→                )(detail.quantity)
+  2310→                  .split("—")
+  2311→                  .map((line, i) => (
+  2312→                    <p
+  2313→                      key={i}
+  2314→                      className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm"
+  2315→                    >
+  2316→                      <Calculator
+  2317→                        className="mt-0.5 size-3.5 shrink-0 text-primary"
+  2318→                        aria-hidden="true"
+  2319→                      />
+  2320→                      {line.trim()}
+  2321→                    </p>
+  2322→                  ))}
+  2323→                {detail.value != null ? (
+  2324→                  <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+  2325→                    <Wallet className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+  2326→                    Estimated market value {formatINR(detail.value)}
+  2327→                    {detail.type === "FOOD"
+  2328→                      ? ` ≈ ${Math.floor(detail.value / RATION_KIT_COST)} ration kits at ₹${RATION_KIT_COST}/kit`
+  2329→                      : ""}
+  2330→                  </p>
+  2331→                ) : null}
+  2332→              </div>
+  2333→            </DetailSection>
+  2334→
+  2335→            {detail.notes ? (
+  2336→              <DetailSection title="Notes">
+  2337→                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+  2338→                  {detail.notes}
+  2339→                </p>
+  2340→              </DetailSection>
+  2341→            ) : null}
+  2342→          </>
+  2343→        ) : null}
+  2344→      </DetailSheet>
+  2345→
+  2346→      {/* =========================== PAD DRIVE DETAIL =========================== */}
+  2347→      <DetailSheet
+  2348→        open={!!padDetail}
+  2349→        onOpenChange={(o) => !o && setPadDetail(null)}
+  2350→        eyebrow="Sanitary pads programme"
+  2351→        title={
+  2352→          padDetail
+  2353→            ? `${padDetail.schoolName || padDetail.area} · ${formatDate(padDetail.distributionDate)}`
+  2354→            : ""
+  2355→        }
+  2356→        description={padDetail ? `${padDetail.area}${padDetail.schoolName ? ` · ${padDetail.schoolName}` : ""}` : undefined}
+  2357→        status={
+  2358→          padDetail?.awarenessSession ? (
+  2359→            <Badge
+  2360→              variant="outline"
+  2361→              className="border-teal-500/30 bg-teal-500/10 font-medium text-teal-700 dark:text-teal-400"
+  2362→            >
+  2363→              Awareness session
+  2364→            </Badge>
+  2365→          ) : null
+  2366→        }
+  2367→        footer={
+  2368→          padDetail ? (
+  2369→            <>
+  2370→              <p className="text-xs text-muted-foreground">
+  2371→                Drive date {formatDate(padDetail.distributionDate)}
+  2372→              </p>
+  2373→              <div className="flex gap-2">
+  2374→                <Button variant="outline" size="sm" onClick={() => openPadEdit(padDetail)}>
+  2375→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+  2376→                </Button>
+  2377→                <Button
+  2378→                  variant="outline"
+  2379→                  size="sm"
+  2380→                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+  2381→                  onClick={() => setDeletePad(padDetail)}
+  2382→                >
+  2383→                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+  2384→                </Button>
+  2385→              </div>
+  2386→            </>
+  2387→          ) : null
+  2388→        }
+  2389→      >
+  2390→        {padDetail ? (
+  2391→          <>
+  2392→            <DetailSection title="Overview" description="School or community drive details.">
+  2393→              <DetailGrid cols={4}>
+  2394→                <DataField label="School" value={padDetail.schoolName ?? "Community visit"} icon={<School className="size-3" aria-hidden="true" />} />
+  2395→                <DataField label="Area" value={padDetail.area} icon={<MapPin className="size-3" aria-hidden="true" />} />
+  2396→                <DataField
+  2397→                  label="Drive date"
+  2398→                  value={formatDate(padDetail.distributionDate)}
+  2399→                  icon={<CalendarDays className="size-3" aria-hidden="true" />}
+  2400→                />
+  2401→                <DataField
+  2402→                  label="Volunteer"
+  2403→                  value={padDetail.volunteer?.name ?? padDetail.volunteerName ?? null}
+  2404→                />
+  2405→                <DataField
+  2406→                  label="Girls reached"
+  2407→                  value={padDetail.girlsCount.toLocaleString("en-IN")}
+  2408→                />
+  2409→                <DataField
+  2410→                  label="Pads distributed"
+  2411→                  value={padDetail.padsDistributed.toLocaleString("en-IN")}
+  2412→                />
+  2413→                <DataField
+  2414→                  label="Pads per girl"
+  2415→                  value={
+  2416→                    padDetail.girlsCount > 0
+  2417→                      ? (Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)
+  2418→                      : null
+  2419→                  }
+  2420→                  mono
+  2421→                />
+  2422→                <DataField
+  2423→                  label="Session attendees"
+  2424→                  value={
+  2425→                    padDetail.awarenessSession
+  2426→                      ? padDetail.sessionAttendees != null
+  2427→                        ? padDetail.sessionAttendees.toLocaleString("en-IN")
+  2428→                        : "Held — count not recorded"
+  2429→                      : null
+  2430→                  }
+  2431→                />
+  2432→              </DetailGrid>
+  2433→            </DetailSection>
+  2434→
+  2435→            <DetailSection
+  2436→              title="Impact estimate"
+  2437→              description="Protection math based on 18 pads per girl-month."
+  2438→            >
+  2439→              <div className="space-y-2">
+  2440→                <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+  2441→                  <Calculator className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+  2442→                  {padDetail.padsDistributed.toLocaleString("en-IN")} pads ≈{" "}
+  2443→                  {Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH).toLocaleString("en-IN")}{" "}
+  2444→                  girl-month{Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH) === 1 ? "" : "s"} of protection
+  2445→                  {padDetail.girlsCount > 0
+  2446→                    ? ` — about ${(Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)} months per girl reached`
+  2447→                    : ""}
+  2448→                </p>
+  2449→                {padDetail.awarenessSession ? (
+  2450→                  <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+  2451→                    <Users className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+  2452→                    Menstrual-health awareness session delivered
+  2453→                    {padDetail.sessionAttendees != null
+  2454→                      ? ` to ${padDetail.sessionAttendees.toLocaleString("en-IN")} attendee${padDetail.sessionAttendees === 1 ? "" : "s"}`
+  2455→                      : ""}
+  2456→                    .
+  2457→                  </p>
+  2458→                ) : null}
+  2459→              </div>
+  2460→            </DetailSection>
+  2461→
+  2462→            {padDetail.notes ? (
+  2463→              <DetailSection title="Notes">
+  2464→                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+  2465→                  {padDetail.notes}
+  2466→                </p>
+  2467→              </DetailSection>
+  2468→            ) : null}
+  2469→          </>
+  2470→        ) : null}
+  2471→      </DetailSheet>
+  2472→
+  2473→      {/* ======================= RECORD DISTRIBUTION (FormSheet) ====================== */}
+  2474→      <FormSheet
+  2475→        open={distOpen}
+  2476→        onOpenChange={setDistOpen}
+  2477→        title={editingDist ? "Edit distribution" : "Record distribution"}
+  2478→        description={
+  2479→          editingDist
+  2480→            ? "Update the field record — changes apply immediately."
+  2481→            : "Log what was distributed, to whom, by whom, and what it was worth."
+  2482→        }
+  2483→        badge={editingDist ? <Badge variant="outline">Editing</Badge> : null}
+  2484→        onSubmit={saveDist}
+  2485→        submitLabel={editingDist ? "Save changes" : "Record distribution"}
+  2486→        loading={savingDist}
+  2487→        dirty={distDirty}
+  2488→        size="full"
+  2489→      >
+  2490→        {/* 1 — What & for whom */}
+  2491→        <FormSection title="What & for whom" description="Type, beneficiary and quantity.">
+  2492→          <FieldGrid>
+  2493→            <SelectField
+  2494→              label="Type"
+  2495→              required
+  2496→              value={distForm.type}
+  2497→              onChange={(v) => setDistForm((f) => ({ ...f, type: v }))}
+  2498→              options={DISTRIBUTION_TYPES.map((t) => ({
+  2499→                value: t,
+  2500→                label: (TYPE_META[t] ?? TYPE_META.OTHER).label,
+  2501→              }))}
+  2502→            />
+  2503→            <TextField
+  2504→              label="Quantity (units / kits)"
+
+[showing lines 1805-2504 of 3055; use offset=2505 with limit to continue reading]

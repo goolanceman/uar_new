@@ -40,13 +40,14 @@ function pickCongestion(): string {
   return "GRIDLOCK";
 }
 
-// GET /api/missions?status=&q= (auth) — latest 50
+// GET /api/missions?status=&q=&ambulanceId=&limit= (auth) — newest first
 export async function GET(req: Request) {
   try {
     await requireAuth();
     const sp = new URL(req.url).searchParams;
     const status = sp.get("status") || undefined;
     const q = sp.get("q")?.trim() || undefined;
+    const limit = Math.min(500, Math.max(1, Math.trunc(Number(sp.get("limit")) || 200)));
 
     const where: Prisma.MissionWhereInput = {};
     const ambulanceId = sp.get("ambulanceId");
@@ -54,6 +55,7 @@ export async function GET(req: Request) {
     if (status) where.status = status;
     if (q)
       where.OR = [
+        { requestRef: { contains: q } },
         { patientName: { contains: q } },
         { pickup: { contains: q } },
       ];
@@ -61,7 +63,7 @@ export async function GET(req: Request) {
     const missions = await db.mission.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 50,
+      take: limit,
       include: {
         ambulance: { select: { code: true, type: true, driverName: true } },
       },

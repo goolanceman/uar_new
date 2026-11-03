@@ -34,6 +34,7 @@ import VolunteerScan from "./volunteer/scan";
 import VolunteerInventory from "./volunteer/inventory";
 import VolunteerProfileView from "./volunteer/profile";
 import BeneficiaryHub from "./beneficiary/hub";
+import { UserAnalyticsView } from "@/components/shared/user-analytics-view";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** Canonical Volunteer shape (subset) returned by GET /api/volunteers/me */
@@ -63,7 +64,13 @@ const DONOR_NAV: PortalNavItem[] = [
 function DonorPortal({ user }: { user: SessionUser }) {
   const { segments } = useRoute();
   const view = segments[1] ?? "overview";
-  const viewKey = DONOR_NAV.some((n) => n.key === view) ? view : "overview";
+  // "analytics" is a dropdown-only destination (My analytics).
+  const viewKey =
+    view === "analytics"
+      ? "analytics"
+      : DONOR_NAV.some((n) => n.key === view)
+        ? view
+        : "overview";
 
   return (
     <PortalLayout
@@ -71,6 +78,7 @@ function DonorPortal({ user }: { user: SessionUser }) {
       nav={DONOR_NAV}
       active={viewKey}
       onNavigate={(key) => navigate(`/donor/${key}`)}
+      onNavigateExtra={() => navigate("/donor/analytics")}
       accent="emerald"
     >
       {viewKey === "overview" && <DonorOverview user={user} />}
@@ -79,6 +87,7 @@ function DonorPortal({ user }: { user: SessionUser }) {
       {viewKey === "animals" && <DonorAnimals user={user} />}
       {viewKey === "receipts" && <DonorReceipts user={user} />}
       {viewKey === "profile" && <DonorProfile user={user} />}
+      {viewKey === "analytics" && <UserAnalyticsView user={user} />}
     </PortalLayout>
   );
 }
@@ -149,9 +158,13 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
 
   const nav = gated ? VOLUNTEER_GATED_NAV : VOLUNTEER_ACTIVE_NAV;
   const requested = segments[1] ?? "";
-  const viewKey = nav.some((n) => n.key === requested)
-    ? requested
-    : nav[0].key;
+  // "analytics" is a dropdown-only destination — available even while gated.
+  const viewKey =
+    requested === "analytics"
+      ? "analytics"
+      : nav.some((n) => n.key === requested)
+        ? requested
+        : nav[0].key;
 
   return (
     <PortalLayout
@@ -159,6 +172,7 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
       nav={nav}
       active={viewKey}
       onNavigate={(key) => navigate(`/volunteer/${key}`)}
+      onNavigateExtra={() => navigate("/volunteer/analytics")}
       accent="teal"
     >
       {gated && loaded && (
@@ -213,6 +227,8 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
           )}
         </>
       )}
+
+      {viewKey === "analytics" && <UserAnalyticsView user={user} />}
     </PortalLayout>
   );
 }
@@ -231,12 +247,30 @@ export default function PortalRouter({ user }: { user: SessionUser }) {
 
   if (seg === "donor") return <DonorPortal user={user} />;
   if (seg === "volunteer") return <VolunteerPortal user={user} />;
+
+  // Beneficiary hub — with a dropdown-only "My analytics" destination.
+  const view = segments[1] ?? "help";
+  if (view === "analytics") {
+    return (
+      <PortalLayout
+        user={user}
+        nav={BENEFICIARY_NAV}
+        active="analytics"
+        onNavigate={() => navigate("/beneficiary/help")}
+        onNavigateExtra={() => navigate("/beneficiary/analytics")}
+        accent="pink"
+      >
+        <UserAnalyticsView user={user} />
+      </PortalLayout>
+    );
+  }
   return (
     <PortalLayout
       user={user}
       nav={BENEFICIARY_NAV}
       active="help"
       onNavigate={() => navigate("/beneficiary/help")}
+      onNavigateExtra={() => navigate("/beneficiary/analytics")}
       accent="pink"
     >
       <BeneficiaryHub user={user} />

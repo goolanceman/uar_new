@@ -145,6 +145,8 @@ export async function POST(req: NextRequest) {
         availability,
         motivation,
         status: "PENDING",
+        // Persist temp credentials so admins can reveal them at approval time.
+        ...(tempCreds ? { tempCreds: JSON.stringify(tempCreds) } : {}),
       },
     });
 
