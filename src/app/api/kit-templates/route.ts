@@ -38,12 +38,21 @@ export async function POST(req: Request) {
 
     const costPerUnit = Number(body.costPerUnit ?? 0) || 0;
 
+    const KINDS = ["RATION","FOOD","EDUCATION","MEDICAL","HYGIENE","CLOTHING","EMERGENCY","CUSTOM"];
+    const kindRaw = body.kind ? String(body.kind).toUpperCase() : "RATION";
+    if (!KINDS.includes(kindRaw)) throw new ApiError("Invalid kit kind", 400);
+    const codePrefix = body.codePrefix ? String(body.codePrefix).trim().toUpperCase() : null;
+
     const template = await db.kitTemplate.create({
       data: {
         name,
+        kind: kindRaw,
+        codePrefix,
         description: body.description ? String(body.description) : null,
+        image: body.image ? String(body.image).trim() : null,
         items: JSON.stringify(items),
         costPerUnit,
+        status: body.status === "RETIRED" ? "RETIRED" : "ACTIVE",
       },
     });
 

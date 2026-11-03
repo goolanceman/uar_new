@@ -15,7 +15,11 @@ export async function GET(req: Request) {
     );
 
     const events = await db.corridorEvent.findMany({
-      where: missionId ? { missionId } : undefined,
+      where: {
+        ...(missionId ? { missionId } : {}),
+        ...(sp.get("method") ? { method: sp.get("method")! } : {}),
+        ...(sp.get("congestion") ? { congestion: sp.get("congestion")! } : {}),
+      },
       orderBy: { createdAt: "desc" },
       take: limit,
       include: { mission: { select: { requestRef: true } } },

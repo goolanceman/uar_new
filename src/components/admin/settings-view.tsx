@@ -2,15 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  BarChart3,
   Bot,
   Building2,
   CheckCircle2,
   Coins,
   Eye,
   EyeOff,
+  HardDrive,
   Languages,
   Loader2,
   Mail,
+  MapPin,
   MessageSquare,
   ReceiptText,
   RefreshCw,
@@ -18,6 +21,8 @@ import {
   Save,
   ScrollText,
   Send,
+  ShieldCheck,
+  Webhook,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -44,6 +49,7 @@ import { cn } from "@/lib/utils";
 /* --------------------------------- types ---------------------------------- */
 
 type SettingsMap = Record<string, string>;
+type TestChannel = "email" | "sms" | "whatsapp" | "gateway";
 
 interface TestResult {
   state: "running" | "ok" | "error";
@@ -67,6 +73,10 @@ const DEFAULTS: SettingsMap = {
   "org.vision": "To scale our service model to serve all of India.",
   "finance.upiId": "",
   "finance.razorpayKeyId": "",
+  "finance.gatewayProvider": "RAZORPAY",
+  "finance.gatewayKeySecret": "",
+  "finance.gatewayWebhookSecret": "",
+  "finance.gatewayTestMode": "true",
   "finance.gatewayEnabled": "false",
   "finance.currency": "INR",
   "notify.email.enabled": "false",
@@ -75,12 +85,32 @@ const DEFAULTS: SettingsMap = {
   "notify.email.from": "",
   "notify.email.fromName": "United Angel Reach",
   "notify.email.secure": "false",
+  "notify.email.username": "",
+  "notify.email.password": "",
+  "notify.email.replyTo": "",
   "notify.sms.enabled": "false",
   "notify.sms.provider": "TWILIO",
   "notify.sms.senderId": "",
   "notify.sms.endpoint": "",
+  "notify.sms.apiKey": "",
+  "notify.sms.templateId": "",
   "notify.whatsapp.enabled": "false",
   "notify.whatsapp.number": "",
+  "storage.provider": "S3",
+  "storage.bucket": "",
+  "storage.region": "",
+  "storage.accessKey": "",
+  "storage.cdnBase": "",
+  "webhooks.url": "",
+  "webhooks.events": "",
+  "webhooks.secret": "",
+  "analytics.ga4Id": "",
+  "analytics.metaPixel": "",
+  "captcha.provider": "NONE",
+  "captcha.siteKey": "",
+  "captcha.secretKey": "",
+  "maps.provider": "GOOGLE",
+  "maps.apiKey": "",
   "logs.enabled": "true",
   "logs.level": "INFO",
   "logs.retentionDays": "90",
@@ -110,6 +140,31 @@ function normalize(raw: unknown): SettingsMap {
   return {};
 }
 
+/* ------------------------------ secret handling ----------------------------- */
+
+/**
+ * Keys rendered as password inputs. Rule: a key is secret when its last
+ * segment ends with Secret / Password / Key / Token — plus the Razorpay key
+ * ID which UAR treats as a credential. captcha.siteKey is public by design.
+ */
+const SECRET_OVERRIDES = new Set<string>(["finance.razorpayKeyId"]);
+const PUBLIC_KEY_NAMES = new Set<string>(["captcha.siteKey"]);
+
+function isSecretKey(key: string): boolean {
+  if (SECRET_OVERRIDES.has(key)) return true;
+  if (PUBLIC_KEY_NAMES.has(key)) return false;
+  const last = key.split(".").pop() ?? "";
+  return /(secret|password|key|token)$/i.test(last);
+}
+
+/** Webhook event chips (stored comma-separated in webhooks.events). */
+const WEBHOOK_EVENTS = [
+  "payment.captured",
+  "payment.failed",
+  "refund.processed",
+  "receipt.issued",
+];
+
 const TIMEZONES = [
   { value: "Asia/Kolkata", label: "Asia/Kolkata (IST)" },
   { value: "Asia/Dubai", label: "Asia/Dubai" },
@@ -126,6 +181,32 @@ const LANGUAGES = [
 ];
 
 const SMS_PROVIDERS = ["Twilio", "MSG91", "Gupshup", "Other"];
+
+const GATEWAY_PROVIDERS = [
+  { value: "RAZORPAY", label: "Razorpay" },
+  { value: "CASHFREE", label: "Cashfree" },
+  { value: "PAYU", label: "PayU" },
+  { value: "STRIPE", label: "Stripe" },
+];
+
+const STORAGE_PROVIDERS = [
+  { value: "S3", label: "S3 — Amazon S3" },
+  { value: "R2", label: "R2 — Cloudflare R2" },
+  { value: "SPACES", label: "Spaces — DigitalOcean" },
+  { value: "LOCAL", label: "Local disk" },
+];
+
+const CAPTCHA_PROVIDERS = [
+  { value: "NONE", label: "None" },
+  { value: "RECAPTCHA", label: "reCAPTCHA" },
+  { value: "HCAPTCHA", label: "hCaptcha" },
+  { value: "TURNSTILE", label: "Cloudflare Turnstile" },
+];
+
+const MAP_PROVIDERS = [
+  { value: "GOOGLE", label: "Google Maps" },
+  { value: "MAPMYINDIA", label: "MapmyIndia" },
+];
 
 /* ------------------------------ small helpers ------------------------------ */
 
@@ -175,6 +256,71 @@ function SwitchRow({
   );
 }
 
+/**
+ * Password-style field for secret settings. Shows a masked input with a
+ * "configured" tick when a value is already saved; the input itself stays
+ * empty until the admin types a replacement (PATCH only sends typed values).
+ */
+function SecretField({
+  id,
+  label,
+  hint,
+  configured,
+  placeholder,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  configured: boolean;
+  placeholder?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <Field
+      id={id}
+      label={label}
+      hint={configured ? "Configured — leave blank to keep the saved value." : hint}
+    >
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Input
+            id={id}
+            type={show ? "text" : "password"}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={configured ? "••••••••" : placeholder ?? "Not set"}
+            className="pr-9 font-mono"
+            autoComplete="new-password"
+            aria-label={`${label}${configured ? " (configured)" : ""}`}
+          />
+          {configured && (
+            <span
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-600 dark:text-emerald-400"
+              title="Configured"
+              aria-hidden="true"
+            >
+              <CheckCircle2 className="size-4" />
+            </span>
+          )}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={() => setShow((s) => !s)}
+          aria-label={show ? `Hide ${label}` : `Show ${label}`}
+        >
+          {show ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
 function TestChip({ result }: { result: TestResult | undefined }) {
   if (!result) return null;
   if (result.state === "running") {
@@ -204,10 +350,10 @@ function TestChip({ result }: { result: TestResult | undefined }) {
 export default function SettingsView() {
   const [saved, setSaved] = useState<SettingsMap>({ ...DEFAULTS });
   const [values, setValues] = useState<SettingsMap>({ ...DEFAULTS });
+  const [secretEdits, setSecretEdits] = useState<SettingsMap>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tests, setTests] = useState<Record<string, TestResult>>({});
-  const [showSecret, setShowSecret] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -216,6 +362,7 @@ export default function SettingsView() {
       const merged = { ...DEFAULTS, ...normalize(raw) };
       setSaved(merged);
       setValues(merged);
+      setSecretEdits({});
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load settings");
     } finally {
@@ -230,17 +377,30 @@ export default function SettingsView() {
   const set = (key: string, value: string) =>
     setValues((prev) => ({ ...prev, [key]: value }));
 
+  const setSecret = (key: string, value: string) =>
+    setSecretEdits((prev) => ({ ...prev, [key]: value }));
+
   const bool = (key: string) => (values[key] ?? "false") === "true";
 
-  /* dirty tracking — only changed keys are patched */
+  const configured = useCallback(
+    (key: string) => (saved[key] ?? "").trim().length > 0,
+    [saved]
+  );
+
+  /* dirty tracking — only changed keys are patched; secrets only when typed */
   const dirtyMap = useMemo(() => {
     const keys = new Set([...Object.keys(saved), ...Object.keys(values)]);
     const out: SettingsMap = {};
     for (const k of keys) {
-      if ((values[k] ?? "") !== (saved[k] ?? "")) out[k] = values[k] ?? "";
+      if (isSecretKey(k)) {
+        const typed = secretEdits[k] ?? "";
+        if (typed.length > 0 && typed !== (saved[k] ?? "")) out[k] = typed;
+      } else if ((values[k] ?? "") !== (saved[k] ?? "")) {
+        out[k] = values[k] ?? "";
+      }
     }
     return out;
-  }, [saved, values]);
+  }, [saved, values, secretEdits]);
 
   const dirtyCount = Object.keys(dirtyMap).length;
 
@@ -256,6 +416,8 @@ export default function SettingsView() {
   const validate = (): string | null => {
     const email = values["org.email"] ?? "";
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Organisation email looks invalid.";
+    const replyTo = values["notify.email.replyTo"] ?? "";
+    if (replyTo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo)) return "Reply-to email looks invalid.";
     const upi = values["finance.upiId"] ?? "";
     if (upi && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upi)) return "UPI ID must look like name@bank (e.g. uar@okhdfcbank).";
     const port = Number(values["notify.email.port"]);
@@ -264,6 +426,15 @@ export default function SettingsView() {
     const retention = Number(values["logs.retentionDays"]);
     if (values["logs.retentionDays"] && (!Number.isFinite(retention) || retention < 1))
       return "Log retention must be at least 1 day.";
+    const webhookUrl = values["webhooks.url"] ?? "";
+    if (webhookUrl && !/^https:\/\/\S+/.test(webhookUrl))
+      return "Webhook URL must be a secure https:// address.";
+    const cdn = values["storage.cdnBase"] ?? "";
+    if (cdn && !/^https?:\/\/\S+/.test(cdn))
+      return "CDN base URL must start with http:// or https://.";
+    const ga4 = values["analytics.ga4Id"] ?? "";
+    if (ga4 && !/^G-[A-Z0-9]+$/i.test(ga4))
+      return "GA4 measurement ID must look like G-XXXXXXXXXX.";
     return null;
   };
 
@@ -283,6 +454,7 @@ export default function SettingsView() {
       const merged = { ...DEFAULTS, ...normalize(raw) };
       setSaved(merged);
       setValues(merged);
+      setSecretEdits({});
       toast.success(`Saved ${dirtyCount} setting${dirtyCount === 1 ? "" : "s"}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save settings");
@@ -293,10 +465,11 @@ export default function SettingsView() {
 
   const reset = () => {
     setValues(saved);
+    setSecretEdits({});
     toast.info("Changes reverted");
   };
 
-  const runTest = async (channel: "email" | "sms" | "whatsapp") => {
+  const runTest = async (channel: TestChannel) => {
     setTests((prev) => ({ ...prev, [channel]: { state: "running" } }));
     try {
       const res = await post<{ ok?: boolean; latencyMs?: number; message?: string }>(
@@ -326,8 +499,22 @@ export default function SettingsView() {
     }
   };
 
-  const secret = values["finance.razorpayKeyId"] ?? "";
-  const secretHint = secret.length > 4 ? `••••${secret.slice(-4)}` : secret ? "••••" : "Not configured";
+  /* webhook event chips state derived from the comma-separated value */
+  const selectedEvents = useMemo(
+    () =>
+      (values["webhooks.events"] ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    [values]
+  );
+
+  const toggleEvent = (ev: string) => {
+    const next = selectedEvents.includes(ev)
+      ? selectedEvents.filter((x) => x !== ev)
+      : [...selectedEvents, ev];
+    set("webhooks.events", next.join(","));
+  };
 
   if (loading) {
     return (
@@ -347,7 +534,7 @@ export default function SettingsView() {
     <div className="space-y-6">
       <PageHeader
         title="Settings"
-        description="Organisation identity, payments, notifications, audit and regional preferences."
+        description="Organisation identity, payments, notifications, integrations, audit and regional preferences."
         icon={<Building2 className="size-5" aria-hidden="true" />}
         actions={
           <Button variant="outline" onClick={load} aria-label="Reload settings">
@@ -362,6 +549,7 @@ export default function SettingsView() {
           <TabsTrigger value="finance">Payments &amp; Finance</TabsTrigger>
           <TabsTrigger value="email">Email (SMTP)</TabsTrigger>
           <TabsTrigger value="sms">SMS &amp; WhatsApp</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="logs">Logs &amp; Audit</TabsTrigger>
           <TabsTrigger value="region">Language &amp; Region</TabsTrigger>
           <TabsTrigger value="receipts">Receipts &amp; Certificates</TabsTrigger>
@@ -476,66 +664,102 @@ export default function SettingsView() {
         <TabsContent value="finance" className="mt-4">
           <SectionCard
             title="Payments &amp; finance"
-            description="UPI collections, Razorpay gateway and currency preferences."
+            description="UPI collections, payment gateway credentials and currency preferences."
             icon={<Coins className="size-4" aria-hidden="true" />}
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                id="s-fin-upi"
-                label="UPI ID"
-                hint="Format: name@bank — e.g. unitedangelreach@okhdfcbank. Shown on donate pages."
-              >
-                <Input
+            <div className="grid gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field
                   id="s-fin-upi"
-                  value={values["finance.upiId"] ?? ""}
-                  onChange={(e) => set("finance.upiId", e.target.value)}
-                  placeholder="unitedangelreach@okhdfcbank"
-                  className="font-mono"
-                />
-              </Field>
-              <Field id="s-fin-currency" label="Currency" hint="All amounts are stored in this currency.">
-                <Select value={values["finance.currency"] || "INR"} onValueChange={(v) => set("finance.currency", v)}>
-                  <SelectTrigger id="s-fin-currency" aria-label="Currency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="INR">INR — Indian Rupee</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field
-                id="s-fin-rzp"
-                label="Razorpay key ID"
-                hint={`Stored securely. Current: ${secretHint}`}
-              >
-                <div className="flex gap-2">
+                  label="UPI ID"
+                  hint="Format: name@bank — e.g. unitedangelreach@okhdfcbank. Shown on donate pages."
+                >
                   <Input
-                    id="s-fin-rzp"
-                    type={showSecret ? "text" : "password"}
-                    value={values["finance.razorpayKeyId"] ?? ""}
-                    onChange={(e) => set("finance.razorpayKeyId", e.target.value)}
-                    placeholder="rzp_live_xxxxxxxx"
+                    id="s-fin-upi"
+                    value={values["finance.upiId"] ?? ""}
+                    onChange={(e) => set("finance.upiId", e.target.value)}
+                    placeholder="unitedangelreach@okhdfcbank"
                     className="font-mono"
-                    autoComplete="off"
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setShowSecret((s) => !s)}
-                    aria-label={showSecret ? "Hide key" : "Show key"}
+                </Field>
+                <Field id="s-fin-currency" label="Currency" hint="All amounts are stored in this currency.">
+                  <Select value={values["finance.currency"] || "INR"} onValueChange={(v) => set("finance.currency", v)}>
+                    <SelectTrigger id="s-fin-currency" aria-label="Currency">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="INR">INR — Indian Rupee</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <SecretField
+                  id="s-fin-rzp"
+                  label="Gateway key ID"
+                  hint={`Public identifier for ${values["finance.gatewayProvider"] ?? "the gateway"}.`}
+                  configured={configured("finance.razorpayKeyId")}
+                  placeholder="rzp_live_xxxxxxxx"
+                  value={secretEdits["finance.razorpayKeyId"] ?? ""}
+                  onChange={(v) => setSecret("finance.razorpayKeyId", v)}
+                />
+                <Field id="s-fin-provider" label="Gateway provider">
+                  <Select
+                    value={values["finance.gatewayProvider"] || "RAZORPAY"}
+                    onValueChange={(v) => set("finance.gatewayProvider", v)}
                   >
-                    {showSecret ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
-                  </Button>
-                </div>
-              </Field>
+                    <SelectTrigger id="s-fin-provider" aria-label="Gateway provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GATEWAY_PROVIDERS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <SecretField
+                  id="s-fin-keysecret"
+                  label="Gateway key secret"
+                  hint="Never displayed after saving; used server-side only."
+                  configured={configured("finance.gatewayKeySecret")}
+                  placeholder="Paste key secret"
+                  value={secretEdits["finance.gatewayKeySecret"] ?? ""}
+                  onChange={(v) => setSecret("finance.gatewayKeySecret", v)}
+                />
+                <SecretField
+                  id="s-fin-webhooksecret"
+                  label="Gateway webhook secret"
+                  hint="Verifies gateway → UAR webhook signatures."
+                  configured={configured("finance.gatewayWebhookSecret")}
+                  placeholder="Paste webhook secret"
+                  value={secretEdits["finance.gatewayWebhookSecret"] ?? ""}
+                  onChange={(v) => setSecret("finance.gatewayWebhookSecret", v)}
+                />
+              </div>
               <SwitchRow
                 id="s-fin-gateway"
-                label="Enable Razorpay gateway"
+                label="Enable payment gateway"
                 hint="Turn off to collect only via UPI / bank transfer."
                 checked={bool("finance.gatewayEnabled")}
                 onCheckedChange={(v) => set("finance.gatewayEnabled", v ? "true" : "false")}
               />
+              <SwitchRow
+                id="s-fin-testmode"
+                label="Test mode"
+                hint="Use sandbox/test keys while wiring up; turn off before going live."
+                checked={bool("finance.gatewayTestMode")}
+                onCheckedChange={(v) => set("finance.gatewayTestMode", v ? "true" : "false")}
+              />
+              <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+                <Button variant="outline" onClick={() => runTest("gateway")} aria-label="Test payment gateway configuration">
+                  <Send className="size-4" aria-hidden="true" /> Test gateway
+                </Button>
+                <TestChip result={tests.gateway} />
+                <p className="text-xs text-muted-foreground">
+                  Checks the saved gateway credentials are present — no order or payment is created.
+                </p>
+              </div>
             </div>
           </SectionCard>
         </TabsContent>
@@ -592,6 +816,33 @@ export default function SettingsView() {
                     placeholder="United Angel Reach"
                   />
                 </Field>
+                <Field id="s-mail-username" label="SMTP username" hint="Usually the from address or an API username.">
+                  <Input
+                    id="s-mail-username"
+                    value={values["notify.email.username"] ?? ""}
+                    onChange={(e) => set("notify.email.username", e.target.value)}
+                    placeholder="receipts@unitedangelreach.org"
+                    className="font-mono"
+                    autoComplete="off"
+                  />
+                </Field>
+                <SecretField
+                  id="s-mail-password"
+                  label="SMTP password"
+                  configured={configured("notify.email.password")}
+                  placeholder="Paste SMTP password"
+                  value={secretEdits["notify.email.password"] ?? ""}
+                  onChange={(v) => setSecret("notify.email.password", v)}
+                />
+                <Field id="s-mail-replyto" label="Reply-to address" hint="Replies to receipts go here (optional).">
+                  <Input
+                    id="s-mail-replyto"
+                    type="email"
+                    value={values["notify.email.replyTo"] ?? ""}
+                    onChange={(e) => set("notify.email.replyTo", e.target.value)}
+                    placeholder="care@unitedangelreach.org"
+                  />
+                </Field>
               </div>
               <SwitchRow
                 id="s-mail-secure"
@@ -601,11 +852,13 @@ export default function SettingsView() {
                 onCheckedChange={(v) => set("notify.email.secure", v ? "true" : "false")}
               />
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                <Button variant="outline" onClick={() => runTest("email")} aria-label="Send SMTP test">
-                  <Send className="size-4" aria-hidden="true" /> Send test
+                <Button variant="outline" onClick={() => runTest("email")} aria-label="Test SMTP connection">
+                  <Send className="size-4" aria-hidden="true" /> Test connection
                 </Button>
                 <TestChip result={tests.email} />
-                <p className="text-xs text-muted-foreground">Runs a simulated connectivity check against the saved host.</p>
+                <p className="text-xs text-muted-foreground">
+                  Opens a real TCP connection to the saved host:port (3s timeout) — no mail is sent.
+                </p>
               </div>
             </div>
           </SectionCard>
@@ -659,12 +912,32 @@ export default function SettingsView() {
                       placeholder="https://api.provider.com/v1/send"
                     />
                   </Field>
+                  <SecretField
+                    id="s-sms-apikey"
+                    label="SMS API key"
+                    configured={configured("notify.sms.apiKey")}
+                    placeholder="Paste provider API key"
+                    value={secretEdits["notify.sms.apiKey"] ?? ""}
+                    onChange={(v) => setSecret("notify.sms.apiKey", v)}
+                  />
+                  <Field id="s-sms-template" label="DLT template ID" hint="Registered DLT template for transactional SMS (India).">
+                    <Input
+                      id="s-sms-template"
+                      value={values["notify.sms.templateId"] ?? ""}
+                      onChange={(e) => set("notify.sms.templateId", e.target.value)}
+                      placeholder="e.g. 1207161512345678901"
+                      className="font-mono"
+                    />
+                  </Field>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                  <Button variant="outline" onClick={() => runTest("sms")} aria-label="Send SMS test">
-                    <Send className="size-4" aria-hidden="true" /> Send test
+                  <Button variant="outline" onClick={() => runTest("sms")} aria-label="Test SMS endpoint">
+                    <Send className="size-4" aria-hidden="true" /> Test endpoint
                   </Button>
                   <TestChip result={tests.sms} />
+                  <p className="text-xs text-muted-foreground">
+                    Pings the saved provider endpoint over HTTP (4s timeout) — no SMS is sent.
+                  </p>
                 </div>
               </div>
             </SectionCard>
@@ -694,11 +967,236 @@ export default function SettingsView() {
                   </Field>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                  <Button variant="outline" onClick={() => runTest("whatsapp")} aria-label="Send WhatsApp test">
-                    <Send className="size-4" aria-hidden="true" /> Send test
+                  <Button variant="outline" onClick={() => runTest("whatsapp")} aria-label="Test WhatsApp configuration">
+                    <Send className="size-4" aria-hidden="true" /> Test configuration
                   </Button>
                   <TestChip result={tests.whatsapp} />
                 </div>
+              </div>
+            </SectionCard>
+          </div>
+        </TabsContent>
+
+        {/* ============================ INTEGRATIONS ============================ */}
+        <TabsContent value="integrations" className="mt-4">
+          <div className="grid gap-4">
+            <SectionCard
+              title="Storage"
+              description="Object storage for distribution photos, kit labels and exports."
+              icon={<HardDrive className="size-4" aria-hidden="true" />}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-store-provider" label="Provider">
+                  <Select value={values["storage.provider"] || "S3"} onValueChange={(v) => set("storage.provider", v)}>
+                    <SelectTrigger id="s-store-provider" aria-label="Storage provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STORAGE_PROVIDERS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-store-bucket" label="Bucket">
+                  <Input
+                    id="s-store-bucket"
+                    value={values["storage.bucket"] ?? ""}
+                    onChange={(e) => set("storage.bucket", e.target.value)}
+                    placeholder="uar-uploads"
+                    className="font-mono"
+                  />
+                </Field>
+                <Field id="s-store-region" label="Region" hint="e.g. ap-south-1 (leave blank for local disk).">
+                  <Input
+                    id="s-store-region"
+                    value={values["storage.region"] ?? ""}
+                    onChange={(e) => set("storage.region", e.target.value)}
+                    placeholder="ap-south-1"
+                    className="font-mono"
+                  />
+                </Field>
+                <SecretField
+                  id="s-store-accesskey"
+                  label="Storage access key"
+                  configured={configured("storage.accessKey")}
+                  placeholder="Paste access key / secret"
+                  value={secretEdits["storage.accessKey"] ?? ""}
+                  onChange={(v) => setSecret("storage.accessKey", v)}
+                />
+                <Field id="s-store-cdn" label="CDN base URL" hint="Public base for uploaded files (optional).">
+                  <Input
+                    id="s-store-cdn"
+                    value={values["storage.cdnBase"] ?? ""}
+                    onChange={(e) => set("storage.cdnBase", e.target.value)}
+                    placeholder="https://cdn.unitedangelreach.org"
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Webhooks"
+              description="Push payment and receipt events to an external system in real time."
+              icon={<Webhook className="size-4" aria-hidden="true" />}
+            >
+              <div className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field id="s-hook-url" label="Endpoint URL" hint="Must be https:// — events are POSTed as JSON.">
+                    <Input
+                      id="s-hook-url"
+                      type="url"
+                      value={values["webhooks.url"] ?? ""}
+                      onChange={(e) => set("webhooks.url", e.target.value)}
+                      placeholder="https://ops.example.org/uar/webhook"
+                      className="font-mono"
+                    />
+                  </Field>
+                  <SecretField
+                    id="s-hook-secret"
+                    label="Webhook signing secret"
+                    hint="Sent as X-UAR-Signature HMAC header."
+                    configured={configured("webhooks.secret")}
+                    placeholder="Paste signing secret"
+                    value={secretEdits["webhooks.secret"] ?? ""}
+                    onChange={(v) => setSecret("webhooks.secret", v)}
+                  />
+                </div>
+                <Field label="Events to deliver">
+                  <div className="flex flex-wrap gap-2" role="group" aria-label="Webhook events">
+                    {WEBHOOK_EVENTS.map((ev) => {
+                      const on = selectedEvents.includes(ev);
+                      return (
+                        <button
+                          key={ev}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={on}
+                          onClick={() => toggleEvent(ev)}
+                          className={cn(
+                            "flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium transition-colors",
+                            on
+                              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                              : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "grid size-4 place-items-center rounded-[4px] border",
+                              on ? "border-emerald-500 bg-emerald-500 text-white" : "border-input"
+                            )}
+                          >
+                            {on && <CheckCircle2 className="size-3" />}
+                          </span>
+                          {ev}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Analytics"
+              description="Traffic analytics for the public donate flow."
+              icon={<BarChart3 className="size-4" aria-hidden="true" />}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-ana-ga4" label="GA4 measurement ID" hint="Format G-XXXXXXXXXX, loaded on public pages.">
+                  <Input
+                    id="s-ana-ga4"
+                    value={values["analytics.ga4Id"] ?? ""}
+                    onChange={(e) => set("analytics.ga4Id", e.target.value)}
+                    placeholder="G-XXXXXXXXXX"
+                    className="font-mono"
+                  />
+                </Field>
+                <Field id="s-ana-pixel" label="Meta Pixel ID" hint="Facebook/Meta pixel for campaign tracking (optional).">
+                  <Input
+                    id="s-ana-pixel"
+                    value={values["analytics.metaPixel"] ?? ""}
+                    onChange={(e) => set("analytics.metaPixel", e.target.value)}
+                    placeholder="e.g. 123456789012345"
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Security (captcha)"
+              description="Bot protection for the donate form and public contact forms."
+              icon={<ShieldCheck className="size-4" aria-hidden="true" />}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-cap-provider" label="Provider">
+                  <Select value={values["captcha.provider"] || "NONE"} onValueChange={(v) => set("captcha.provider", v)}>
+                    <SelectTrigger id="s-cap-provider" aria-label="Captcha provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CAPTCHA_PROVIDERS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-cap-sitekey" label="Site key" hint="Public key rendered with the widget.">
+                  <Input
+                    id="s-cap-sitekey"
+                    value={values["captcha.siteKey"] ?? ""}
+                    onChange={(e) => set("captcha.siteKey", e.target.value)}
+                    placeholder="Paste site key"
+                    className="font-mono"
+                    autoComplete="off"
+                  />
+                </Field>
+                <SecretField
+                  id="s-cap-secretkey"
+                  label="Secret key"
+                  hint="Used server-side to verify captcha responses."
+                  configured={configured("captcha.secretKey")}
+                  placeholder="Paste secret key"
+                  value={secretEdits["captcha.secretKey"] ?? ""}
+                  onChange={(v) => setSecret("captcha.secretKey", v)}
+                />
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Maps"
+              description="Geocoding and maps used by missions, distributions and campaigns."
+              icon={<MapPin className="size-4" aria-hidden="true" />}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-maps-provider" label="Provider">
+                  <Select value={values["maps.provider"] || "GOOGLE"} onValueChange={(v) => set("maps.provider", v)}>
+                    <SelectTrigger id="s-maps-provider" aria-label="Maps provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MAP_PROVIDERS.map((p) => (
+                        <SelectItem key={p.value} value={p.value}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <SecretField
+                  id="s-maps-apikey"
+                  label="Maps API key"
+                  configured={configured("maps.apiKey")}
+                  placeholder="Paste maps API key"
+                  value={secretEdits["maps.apiKey"] ?? ""}
+                  onChange={(v) => setSecret("maps.apiKey", v)}
+                />
               </div>
             </SectionCard>
           </div>

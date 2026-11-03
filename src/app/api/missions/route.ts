@@ -49,6 +49,8 @@ export async function GET(req: Request) {
     const q = sp.get("q")?.trim() || undefined;
 
     const where: Prisma.MissionWhereInput = {};
+    const ambulanceId = sp.get("ambulanceId");
+    if (ambulanceId) where.ambulanceId = ambulanceId;
     if (status) where.status = status;
     if (q)
       where.OR = [
@@ -130,7 +132,15 @@ export async function POST(req: Request) {
         pickup,
         destination,
         status: "REQUESTED",
-        route: JSON.stringify(segments),
+        route: Array.isArray(body.route) && body.route.length > 0
+          ? JSON.stringify(
+              body.route.map((r: Record<string, unknown>) => ({
+                name: String(r.name ?? "Segment"),
+                congestion: ["LOW","MODERATE","HEAVY","GRIDLOCK"].includes(String(r.congestion)) ? String(r.congestion) : "MODERATE",
+                lengthKm: Number(r.lengthKm) || 2,
+              }))
+            )
+          : JSON.stringify(segments),
         etaMin,
       },
     });

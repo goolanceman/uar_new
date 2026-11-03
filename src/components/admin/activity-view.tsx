@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ChevronDown,
+  Download,
   RefreshCw,
   Search,
 } from "lucide-react";
@@ -11,6 +12,8 @@ import { toast } from "sonner";
 import { get } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { formatDateTime, initials, titleCase } from "@/lib/format";
+import { downloadCsv } from "@/components/shared/csv";
+import { PaginationBar, PageSizeSelect } from "@/components/shared/view-switcher";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -19,13 +22,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -60,7 +56,8 @@ function actionTone(action: string): string {
   return "bg-muted text-muted-foreground";
 }
 
-const PAGE = 200;
+/** One fetch of the newest entries; pagination over this pool is client-side. */
+const FETCH_LIMIT = 500;
 
 /* ---------------------------------- view ----------------------------------- */
 
@@ -68,30 +65,31 @@ export default function ActivityView() {
   const [rows, setRows] = useState<LogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [limit, setLimit] = useState(PAGE);
-  const [hasMore, setHasMore] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // filters
   const [q, setQ] = useState("");
-  const [entityType, setEntityType] = useState("ALL");
+  const [entityFilter, setEntityFilter] = useState<string[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // client-side pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const data = await get<LogRow[] | { items?: LogRow[] }>(`/api/activity-logs?limit=${limit}`);
+      const data = await get<LogRow[] | { items?: LogRow[] }>(`/api/activity-logs?limit=${FETCH_LIMIT}`);
       const list = Array.isArray(data) ? data : (data.items ?? []);
       setRows(list);
-      setHasMore(list.length >= limit);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load activity logs");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [limit]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -115,7 +113,7 @@ export default function ActivityView() {
     const fromDate = from ? new Date(`${from}T00:00:00`) : null;
     const toDate = to ? new Date(`${to}T23:59:59.999`) : null;
     return rows.filter((r) => {
-      if (entityType !== "ALL" && r.entityType !== entityType) return false;
+      if (entityFilter.length > 0 && !entityFilter.includes(r.entityType)) return false;
       if (needle) {
         const hay = `${r.action} ${r.entityType} ${r.actorName ?? ""} ${r.details ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
@@ -125,9 +123,54 @@ export default function ActivityView() {
       if (toDate && created > toDate) return false;
       return true;
     });
-  }, [rows, q, entityType, from, to]);
+  }, [rows, q, entityFilter, from, to]);
 
-  const hasFilters = q.trim() !== "" || entityType !== "ALL" || from !== "" || to !== "";
+  // reset to the first page whenever filters change
+  useEffect(() => {
+    setPage(1);
+  }, [q, entityFilter, from, to, pageSize]);
+
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  // keep the page in range when the pool shrinks after a refresh
+  useEffect(() => {
+    if (page > pages) setPage(pages);
+  }, [page, pages]);
+
+  const pageRows = useMemo(
+    () => filtered.slice((page - 1) * pageSize, page * pageSize),
+    [filtered, page, pageSize]
+  );
+
+  const toggleEntity = (t: string) =>
+    setEntityFilter((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  const hasFilters =
+    q.trim() !== "" || entityFilter.length > 0 || from !== "" || to !== "";
+
+  const resetFilters = () => {
+    setQ("");
+    setEntityFilter([]);
+    setFrom("");
+    setTo("");
+  };
+
+  const exportCsv = () => {
+    if (filtered.length === 0) {
+      toast.info("No log entries match the current filters");
+      return;
+    }
+    downloadCsv("uar-activity-logs", [
+      { header: "Timestamp", value: (r: LogRow) => formatDateTime(r.createdAt) },
+      { header: "Actor", value: (r: LogRow) => r.actorName || "System" },
+      { header: "Action", value: (r: LogRow) => r.action },
+      { header: "Entity type", value: (r: LogRow) => r.entityType },
+      { header: "Entity ID", value: (r: LogRow) => r.entityId ?? "" },
+      { header: "Details", value: (r: LogRow) => r.details ?? "" },
+      { header: "IP address", value: (r: LogRow) => r.ipAddress ?? "" },
+    ], filtered);
+    toast.success(`Exported ${filtered.length} log ${filtered.length === 1 ? "entry" : "entries"}`);
+  };
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -136,9 +179,14 @@ export default function ActivityView() {
         description="Immutable audit trail of every action across the trust — auto-refreshes every 15s."
         icon={<Activity className="size-5" aria-hidden="true" />}
         actions={
-          <Button variant="outline" onClick={load} disabled={refreshing} aria-label="Refresh activity logs">
-            <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Refresh
-          </Button>
+          <>
+            <Button variant="outline" onClick={exportCsv} aria-label="Export filtered activity logs as CSV">
+              <Download className="size-4" aria-hidden="true" /> Export CSV
+            </Button>
+            <Button variant="outline" onClick={load} disabled={refreshing} aria-label="Refresh activity logs">
+              <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Refresh
+            </Button>
+          </>
         }
       />
 
@@ -156,17 +204,10 @@ export default function ActivityView() {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={entityType} onValueChange={setEntityType}>
-              <SelectTrigger className="w-full sm:w-48" aria-label="Filter by entity type">
-                <SelectValue placeholder="All entities" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All entities</SelectItem>
-                {entityTypes.map((t) => (
-                  <SelectItem key={t} value={t}>{titleCase(t)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="act-from" className="text-xs text-muted-foreground">From</Label>
+            <Input id="act-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" aria-label="Activity from date" />
+            <Label htmlFor="act-to" className="text-xs text-muted-foreground">To</Label>
+            <Input id="act-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" aria-label="Activity to date" />
             <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400" role="status">
               <span className="relative flex size-2">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" aria-hidden="true" />
@@ -176,28 +217,53 @@ export default function ActivityView() {
             </span>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Label htmlFor="act-from" className="text-xs text-muted-foreground">From</Label>
-          <Input id="act-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" aria-label="Activity from date" />
-          <Label htmlFor="act-to" className="text-xs text-muted-foreground">To</Label>
-          <Input id="act-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" aria-label="Activity to date" />
-          {hasFilters && (
-            <Button variant="ghost" size="sm" onClick={() => { setQ(""); setEntityType("ALL"); setFrom(""); setTo(""); }} aria-label="Reset activity filters">
-              Reset filters
-            </Button>
-          )}
-          <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `${filtered.length} of ${rows.length} entries`}
-          </span>
-        </div>
+
+        {/* Entity type multi-select chips */}
+        {entityTypes.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by entity type">
+            {entityTypes.map((t) => {
+              const on = entityFilter.includes(t);
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => toggleEntity(t)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                    on
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                      : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  {titleCase(t)}
+                </button>
+              );
+            })}
+            {(entityFilter.length > 0 || from !== "" || to !== "") && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} aria-label="Reset activity filters">
+                Reset filters
+              </Button>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">
+              {loading ? "Loading…" : `${filtered.length} of ${rows.length} entries`}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Log table */}
       <div className="rounded-xl border bg-card">
         {loading ? (
-          <div className="space-y-2 p-4">
+          <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading activity logs">
             {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-11 w-full" />
+              <div key={i} className="flex items-center gap-3">
+                <Skeleton className="size-8 shrink-0 rounded-full" />
+                <Skeleton className="h-9 w-24 shrink-0 rounded-md" />
+                <Skeleton className="h-9 flex-1 rounded-md" />
+                <Skeleton className="hidden h-9 w-28 rounded-md sm:block" />
+                <Skeleton className="hidden h-9 w-24 rounded-md md:block" />
+              </div>
             ))}
           </div>
         ) : filtered.length === 0 ? (
@@ -208,7 +274,7 @@ export default function ActivityView() {
               hint={hasFilters ? "Try a different filter term or date range." : "System actions will be logged here as they happen."}
             >
               {hasFilters && (
-                <Button variant="outline" size="sm" onClick={() => { setQ(""); setEntityType("ALL"); setFrom(""); setTo(""); }}>
+                <Button variant="outline" size="sm" onClick={resetFilters}>
                   Clear filters
                 </Button>
               )}
@@ -228,7 +294,7 @@ export default function ActivityView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((r) => {
+                {pageRows.map((r) => {
                   const open = expandedId === r.id;
                   return (
                     <TableRow key={r.id} className={cn(open && "bg-accent/40")}>
@@ -313,16 +379,26 @@ export default function ActivityView() {
           );
         })()}
 
-        {/* Load more */}
+        {/* Pagination */}
         {!loading && filtered.length > 0 && (
-          <div className="flex items-center justify-center border-t p-3">
-            {hasMore ? (
-              <Button variant="outline" size="sm" onClick={() => setLimit((l) => l + PAGE)} disabled={refreshing} aria-label="Load 200 more log entries">
-                <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Load more
-              </Button>
-            ) : (
-              <span className="text-xs text-muted-foreground">Showing all {rows.length} entries</span>
-            )}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t p-3">
+            <PaginationBar
+              page={page}
+              pages={pages}
+              total={filtered.length}
+              onPage={setPage}
+              itemLabel="entries"
+            />
+            <PageSizeSelect
+              value={pageSize}
+              onChange={setPageSize}
+              options={[25, 50, 100]}
+            />
+          </div>
+        )}
+        {!loading && rows.length >= FETCH_LIMIT && (
+          <div className="border-t p-3 text-center text-xs text-muted-foreground">
+            Showing the latest {FETCH_LIMIT} entries — narrow the filters to dig deeper.
           </div>
         )}
       </div>

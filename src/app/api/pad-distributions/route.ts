@@ -99,6 +99,7 @@ export async function POST(req: Request) {
         sessionAttendees,
         notes: body.notes ? String(body.notes) : null,
         volunteerId: volunteer?.id ?? null,
+        volunteerName: body.volunteerName ? String(body.volunteerName).trim() : (volunteer ? null : session.name),
         distributionDate,
       },
     });

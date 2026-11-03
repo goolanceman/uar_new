@@ -1,0 +1,732 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  Award,
+     6→  HandCoins,
+     7→  HeartPulse,
+     8→  Pause,
+     9→  Pencil,
+    10→  Play,
+    11→  Plus,
+    12→  RefreshCw,
+    13→  Trash2,
+    14→  UserCheck,
+    15→} from "lucide-react";
+    16→import { toast } from "sonner";
+    17→import { del, get, patch, post } from "@/lib/api-client";
+    18→import { labelOf, useMasters } from "@/hooks/use-masters";
+    19→import { formatINR, titleCase } from "@/lib/format";
+    20→import { cn } from "@/lib/utils";
+    21→import { PageHeader } from "@/components/shared/page-header";
+    22→import { SectionCard } from "@/components/shared/section-card";
+    23→import { StatCard } from "@/components/shared/stat-card";
+    24→import { DataField } from "@/components/shared/data-field";
+    25→import { EmptyState } from "@/components/shared/empty-state";
+    26→import { Badge } from "@/components/ui/badge";
+    27→import { Button } from "@/components/ui/button";
+    28→import { Input } from "@/components/ui/input";
+    29→import { Label } from "@/components/ui/label";
+    30→import { Progress } from "@/components/ui/progress";
+    31→import { Textarea } from "@/components/ui/textarea";
+    32→import { Skeleton } from "@/components/ui/skeleton";
+    33→import {
+    34→  Select,
+    35→  SelectContent,
+    36→  SelectItem,
+    37→  SelectTrigger,
+    38→  SelectValue,
+    39→} from "@/components/ui/select";
+    40→import {
+    41→  Sheet,
+    42→  SheetContent,
+    43→  SheetDescription,
+    44→  SheetHeader,
+    45→  SheetTitle,
+    46→} from "@/components/ui/sheet";
+    47→import {
+    48→  Dialog,
+    49→  DialogContent,
+    50→  DialogDescription,
+    51→  DialogFooter,
+    52→  DialogHeader,
+    53→  DialogTitle,
+    54→} from "@/components/ui/dialog";
+    55→import {
+    56→  AlertDialog,
+    57→  AlertDialogAction,
+    58→  AlertDialogCancel,
+    59→  AlertDialogContent,
+    60→  AlertDialogDescription,
+    61→  AlertDialogFooter,
+    62→  AlertDialogHeader,
+    63→  AlertDialogTitle,
+    64→} from "@/components/ui/alert-dialog";
+    65→
+    66→/* ---------------------------------- types ---------------------------------- */
+    67→
+    68→interface Pledge {
+    69→  id: string;
+    70→  donorName: string;
+    71→  amountPerMonth: number;
+    72→  months: number;
+    73→  status: string;
+    74→}
+    75→
+    76→interface Cause {
+    77→  id: string;
+    78→  code: string;
+    79→  patientName: string;
+    80→  age: number;
+    81→  city: string;
+    82→  condition: string;
+    83→  monthlyCost: number;
+    84→  durationMonths: number;
+    85→  story: string;
+    86→  status: string;
+    87→  raised: number;
+    88→  adoptedById?: string | null;
+    89→  adoptedByName?: string | null;
+    90→  pledges?: Pledge[];
+    91→}
+    92→
+    93→interface CauseForm {
+    94→  patientName: string;
+    95→  age: string;
+    96→  city: string;
+    97→  condition: string;
+    98→  monthlyCost: string;
+    99→  durationMonths: string;
+   100→  story: string;
+   101→}
+   102→
+   103→/* ------------------------------- chip styles ------------------------------- */
+   104→
+   105→const CAUSE_STATUS: Record<string, string> = {
+   106→  SEEKING: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+   107→  PARTIAL: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+   108→  ADOPTED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   109→  PAUSED: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+   110→};
+   111→
+   112→const PLEDGE_STATUS: Record<string, string> = {
+   113→  ACTIVE: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   114→  COMPLETED: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+   115→  CANCELLED: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+   116→};
+   117→
+   118→const EMPTY_FORM: CauseForm = {
+   119→  patientName: "",
+   120→  age: "",
+   121→  city: "",
+   122→  condition: "BP",
+   123→  monthlyCost: "",
+   124→  durationMonths: "12",
+   125→  story: "",
+   126→};
+   127→
+   128→/* ---------------------------------- view ----------------------------------- */
+   129→
+   130→export default function CausesView() {
+   131→  const [causes, setCauses] = useState<Cause[]>([]);
+   132→  const [loading, setLoading] = useState(true);
+   133→  const [statusFilter, setStatusFilter] = useState("ALL");
+   134→  const [conditionFilter, setConditionFilter] = useState("ALL");
+   135→  const [citySearch, setCitySearch] = useState("");
+   136→
+   137→  const [sheet, setSheet] = useState<Cause | null>(null);
+   138→  const [dialogOpen, setDialogOpen] = useState(false);
+   139→  const [editing, setEditing] = useState<Cause | null>(null);
+   140→  const [form, setForm] = useState<CauseForm>(EMPTY_FORM);
+   141→  const [saving, setSaving] = useState(false);
+   142→  const [deleteTarget, setDeleteTarget] = useState<Cause | null>(null);
+   143→  const [issuing, setIssuing] = useState<string | null>(null);
+   144→
+   145→  const cityOptions = useMasters("CITY");
+   146→  const conditionOptions = useMasters("CONDITION");
+   147→
+   148→  const load = useCallback(async () => {
+   149→    try {
+   150→      const data = await get<Cause[]>("/api/causes");
+   151→      setCauses(Array.isArray(data) ? data : []);
+   152→    } catch (e) {
+   153→      toast.error(e instanceof Error ? e.message : "Failed to load causes");
+   154→    } finally {
+   155→      setLoading(false);
+   156→    }
+   157→  }, []);
+   158→
+   159→  useEffect(() => {
+   160→    load();
+   161→  }, [load]);
+   162→
+   163→  /* client-side filters (status / condition / city search) */
+   164→  const filtered = useMemo(() => {
+   165→    const q = citySearch.trim().toLowerCase();
+   166→    return causes.filter((c) => {
+   167→      if (statusFilter !== "ALL" && c.status !== statusFilter) return false;
+   168→      if (conditionFilter !== "ALL" && c.condition !== conditionFilter) return false;
+   169→      if (q && !`${c.city ?? ""}`.toLowerCase().includes(q) && !`${c.patientName}`.toLowerCase().includes(q))
+   170→        return false;
+   171→      return true;
+   172→    });
+   173→  }, [causes, statusFilter, conditionFilter, citySearch]);
+   174→
+   175→  const stats = useMemo(() => {
+   176→    const seeking = causes.filter((c) => c.status === "SEEKING" || c.status === "PARTIAL").length;
+   177→    const adopted = causes.filter((c) => c.status === "ADOPTED").length;
+   178→    const monthly = causes
+   179→      .flatMap((c) => c.pledges ?? [])
+   180→      .filter((pl) => pl.status === "ACTIVE")
+   181→      .reduce((s, pl) => s + (pl.amountPerMonth || 0), 0);
+   182→    return { seeking, adopted, monthly, total: causes.length };
+   183→  }, [causes]);
+   184→
+   185→  /* ------------------------------ form actions ----------------------------- */
+   186→
+   187→  const openCreate = () => {
+   188→    setEditing(null);
+   189→    setForm({ ...EMPTY_FORM, city: cityOptions.options[0]?.value ?? "" });
+   190→    setDialogOpen(true);
+   191→  };
+   192→
+   193→  const openEdit = (c: Cause) => {
+   194→    setEditing(c);
+   195→    setForm({
+   196→      patientName: c.patientName ?? "",
+   197→      age: String(c.age ?? ""),
+   198→      city: c.city ?? "",
+   199→      condition: c.condition ?? "BP",
+   200→      monthlyCost: String(c.monthlyCost ?? ""),
+   201→      durationMonths: String(c.durationMonths ?? 12),
+   202→      story: c.story ?? "",
+   203→    });
+   204→    setDialogOpen(true);
+   205→  };
+   206→
+   207→  const validate = (): string | null => {
+   208→    if (!form.patientName.trim()) return "Patient name is required";
+   209→    if (!form.city.trim()) return "City is required";
+   210→    if (!form.story.trim()) return "A short story is required";
+   211→    const age = Number(form.age);
+   212→    if (!Number.isFinite(age) || age < 0 || age > 120) return "Age must be between 0 and 120";
+   213→    const cost = Number(form.monthlyCost);
+   214→    if (!Number.isFinite(cost) || cost <= 0) return "Monthly cost must be greater than 0";
+   215→    const dur = Number(form.durationMonths);
+   216→    if (!Number.isFinite(dur) || dur < 1 || dur > 120) return "Duration must be between 1 and 120 months";
+   217→    return null;
+   218→  };
+   219→
+   220→  const save = async () => {
+   221→    const problem = validate();
+   222→    if (problem) {
+   223→      toast.error(problem);
+   224→      return;
+   225→    }
+   226→    setSaving(true);
+   227→    try {
+   228→      const body = {
+   229→        patientName: form.patientName.trim(),
+   230→        age: Number(form.age),
+   231→        city: form.city.trim(),
+   232→        condition: form.condition,
+   233→        monthlyCost: Number(form.monthlyCost),
+   234→        durationMonths: Number(form.durationMonths),
+   235→        story: form.story.trim(),
+   236→      };
+   237→      if (editing) {
+   238→        await patch(`/api/causes/${editing.id}`, body);
+   239→        toast.success(`Cause ${editing.code} updated`);
+   240→      } else {
+   241→        await post("/api/causes", body);
+   242→        toast.success("Medicine cause created — code UAR-MED-#### assigned automatically");
+   243→      }
+   244→      setDialogOpen(false);
+   245→      setSheet(null);
+   246→      load();
+   247→    } catch (e) {
+   248→      toast.error(e instanceof Error ? e.message : "Save failed");
+   249→    } finally {
+   250→      setSaving(false);
+   251→    }
+   252→  };
+   253→
+   254→  const togglePause = async (c: Cause) => {
+   255→    const next = c.status === "PAUSED" ? "SEEKING" : "PAUSED";
+   256→    try {
+   257→      await patch(`/api/causes/${c.id}`, { status: next });
+   258→      toast.success(`${c.code} ${next === "PAUSED" ? "paused" : "resumed"}`);
+   259→      setSheet(null);
+   260→      load();
+   261→    } catch (e) {
+   262→      toast.error(e instanceof Error ? e.message : "Update failed");
+   263→    }
+   264→  };
+   265→
+   266→  const remove = async () => {
+   267→    if (!deleteTarget) return;
+   268→    try {
+   269→      await del(`/api/causes/${deleteTarget.id}`);
+   270→      toast.success(`${deleteTarget.code} deleted`);
+   271→      setDeleteTarget(null);
+   272→      setSheet(null);
+   273→      load();
+   274→    } catch (e) {
+   275→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   276→    }
+   277→  };
+   278→
+   279→  const issueCertificate = async (c: Cause) => {
+   280→    if (!c.adoptedByName) {
+   281→      toast.error("This cause has no adopter recorded yet");
+   282→      return;
+   283→    }
+   284→    setIssuing(c.id);
+   285→    try {
+   286→      const res = await post<{ certificate?: { code?: string } }>("/api/certificates", {
+   287→        type: "MEDICINE_SPONSOR",
+   288→        recipientName: c.adoptedByName,
+   289→        userId: c.adoptedById ?? undefined,
+   290→        refType: "PLEDGE",
+   291→        refId: c.id,
+   292→        title: "Medicine Sponsorship Certificate",
+   293→        description: `Monthly medicine support for ${c.patientName} (${c.code})`,
+   294→        meta: JSON.stringify({ cause: c.code, patient: c.patientName, condition: c.condition }),
+   295→      });
+   296→      const code = res?.certificate?.code;
+   297→      if (code) {
+   298→        toast.success(`Certificate ${code} issued to ${c.adoptedByName}`, {
+   299→          action: {
+   300→            label: "Open",
+   301→            onClick: () => window.open(`/api/certificates/${code}/html`, "_blank"),
+   302→          },
+   303→        });
+   304→      } else {
+   305→        toast.success("Sponsorship certificate issued");
+   306→      }
+   307→    } catch (e) {
+   308→      toast.error(e instanceof Error ? e.message : "Certificate failed");
+   309→    } finally {
+   310→      setIssuing(null);
+   311→    }
+   312→  };
+   313→
+   314→  const totalCost = (c: Cause) => (c.monthlyCost ?? 0) * (c.durationMonths ?? 0);
+   315→
+   316→  /* --------------------------------- render -------------------------------- */
+   317→
+   318→  return (
+   319→    <div className="space-y-6">
+   320→      <PageHeader
+   321→        title="Adopt-a-Medicine"
+   322→        description="Monthly medicine causes that donors can adopt until a patient recovers."
+   323→        icon={<HeartPulse className="size-5" aria-hidden="true" />}
+   324→        actions={
+   325→          <>
+   326→            <Button variant="outline" onClick={load} aria-label="Refresh causes">
+   327→              <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+   328→            </Button>
+   329→            <Button onClick={openCreate}>
+   330→              <Plus className="size-4" aria-hidden="true" /> New cause
+   331→            </Button>
+   332→          </>
+   333→        }
+   334→      />
+   335→
+   336→      {/* stats */}
+   337→      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+   338→        <StatCard label="Total causes" value={stats.total} accent="teal" icon={<HeartPulse className="size-5" aria-hidden="true" />} loading={loading} />
+   339→        <StatCard label="Seeking / partial" value={stats.seeking} accent="amber" icon={<HandCoins className="size-5" aria-hidden="true" />} loading={loading} />
+   340→        <StatCard label="Adopted" value={stats.adopted} accent="emerald" icon={<UserCheck className="size-5" aria-hidden="true" />} loading={loading} />
+   341→        <StatCard label="Monthly pledged" value={formatINR(stats.monthly)} accent="pink" icon={<HandCoins className="size-5" aria-hidden="true" />} loading={loading} hint="Sum of active pledges" />
+   342→      </div>
+   343→
+   344→      {/* filters */}
+   345→      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+   346→        <Select value={statusFilter} onValueChange={setStatusFilter}>
+   347→          <SelectTrigger className="w-full sm:w-44" aria-label="Filter by status">
+   348→            <SelectValue />
+   349→          </SelectTrigger>
+   350→          <SelectContent>
+   351→            <SelectItem value="ALL">All statuses</SelectItem>
+   352→            <SelectItem value="SEEKING">Seeking</SelectItem>
+   353→            <SelectItem value="PARTIAL">Partial</SelectItem>
+   354→            <SelectItem value="ADOPTED">Adopted</SelectItem>
+   355→            <SelectItem value="PAUSED">Paused</SelectItem>
+   356→          </SelectContent>
+   357→        </Select>
+   358→        <Select value={conditionFilter} onValueChange={setConditionFilter}>
+   359→          <SelectTrigger className="w-full sm:w-48" aria-label="Filter by condition">
+   360→            <SelectValue />
+   361→          </SelectTrigger>
+   362→          <SelectContent>
+   363→            <SelectItem value="ALL">All conditions</SelectItem>
+   364→            {conditionOptions.options.map((o) => (
+   365→              <SelectItem key={o.value} value={o.value}>
+   366→                {o.label}
+   367→              </SelectItem>
+   368→            ))}
+   369→          </SelectContent>
+   370→        </Select>
+   371→        <Input
+   372→          value={citySearch}
+   373→          onChange={(e) => setCitySearch(e.target.value)}
+   374→          placeholder="Search patient or city…"
+   375→          aria-label="Search patient or city"
+   376→          className="w-full sm:max-w-xs"
+   377→        />
+   378→        <p className="text-xs text-muted-foreground sm:ml-auto">
+   379→          {filtered.length} of {causes.length} causes
+   380→        </p>
+   381→      </div>
+   382→
+   383→      {/* cards */}
+   384→      {loading ? (
+   385→        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+   386→          {[0, 1, 2, 3, 4, 5].map((i) => (
+   387→            <Skeleton key={i} className="h-60 rounded-xl" />
+   388→          ))}
+   389→        </div>
+   390→      ) : filtered.length === 0 ? (
+   391→        <EmptyState
+   392→          icon={<HeartPulse className="size-8" aria-hidden="true" />}
+   393→          title={causes.length === 0 ? "No medicine causes yet" : "No causes match the filters"}
+   394→          hint={
+   395→            causes.length === 0
+   396→              ? "Create a cause so donors can adopt a patient's monthly medicine cost."
+   397→              : "Try clearing the status, condition or city filters."
+   398→          }
+   399→        >
+   400→          {causes.length === 0 && (
+   401→            <Button onClick={openCreate}>
+   402→              <Plus className="size-4" aria-hidden="true" /> New cause
+   403→            </Button>
+   404→          )}
+   405→        </EmptyState>
+   406→      ) : (
+   407→        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   408→          {filtered.map((c) => {
+   409→            const pct =
+   410→              totalCost(c) > 0
+   411→                ? Math.min(100, Math.round(((c.raised || 0) / totalCost(c)) * 100))
+   412→                : 0;
+   413→            return (
+   414→              <button
+   415→                key={c.id}
+   416→                type="button"
+   417→                onClick={() => setSheet(c)}
+   418→                aria-label={`Open details for ${c.code} — ${c.patientName}`}
+   419→                className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-teal-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+   420→              >
+   421→                <div className="flex items-center gap-2">
+   422→                  <span className="font-mono text-xs text-muted-foreground">{c.code}</span>
+   423→                  <Badge variant="outline" className={cn("ml-auto", CAUSE_STATUS[c.status] ?? CAUSE_STATUS.SEEKING)}>
+   424→                    {titleCase(c.status)}
+   425→                  </Badge>
+   426→                </div>
+   427→                <div>
+   428→                  <p className="font-semibold leading-tight">{c.patientName}</p>
+   429→                  <p className="text-xs text-muted-foreground">
+   430→                    {c.age} yrs · {c.city}
+   431→                  </p>
+   432→                </div>
+   433→                <div className="flex flex-wrap gap-1.5">
+   434→                  <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+   435→                    {labelOf(conditionOptions.options, c.condition)}
+   436→                  </Badge>
+   437→                  <Badge variant="outline">
+   438→                    <HandCoins className="size-3" aria-hidden="true" />
+   439→                    {(c.pledges ?? []).length} pledge{(c.pledges ?? []).length === 1 ? "" : "s"}
+   440→                  </Badge>
+   441→                </div>
+   442→                <div className="mt-auto space-y-1.5">
+   443→                  <div className="flex items-baseline justify-between gap-2 text-sm">
+   444→                    <span className="font-semibold text-teal-700 dark:text-teal-400">{formatINR(c.monthlyCost)}/mo</span>
+   445→                    <span className="truncate text-xs text-muted-foreground">
+   446→                      {c.durationMonths} mo · {formatINR(c.raised)} raised
+   447→                    </span>
+   448→                  </div>
+   449→                  <Progress
+   450→                    value={pct}
+   451→                    className="h-2 [&>div]:bg-teal-600"
+   452→                    aria-label={`${pct}% of total medicine cost raised`}
+   453→                  />
+   454→                </div>
+   455→              </button>
+   456→            );
+   457→          })}
+   458→        </div>
+   459→      )}
+   460→
+   461→      {/* ============================== DETAIL SHEET ============================= */}
+   462→      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+   463→        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+   464→          {sheet && (
+   465→            <div className="space-y-5 p-5">
+   466→              <SheetHeader className="p-0 text-left">
+   467→                <SheetTitle className="flex items-center gap-2">
+   468→                  <span className="font-mono text-sm">{sheet.code}</span>
+   469→                  <Badge variant="outline" className={cn("ml-auto", CAUSE_STATUS[sheet.status] ?? CAUSE_STATUS.SEEKING)}>
+   470→                    {titleCase(sheet.status)}
+   471→                  </Badge>
+   472→                </SheetTitle>
+   473→                <SheetDescription>Medicine sponsorship case · {sheet.city}</SheetDescription>
+   474→              </SheetHeader>
+   475→
+   476→              <div className="grid grid-cols-2 gap-3">
+   477→                <DataField label="Patient" value={sheet.patientName} />
+   478→                <DataField label="Age" value={`${sheet.age} years`} />
+   479→                <DataField label="City" value={sheet.city} />
+   480→                <DataField
+   481→                  label="Condition"
+   482→                  value={
+   483→                    <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+   484→                      {labelOf(conditionOptions.options, sheet.condition)}
+   485→                    </Badge>
+   486→                  }
+   487→                />
+   488→                <DataField label="Monthly cost" value={`${formatINR(sheet.monthlyCost)} / mo`} />
+   489→                <DataField label="Duration" value={`${sheet.durationMonths} months`} />
+   490→                <DataField label="Raised so far" value={formatINR(sheet.raised)} />
+   491→                <DataField label="Total needed" value={formatINR(totalCost(sheet))} />
+   492→              </div>
+   493→
+   494→              <SectionCard title="Progress">
+   495→                <Progress
+   496→                  value={totalCost(sheet) > 0 ? Math.min(100, Math.round(((sheet.raised || 0) / totalCost(sheet)) * 100)) : 0}
+   497→                  className="h-2.5 [&>div]:bg-teal-600"
+   498→                  aria-label="Fundraising progress"
+   499→                />
+   500→                <p className="mt-2 text-xs text-muted-foreground">
+   501→                  {formatINR(sheet.raised)} of {formatINR(totalCost(sheet))} ({sheet.durationMonths} × {formatINR(sheet.monthlyCost)})
+   502→                </p>
+   503→              </SectionCard>
+   504→
+   505→              <SectionCard title="Story">
+   506→                <p className="text-sm leading-relaxed text-muted-foreground">{sheet.story}</p>
+   507→              </SectionCard>
+   508→
+   509→              {sheet.adoptedByName ? (
+   510→                <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
+   511→                  <span className="flex size-9 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-400">
+   512→                    <UserCheck className="size-4" aria-hidden="true" />
+   513→                  </span>
+   514→                  <div className="min-w-0">
+   515→                    <p className="text-xs text-muted-foreground">Adopted by</p>
+   516→                    <p className="truncate text-sm font-semibold">{sheet.adoptedByName}</p>
+   517→                  </div>
+   518→                </div>
+   519→              ) : null}
+   520→
+   521→              <SectionCard title={`Pledges (${(sheet.pledges ?? []).length})`}>
+   522→                {(sheet.pledges ?? []).length === 0 ? (
+   523→                  <p className="text-sm text-muted-foreground">No pledges yet — donors can pledge from the public cause page.</p>
+   524→                ) : (
+   525→                  <ul className="max-h-60 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+   526→                    {(sheet.pledges ?? []).map((pl) => (
+   527→                      <li key={pl.id} className="flex items-center gap-2 rounded-lg border p-2.5 text-sm">
+   528→                        <div className="min-w-0 flex-1">
+   529→                          <p className="truncate font-medium">{pl.donorName}</p>
+   530→                          <p className="text-xs text-muted-foreground">
+   531→                            {formatINR(pl.amountPerMonth)}/mo × {pl.months} mo
+   532→                          </p>
+   533→                        </div>
+   534→                        <Badge variant="outline" className={cn("shrink-0", PLEDGE_STATUS[pl.status] ?? "")}>
+   535→                          {titleCase(pl.status)}
+   536→                        </Badge>
+   537→                      </li>
+   538→                    ))}
+   539→                  </ul>
+   540→                )}
+   541→              </SectionCard>
+   542→
+   543→              <div className="flex flex-wrap gap-2 border-t pt-4">
+   544→                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+   545→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+   546→                </Button>
+   547→                <Button
+   548→                  variant="outline"
+   549→                  size="sm"
+   550→                  onClick={() => togglePause(sheet)}
+   551→                  aria-label={sheet.status === "PAUSED" ? "Resume cause" : "Pause cause"}
+   552→                >
+   553→                  {sheet.status === "PAUSED" ? (
+   554→                    <Play className="size-3.5" aria-hidden="true" />
+   555→                  ) : (
+   556→                    <Pause className="size-3.5" aria-hidden="true" />
+   557→                  )}
+   558→                  {sheet.status === "PAUSED" ? "Resume" : "Pause"}
+   559→                </Button>
+   560→                {sheet.status === "ADOPTED" && (
+   561→                  <Button
+   562→                    variant="outline"
+   563→                    size="sm"
+   564→                    className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+   565→                    onClick={() => issueCertificate(sheet)}
+   566→                    disabled={issuing === sheet.id}
+   567→                  >
+   568→                    <Award className="size-3.5" aria-hidden="true" />
+   569→                    {issuing === sheet.id ? "Issuing…" : "Issue certificate"}
+   570→                  </Button>
+   571→                )}
+   572→                <Button
+   573→                  variant="outline"
+   574→                  size="sm"
+   575→                  className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+   576→                  onClick={() => setDeleteTarget(sheet)}
+   577→                  aria-label={`Delete ${sheet.code}`}
+   578→                >
+   579→                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+   580→                </Button>
+   581→              </div>
+   582→            </div>
+   583→          )}
+   584→        </SheetContent>
+   585→      </Sheet>
+   586→
+   587→      {/* ============================ CREATE / EDIT ============================= */}
+   588→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   589→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   590→          <DialogHeader>
+   591→            <DialogTitle>{editing ? `Edit ${editing.code}` : "New medicine cause"}</DialogTitle>
+   592→            <DialogDescription>
+   593→              {editing
+   594→                ? "Update patient details or costs — active pledges are not affected."
+   595→                : "Donors adopt a patient's full monthly medicine cost. The code (UAR-MED-####) is generated automatically."}
+   596→            </DialogDescription>
+   597→          </DialogHeader>
+   598→          <div className="grid gap-4">
+   599→            <div className="grid gap-4 sm:grid-cols-2">
+   600→              <div className="grid gap-2">
+   601→                <Label htmlFor="cause-name">Patient name *</Label>
+   602→                <Input
+   603→                  id="cause-name"
+   604→                  value={form.patientName}
+   605→                  onChange={(e) => setForm({ ...form, patientName: e.target.value })}
+   606→                  placeholder="Lakshmi Devi"
+   607→                />
+   608→              </div>
+   609→              <div className="grid gap-2">
+   610→                <Label htmlFor="cause-age">Age (years) *</Label>
+   611→                <Input
+   612→                  id="cause-age"
+   613→                  type="number"
+   614→                  min={0}
+   615→                  max={120}
+   616→                  value={form.age}
+   617→                  onChange={(e) => setForm({ ...form, age: e.target.value })}
+   618→                  placeholder="62"
+   619→                />
+   620→              </div>
+   621→            </div>
+   622→            <div className="grid gap-4 sm:grid-cols-2">
+   623→              <div className="grid gap-2">
+   624→                <Label>City *</Label>
+   625→                <Select value={form.city || undefined} onValueChange={(v) => setForm({ ...form, city: v })}>
+   626→                  <SelectTrigger aria-label="City">
+   627→                    <SelectValue placeholder="Select city" />
+   628→                  </SelectTrigger>
+   629→                  <SelectContent>
+   630→                    {cityOptions.options.map((o) => (
+   631→                      <SelectItem key={o.value} value={o.value}>
+   632→                        {o.label}
+   633→                      </SelectItem>
+   634→                    ))}
+   635→                  </SelectContent>
+   636→                </Select>
+   637→              </div>
+   638→              <div className="grid gap-2">
+   639→                <Label>Condition</Label>
+   640→                <Select value={form.condition} onValueChange={(v) => setForm({ ...form, condition: v })}>
+   641→                  <SelectTrigger aria-label="Condition">
+   642→                    <SelectValue placeholder="Select condition" />
+   643→                  </SelectTrigger>
+   644→                  <SelectContent>
+   645→                    {conditionOptions.options.map((o) => (
+   646→                      <SelectItem key={o.value} value={o.value}>
+   647→                        {o.label}
+   648→                      </SelectItem>
+   649→                    ))}
+   650→                  </SelectContent>
+   651→                </Select>
+   652→              </div>
+   653→            </div>
+   654→            <div className="grid gap-4 sm:grid-cols-2">
+   655→              <div className="grid gap-2">
+   656→                <Label htmlFor="cause-cost">Monthly cost (₹) *</Label>
+   657→                <Input
+   658→                  id="cause-cost"
+   659→                  type="number"
+   660→                  min={1}
+   661→                  value={form.monthlyCost}
+   662→                  onChange={(e) => setForm({ ...form, monthlyCost: e.target.value })}
+   663→                  placeholder="2400"
+   664→                />
+   665→              </div>
+   666→              <div className="grid gap-2">
+   667→                <Label htmlFor="cause-duration">Duration (months) *</Label>
+   668→                <Input
+   669→                  id="cause-duration"
+   670→                  type="number"
+   671→                  min={1}
+   672→                  max={120}
+   673→                  value={form.durationMonths}
+   674→                  onChange={(e) => setForm({ ...form, durationMonths: e.target.value })}
+   675→                />
+   676→              </div>
+   677→            </div>
+   678→            {form.monthlyCost && form.durationMonths && (
+   679→              <p className="text-xs text-muted-foreground">
+   680→                Total sponsorship value: {formatINR(Number(form.monthlyCost) * Number(form.durationMonths))}
+   681→              </p>
+   682→            )}
+   683→            <div className="grid gap-2">
+   684→              <Label htmlFor="cause-story">Story *</Label>
+   685→              <Textarea
+   686→                id="cause-story"
+   687→                rows={3}
+   688→                value={form.story}
+   689→                onChange={(e) => setForm({ ...form, story: e.target.value })}
+   690→                placeholder="Widowed, lives alone, needs BP + thyroid medicines every month…"
+   691→              />
+   692→            </div>
+   693→          </div>
+   694→          <DialogFooter>
+   695→            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+   696→              Cancel
+   697→            </Button>
+   698→            <Button onClick={save} disabled={saving}>
+   699→              {saving ? "Saving…" : editing ? "Save changes" : "Create cause"}
+   700→            </Button>
+   701→          </DialogFooter>
+   702→        </DialogContent>
+   703→      </Dialog>
+   704→
+   705→      {/* ============================ DELETE CONFIRM ============================ */}
+   706→      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   707→        <AlertDialogContent>
+   708→          <AlertDialogHeader>
+   709→            <AlertDialogTitle>Delete cause?</AlertDialogTitle>
+   710→            <AlertDialogDescription>
+   711→              {deleteTarget?.code} — {deleteTarget?.patientName}. This permanently removes the cause
+   712→              and its pledge history. Consider pausing instead.
+   713→            </AlertDialogDescription>
+   714→          </AlertDialogHeader>
+   715→          <AlertDialogFooter>
+   716→            <AlertDialogCancel>Keep cause</AlertDialogCancel>
+   717→            <AlertDialogAction
+   718→              className="bg-red-600 text-white hover:bg-red-700"
+   719→              onClick={(e) => {
+   720→                e.preventDefault();
+   721→                remove();
+   722→              }}
+   723→            >
+   724→              Delete
+   725→            </AlertDialogAction>
+   726→          </AlertDialogFooter>
+   727→        </AlertDialogContent>
+   728→      </AlertDialog>
+   729→    </div>
+   730→  );
+   731→}
+   732→

@@ -21,7 +21,7 @@ export async function GET(req: Request) {
       where: status ? { status } : undefined,
       orderBy: { createdAt: "desc" },
       include: {
-        template: { select: { name: true, costPerUnit: true } },
+        template: { select: { name: true, kind: true, codePrefix: true, costPerUnit: true } },
         _count: { select: { units: true } },
       },
     });
@@ -48,6 +48,14 @@ export async function POST(req: Request) {
 
     const template = await db.kitTemplate.findUnique({ where: { id: templateId } });
     if (!template) throw new ApiError("Template not found", 404);
+    if (template.status === "RETIRED")
+      throw new ApiError("Template is retired — pick an active one", 400);
+
+    const PREFIX_BY_KIND: Record<string, string> = {
+      RATION: "UAR-RK", FOOD: "UAR-FD", EDUCATION: "UAR-ED", MEDICAL: "UAR-MK",
+      HYGIENE: "UAR-HK", CLOTHING: "UAR-CL", EMERGENCY: "UAR-EK", CUSTOM: "UAR-CK",
+    };
+    const codePrefix = template.codePrefix || PREFIX_BY_KIND[template.kind] || "UAR-KIT";
 
     // global running number = existing kit units + 1; loop until codes are unique
     const year = new Date().getFullYear();
@@ -55,7 +63,7 @@ export async function POST(req: Request) {
     let codes: string[] = [];
     for (let guard = 0; guard < 25; guard++) {
       codes = Array.from({ length: totalUnits }, (_, i) =>
-        `UAR-RK-${year}-${String(base + i + 1).padStart(6, "0")}`
+        `${codePrefix}-${year}-${String(base + i + 1).padStart(6, "0")}`
       );
       const clash = await db.kitUnit.findFirst({
         where: { code: { in: codes } },
@@ -82,7 +90,7 @@ export async function POST(req: Request) {
     const full = await db.kitBatch.findUnique({
       where: { id: batch.id },
       include: {
-        template: { select: { name: true, costPerUnit: true } },
+        template: { select: { name: true, kind: true, codePrefix: true, costPerUnit: true } },
         _count: { select: { units: true } },
       },
     });

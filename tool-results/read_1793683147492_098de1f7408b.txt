@@ -1,0 +1,836 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→     4→import {
+     5→     5→  HeartHandshake,
+     6→     6→  MapPin,
+     7→     7→  Pencil,
+     8→     8→  Phone,
+     9→     9→  Plus,
+    10→    10→  RefreshCw,
+    11→    11→  Trash2,
+    12→    12→  UserRound,
+    13→    13→} from "lucide-react";
+    14→    14→import { toast } from "sonner";
+    15→    15→import { del, get, patch, post } from "@/lib/api-client";
+    16→    16→import { formatDateTime, formatINR, titleCase } from "@/lib/format";
+    17→    17→import { cn } from "@/lib/utils";
+    18→    18→import { PageHeader } from "@/components/shared/page-header";
+    19→    19→import { SectionCard } from "@/components/shared/section-card";
+    20→    20→import { StatCard } from "@/components/shared/stat-card";
+    21→    21→import { DataField } from "@/components/shared/data-field";
+    22→    22→import { EmptyState } from "@/components/shared/empty-state";
+    23→    23→import { Badge } from "@/components/ui/badge";
+    24→    24→import { Button } from "@/components/ui/button";
+    25→    25→import { Input } from "@/components/ui/input";
+    26→    26→import { Label } from "@/components/ui/label";
+    27→    27→import { Switch } from "@/components/ui/switch";
+    28→    28→import { Textarea } from "@/components/ui/textarea";
+    29→    29→import { Skeleton } from "@/components/ui/skeleton";
+    30→    30→import {
+    31→    31→  Select,
+    32→    32→  SelectContent,
+    33→    33→  SelectItem,
+    34→    34→  SelectTrigger,
+    35→    35→  SelectValue,
+    36→    36→} from "@/components/ui/select";
+    37→    37→import {
+    38→    38→  Sheet,
+    39→    39→  SheetContent,
+    40→    40→  SheetDescription,
+    41→    41→  SheetHeader,
+    42→    42→  SheetTitle,
+    43→    43→} from "@/components/ui/sheet";
+    44→    44→import {
+    45→    45→  Dialog,
+    46→    46→  DialogContent,
+    47→    47→  DialogDescription,
+    48→    48→  DialogFooter,
+    49→    49→  DialogHeader,
+    50→    50→  DialogTitle,
+    51→    51→} from "@/components/ui/dialog";
+    52→    52→import {
+    53→    53→  AlertDialog,
+    54→    54→  AlertDialogAction,
+    55→    55→  AlertDialogCancel,
+    56→    56→  AlertDialogContent,
+    57→    57→  AlertDialogDescription,
+    58→    58→  AlertDialogFooter,
+    59→    59→  AlertDialogHeader,
+    60→    60→  AlertDialogTitle,
+    61→    61→} from "@/components/ui/alert-dialog";
+    62→    62→import {
+    63→    63→  Table,
+    64→    64→  TableBody,
+    65→    65→  TableCell,
+    66→    66→  TableHead,
+    67→    67→  TableHeader,
+    68→    68→  TableRow,
+    69→    69→} from "@/components/ui/table";
+    70→    70→
+    71→    71→/* ---------------------------------- types ---------------------------------- */
+    72→    72→
+    73→    73→interface Beneficiary {
+    74→    74→  id: string;
+    75→    75→  name: string;
+    76→    76→  phone?: string | null;
+    77→    77→  email?: string | null;
+    78→    78→  address?: string | null;
+    79→    79→  city?: string | null;
+    80→    80→  state?: string | null;
+    81→    81→  pincode?: string | null;
+    82→    82→  category: string;
+    83→    83→  urgencyLevel: string;
+    84→    84→  familyMembers: number;
+    85→    85→  monthlyIncome?: number | null;
+    86→    86→  monthlyNeed?: number | null;
+    87→    87→  needs?: string | null;
+    88→    88→  documents?: string | null;
+    89→    89→  notes?: string | null;
+    90→    90→  isActive: boolean;
+    91→    91→  onboardedByName?: string | null;
+    92→    92→  createdAt?: string;
+    93→    93→}
+    94→    94→
+    95→    95→interface DistributionRow {
+    96→    96→  id: string;
+    97→    97→  type: string;
+    98→    98→  beneficiaryId?: string | null;
+    99→    99→  quantity: number;
+   100→   100→  value?: number | null;
+   101→   101→  location?: string | null;
+   102→   102→  distributedAt: string;
+   103→   103→  beneficiary?: { name: string } | null;
+   104→   104→  volunteer?: { user?: { name: string } | null } | null;
+   105→   105→}
+   106→   106→
+   107→   107→interface BenForm {
+   108→   108→  name: string;
+   109→   109→  phone: string;
+   110→   110→  email: string;
+   111→   111→  address: string;
+   112→   112→  city: string;
+   113→   113→  state: string;
+   114→   114→  pincode: string;
+   115→   115→  category: string;
+   116→   116→  urgencyLevel: string;
+   117→   117→  familyMembers: string;
+   118→   118→  monthlyIncome: string;
+   119→   119→  monthlyNeed: string;
+   120→   120→  needs: string;
+   121→   121→  documents: string;
+   122→   122→  notes: string;
+   123→   123→}
+   124→   124→
+   125→   125→/* ------------------------------- chip styles ------------------------------- */
+   126→   126→
+   127→   127→const URGENCY: Record<string, string> = {
+   128→   128→  CRITICAL: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 animate-pulse",
+   129→   129→  HIGH: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+   130→   130→  MEDIUM: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+   131→   131→  LOW: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+   132→   132→};
+   133→   133→
+   134→   134→const CATEGORIES = [
+   135→   135→  "WIDOW",
+   136→   136→  "ORPHAN",
+   137→   137→  "STUDENT",
+   138→   138→  "ELDERLY",
+   139→   139→  "DISABLED",
+   140→   140→  "SINGLE_MOTHER",
+   141→   141→  "POOR_FAMILY",
+   142→   142→  "PATIENT",
+   143→   143→  "DAILY_WAGE",
+   144→   144→  "OTHER",
+   145→   145→];
+   146→   146→
+   147→   147→const URGENCIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+   148→   148→
+   149→   149→const EMPTY_FORM: BenForm = {
+   150→   150→  name: "",
+   151→   151→  phone: "",
+   152→   152→  email: "",
+   153→   153→  address: "",
+   154→   154→  city: "",
+   155→   155→  state: "Karnataka",
+   156→   156→  pincode: "",
+   157→   157→  category: "OTHER",
+   158→   158→  urgencyLevel: "MEDIUM",
+   159→   159→  familyMembers: "1",
+   160→   160→  monthlyIncome: "",
+   161→   161→  monthlyNeed: "",
+   162→   162→  needs: "",
+   163→   163→  documents: "",
+   164→   164→  notes: "",
+   165→   165→};
+   166→   166→
+   167→   167→/* ---------------------------------- view ----------------------------------- */
+   168→   168→
+   169→   169→export default function BeneficiariesView() {
+   170→   170→  const [rows, setRows] = useState<Beneficiary[]>([]);
+   171→   171→  const [loading, setLoading] = useState(true);
+   172→   172→  const [categoryFilter, setCategoryFilter] = useState("ALL");
+   173→   173→  const [urgencyFilter, setUrgencyFilter] = useState("ALL");
+   174→   174→  const [search, setSearch] = useState("");
+   175→   175→
+   176→   176→  const [sheet, setSheet] = useState<Beneficiary | null>(null);
+   177→   177→  const [sheetDistributions, setSheetDistributions] = useState<DistributionRow[]>([]);
+   178→   178→  const [sheetDistributionsLoading, setSheetDistributionsLoading] = useState(false);
+   179→   179→
+   180→   180→  const [dialogOpen, setDialogOpen] = useState(false);
+   181→   181→  const [editing, setEditing] = useState<Beneficiary | null>(null);
+   182→   182→  const [form, setForm] = useState<BenForm>(EMPTY_FORM);
+   183→   183→  const [saving, setSaving] = useState(false);
+   184→   184→  const [deleteTarget, setDeleteTarget] = useState<Beneficiary | null>(null);
+   185→   185→  const [toggling, setToggling] = useState<string | null>(null);
+   186→   186→
+   187→   187→  const load = useCallback(async () => {
+   188→   188→    try {
+   189→   189→      const data = await get<Beneficiary[]>("/api/beneficiaries");
+   190→   190→      setRows(Array.isArray(data) ? data : []);
+   191→   191→    } catch (e) {
+   192→   192→      toast.error(e instanceof Error ? e.message : "Failed to load beneficiaries");
+   193→   193→    } finally {
+   194→   194→      setLoading(false);
+   195→   195→    }
+   196→   196→  }, []);
+   197→   197→
+   198→   198→  useEffect(() => {
+   199→   199→    load();
+   200→   200→  }, [load]);
+   201→   201→
+   202→   202→  const filtered = useMemo(() => {
+   203→   203→    const q = search.trim().toLowerCase();
+   204→   204→    return rows.filter((b) => {
+   205→   205→      if (categoryFilter !== "ALL" && b.category !== categoryFilter) return false;
+   206→   206→      if (urgencyFilter !== "ALL" && b.urgencyLevel !== urgencyFilter) return false;
+   207→   207→      if (q) {
+   208→   208→        const hay = `${b.name} ${b.city ?? ""} ${b.phone ?? ""}`.toLowerCase();
+   209→   209→        if (!hay.includes(q)) return false;
+   210→   210→      }
+   211→   211→      return true;
+   212→   212→    });
+   213→   213→  }, [rows, categoryFilter, urgencyFilter, search]);
+   214→   214→
+   215→   215→  const stats = useMemo(
+   216→   216→    () => ({
+   217→   217→      total: rows.length,
+   218→   218→      critical: rows.filter((b) => b.urgencyLevel === "CRITICAL").length,
+   219→   219→      active: rows.filter((b) => b.isActive).length,
+   220→   220→      monthlyNeed: rows.reduce((s, b) => s + (b.monthlyNeed ?? 0), 0),
+   221→   221→    }),
+   222→   222→    [rows]
+   223→   223→  );
+   224→   224→
+   225→   225→  /* open sheet + load its distributions */
+   226→   226→  const openSheet = (b: Beneficiary) => {
+   227→   227→    setSheet(b);
+   228→   228→    setSheetDistributionsLoading(true);
+   229→   229→    get<DistributionRow[]>("/api/distributions?limit=200")
+   230→   230→      .then((data) =>
+   231→   231→        setSheetDistributions(
+   232→   232→          (Array.isArray(data) ? data : []).filter((d) => d.beneficiaryId === b.id)
+   233→   233→        )
+   234→   234→      )
+   235→   235→      .catch(() => setSheetDistributions([]))
+   236→   236→      .finally(() => setSheetDistributionsLoading(false));
+   237→   237→  };
+   238→   238→
+   239→   239→  /* ------------------------------ form actions ----------------------------- */
+   240→   240→
+   241→   241→  const openCreate = () => {
+   242→   242→    setEditing(null);
+   243→   243→    setForm(EMPTY_FORM);
+   244→   244→    setDialogOpen(true);
+   245→   245→  };
+   246→   246→
+   247→   247→  const openEdit = (b: Beneficiary) => {
+   248→   248→    setEditing(b);
+   249→   249→    setForm({
+   250→   250→      name: b.name ?? "",
+   251→   251→      phone: b.phone ?? "",
+   252→   252→      email: b.email ?? "",
+   253→   253→      address: b.address ?? "",
+   254→   254→      city: b.city ?? "",
+   255→   255→      state: b.state ?? "",
+   256→   256→      pincode: b.pincode ?? "",
+   257→   257→      category: b.category ?? "OTHER",
+   258→   258→      urgencyLevel: b.urgencyLevel ?? "MEDIUM",
+   259→   259→      familyMembers: String(b.familyMembers ?? 1),
+   260→   260→      monthlyIncome: b.monthlyIncome != null ? String(b.monthlyIncome) : "",
+   261→   261→      monthlyNeed: b.monthlyNeed != null ? String(b.monthlyNeed) : "",
+   262→   262→      needs: b.needs ?? "",
+   263→   263→      documents: b.documents ?? "",
+   264→   264→      notes: b.notes ?? "",
+   265→   265→    });
+   266→   266→    setDialogOpen(true);
+   267→   267→  };
+   268→   268→
+   269→   269→  const validate = (): string | null => {
+   270→   270→    if (!form.name.trim()) return "Name is required";
+   271→   271→    if (form.phone && !/^\d{10}$/.test(form.phone.replace(/\D/g, ""))) return "Phone must be a 10-digit number";
+   272→   272→    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return "Email looks invalid";
+   273→   273→    if (form.pincode && !/^\d{6}$/.test(form.pincode)) return "Pincode must be exactly 6 digits";
+   274→   274→    const fam = Number(form.familyMembers);
+   275→   275→    if (!Number.isFinite(fam) || fam < 0) return "Family members must be 0 or more";
+   276→   276→    const inc = Number(form.monthlyIncome);
+   277→   277→    if (form.monthlyIncome && (!Number.isFinite(inc) || inc < 0)) return "Monthly income must be 0 or more";
+   278→   278→    const need = Number(form.monthlyNeed);
+   279→   279→    if (form.monthlyNeed && (!Number.isFinite(need) || need < 0)) return "Monthly need must be 0 or more";
+   280→   280→    return null;
+   281→   281→  };
+   282→   282→
+   283→   283→  const save = async () => {
+   284→   284→    const problem = validate();
+   285→   285→    if (problem) {
+   286→   286→      toast.error(problem);
+   287→   287→      return;
+   288→   288→    }
+   289→   289→    setSaving(true);
+   290→   290→    try {
+   291→   291→      const body = {
+   292→   292→        name: form.name.trim(),
+   293→   293→        phone: form.phone.trim() || undefined,
+   294→   294→        email: form.email.trim() || undefined,
+   295→   295→        address: form.address.trim() || undefined,
+   296→   296→        city: form.city.trim() || undefined,
+   297→   297→        state: form.state.trim() || undefined,
+   298→   298→        pincode: form.pincode.trim() || undefined,
+   299→   299→        category: form.category,
+   300→   300→        urgencyLevel: form.urgencyLevel,
+   301→   301→        familyMembers: Math.trunc(Number(form.familyMembers) || 1),
+   302→   302→        monthlyIncome: form.monthlyIncome === "" ? undefined : Number(form.monthlyIncome),
+   303→   303→        monthlyNeed: form.monthlyNeed === "" ? undefined : Number(form.monthlyNeed),
+   304→   304→        needs: form.needs.trim() || undefined,
+   305→   305→        documents: form.documents.trim() || undefined,
+   306→   306→        notes: form.notes.trim() || undefined,
+   307→   307→      };
+   308→   308→      if (editing) {
+   309→   309→        await patch(`/api/beneficiaries/${editing.id}`, body);
+   310→   310→        toast.success(`${body.name} updated`);
+   311→   311→      } else {
+   312→   312→        await post("/api/beneficiaries", body);
+   313→   313→        toast.success(`${body.name} onboarded`);
+   314→   314→      }
+   315→   315→      setDialogOpen(false);
+   316→   316→      setSheet(null);
+   317→   317→      load();
+   318→   318→    } catch (e) {
+   319→   319→      toast.error(e instanceof Error ? e.message : "Save failed");
+   320→   320→    } finally {
+   321→   321→      setSaving(false);
+   322→   322→    }
+   323→   323→  };
+   324→   324→
+   325→   325→  const toggleActive = async (b: Beneficiary) => {
+   326→   326→    setToggling(b.id);
+   327→   327→    try {
+   328→   328→      await patch(`/api/beneficiaries/${b.id}`, { isActive: !b.isActive });
+   329→   329→      toast.success(`${b.name} ${b.isActive ? "deactivated" : "activated"}`);
+   330→   330→      load();
+   331→   331→    } catch (e) {
+   332→   332→      toast.error(e instanceof Error ? e.message : "Update failed");
+   333→   333→    } finally {
+   334→   334→      setToggling(null);
+   335→   335→    }
+   336→   336→  };
+   337→   337→
+   338→   338→  const remove = async () => {
+   339→   339→    if (!deleteTarget) return;
+   340→   340→    try {
+   341→   341→      await del(`/api/beneficiaries/${deleteTarget.id}`);
+   342→   342→      toast.success(`${deleteTarget.name} removed`);
+   343→   343→      setDeleteTarget(null);
+   344→   344→      setSheet(null);
+   345→   345→      load();
+   346→   346→    } catch (e) {
+   347→   347→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   348→   348→    }
+   349→   349→  };
+   350→   350→
+   351→   351→  const rowActions = (b: Beneficiary) => (
+   352→   352→    <>
+   353→   353→      <Button variant="outline" size="sm" onClick={() => openEdit(b)} aria-label={`Edit ${b.name}`}>
+   354→   354→        <Pencil className="size-3.5" aria-hidden="true" />
+   355→   355→      </Button>
+   356→   356→      <Button
+   357→   357→        variant="outline"
+   358→   358→        size="sm"
+   359→   359→        className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+   360→   360→        onClick={() => setDeleteTarget(b)}
+   361→   361→        aria-label={`Delete ${b.name}`}
+   362→   362→      >
+   363→   363→        <Trash2 className="size-3.5" aria-hidden="true" />
+   364→   364→      </Button>
+   365→   365→    </>
+   366→   366→  );
+   367→   367→
+   368→   368→  /* --------------------------------- render -------------------------------- */
+   369→   369→
+   370→   370→  return (
+   371→   371→    <div className="space-y-6">
+   372→   372→      <PageHeader
+   373→   373→        title="Beneficiaries"
+   374→   374→        description="Families and individuals onboarded for UAR support programmes."
+   375→   375→        icon={<HeartHandshake className="size-5" aria-hidden="true" />}
+   376→   376→        actions={
+   377→   377→          <>
+   378→   378→            <Button variant="outline" onClick={load} aria-label="Refresh beneficiaries">
+   379→   379→              <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+   380→   380→            </Button>
+   381→   381→            <Button onClick={openCreate}>
+   382→   382→              <Plus className="size-4" aria-hidden="true" /> Onboard
+   383→   383→            </Button>
+   384→   384→          </>
+   385→   385→        }
+   386→   386→      />
+   387→   387→
+   388→   388→      {/* stats */}
+   389→   389→      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+   390→   390→        <StatCard label="On register" value={stats.total} accent="emerald" icon={<HeartHandshake className="size-5" aria-hidden="true" />} loading={loading} />
+   391→   391→        <StatCard label="Active" value={stats.active} accent="teal" icon={<UserRound className="size-5" aria-hidden="true" />} loading={loading} />
+   392→   392→        <StatCard label="Critical cases" value={stats.critical} accent="red" icon={<HeartHandshake className="size-5" aria-hidden="true" />} loading={loading} hint="Need urgent support" />
+   393→   393→        <StatCard label="Monthly need" value={formatINR(stats.monthlyNeed)} accent="amber" icon={<HeartHandshake className="size-5" aria-hidden="true" />} loading={loading} hint="Across all beneficiaries" />
+   394→   394→      </div>
+   395→   395→
+   396→   396→      {/* filters */}
+   397→   397→      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+   398→   398→        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+   399→   399→          <SelectTrigger className="w-full lg:w-44" aria-label="Filter by category">
+   400→   400→            <SelectValue />
+   401→   401→          </SelectTrigger>
+   402→   402→          <SelectContent>
+   403→   403→            <SelectItem value="ALL">All categories</SelectItem>
+   404→   404→            {CATEGORIES.map((c) => (
+   405→   405→              <SelectItem key={c} value={c}>
+   406→   406→                {titleCase(c)}
+   407→   407→              </SelectItem>
+   408→   408→            ))}
+   409→   409→          </SelectContent>
+   410→   410→        </Select>
+   411→   411→        <Select value={urgencyFilter} onValueChange={setUrgencyFilter}>
+   412→   412→          <SelectTrigger className="w-full lg:w-40" aria-label="Filter by urgency">
+   413→   413→            <SelectValue />
+   414→   414→          </SelectTrigger>
+   415→   415→          <SelectContent>
+   416→   416→            <SelectItem value="ALL">All urgency</SelectItem>
+   417→   417→            {URGENCIES.map((u) => (
+   418→   418→              <SelectItem key={u} value={u}>
+   419→   419→                {titleCase(u)}
+   420→   420→              </SelectItem>
+   421→   421→            ))}
+   422→   422→          </SelectContent>
+   423→   423→        </Select>
+   424→   424→        <Input
+   425→   425→          value={search}
+   426→   426→          onChange={(e) => setSearch(e.target.value)}
+   427→   427→          placeholder="Search name, city or phone…"
+   428→   428→          aria-label="Search beneficiaries"
+   429→   429→          className="w-full lg:max-w-xs"
+   430→   430→        />
+   431→   431→        <p className="text-xs text-muted-foreground lg:ml-auto">
+   432→   432→          {filtered.length} of {rows.length} beneficiaries
+   433→   433→        </p>
+   434→   434→      </div>
+   435→   435→
+   436→   436→      {/* list */}
+   437→   437→      {loading ? (
+   438→   438→        <div className="space-y-2" aria-busy="true">
+   439→   439→          {[0, 1, 2, 3, 4].map((i) => (
+   440→   440→            <Skeleton key={i} className="h-14 rounded-lg" />
+   441→   441→          ))}
+   442→   442→        </div>
+   443→   443→      ) : filtered.length === 0 ? (
+   444→   444→        <EmptyState
+   445→   445→          icon={<HeartHandshake className="size-8" aria-hidden="true" />}
+   446→   446→          title={rows.length === 0 ? "No beneficiaries yet" : "No matches"}
+   447→   447→          hint={
+   448→   448→            rows.length === 0
+   449→   449→              ? "Onboard your first beneficiary to start tracking distributions."
+   450→   450→              : "Try clearing filters or searching a different name."
+   451→   451→          }
+   452→   452→        >
+   453→   453→          {rows.length === 0 && (
+   454→   454→            <Button onClick={openCreate}>
+   455→   455→              <Plus className="size-4" aria-hidden="true" /> Onboard
+   456→   456→            </Button>
+   457→   457→          )}
+   458→   458→        </EmptyState>
+   459→   459→      ) : (
+   460→   460→        <>
+   461→   461→          {/* mobile cards */}
+   462→   462→          <ul className="space-y-2 sm:hidden">
+   463→   463→            {filtered.map((b) => (
+   464→   464→              <li key={b.id} className="rounded-lg border p-3">
+   465→   465→                <button type="button" className="w-full text-left" onClick={() => openSheet(b)} aria-label={`Open ${b.name}`}>
+   466→   466→                  <div className="flex items-center gap-2">
+   467→   467→                    <span className="truncate font-semibold">{b.name}</span>
+   468→   468→                    <Badge variant="outline" className={cn("ml-auto shrink-0", URGENCY[b.urgencyLevel] ?? URGENCY.MEDIUM)}>
+   469→   469→                      {titleCase(b.urgencyLevel)}
+   470→   470→                    </Badge>
+   471→   471→                  </div>
+   472→   472→                  <p className="mt-0.5 text-xs text-muted-foreground">
+   473→   473→                    {titleCase(b.category)} · {b.city || "—"} · {b.familyMembers} in family
+   474→   474→                  </p>
+   475→   475→                </button>
+   476→   476→                <div className="mt-2 flex items-center gap-1.5">
+   477→   477→                  {rowActions(b)}
+   478→   478→                  <div className="ml-auto flex items-center gap-2">
+   479→   479→                    <span className="text-xs text-muted-foreground">{b.isActive ? "Active" : "Inactive"}</span>
+   480→   480→                    <Switch
+   481→   481→                      checked={b.isActive}
+   482→   482→                      disabled={toggling === b.id}
+   483→   483→                      onCheckedChange={() => toggleActive(b)}
+   484→   484→                      aria-label={`${b.isActive ? "Deactivate" : "Activate"} ${b.name}`}
+   485→   485→                    />
+   486→   486→                  </div>
+   487→   487→                </div>
+   488→   488→              </li>
+   489→   489→            ))}
+   490→   490→          </ul>
+   491→   491→          {/* desktop table */}
+   492→   492→          <div className="hidden overflow-x-auto rounded-lg border sm:block">
+   493→   493→            <Table>
+   494→   494→              <TableHeader>
+   495→   495→                <TableRow>
+   496→   496→                  <TableHead>Name</TableHead>
+   497→   497→                  <TableHead>Category</TableHead>
+   498→   498→                  <TableHead>Urgency</TableHead>
+   499→   499→                  <TableHead>City</TableHead>
+   500→   500→                  <TableHead className="text-right">Family</TableHead>
+   501→   501→                  <TableHead>Active</TableHead>
+   502→   502→                  <TableHead className="text-right">Actions</TableHead>
+   503→   503→                </TableRow>
+   504→   504→              </TableHeader>
+   505→   505→              <TableBody>
+   506→   506→                {filtered.map((b) => (
+   507→   507→                  <TableRow key={b.id}>
+   508→   508→                    <TableCell>
+   509→   509→                      <button type="button" className="text-left font-medium hover:text-primary" onClick={() => openSheet(b)} aria-label={`Open ${b.name}`}>
+   510→   510→                        {b.name}
+   511→   511→                      </button>
+   512→   512→                      {b.phone ? <span className="block text-xs text-muted-foreground">{b.phone}</span> : null}
+   513→   513→                    </TableCell>
+   514→   514→                    <TableCell>{titleCase(b.category)}</TableCell>
+   515→   515→                    <TableCell>
+   516→   516→                      <Badge variant="outline" className={cn(URGENCY[b.urgencyLevel] ?? URGENCY.MEDIUM)}>
+   517→   517→                        {titleCase(b.urgencyLevel)}
+   518→   518→                      </Badge>
+   519→   519→                    </TableCell>
+   520→   520→                    <TableCell>{b.city || "—"}</TableCell>
+   521→   521→                    <TableCell className="text-right">{b.familyMembers}</TableCell>
+   522→   522→                    <TableCell>
+   523→   523→                      <Switch
+   524→   524→                        checked={b.isActive}
+   525→   525→                        disabled={toggling === b.id}
+   526→   526→                        onCheckedChange={() => toggleActive(b)}
+   527→   527→                        aria-label={`${b.isActive ? "Deactivate" : "Activate"} ${b.name}`}
+   528→   528→                      />
+   529→   529→                    </TableCell>
+   530→   530→                    <TableCell className="text-right">
+   531→   531→                      <div className="flex justify-end gap-1.5">{rowActions(b)}</div>
+   532→   532→                    </TableCell>
+   533→   533→                  </TableRow>
+   534→   534→                ))}
+   535→   535→              </TableBody>
+   536→   536→            </Table>
+   537→   537→          </div>
+   538→   538→        </>
+   539→   539→      )}
+   540→   540→
+   541→   541→      {/* ============================== DETAIL SHEET ============================= */}
+   542→   542→      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+   543→   543→        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+   544→   544→          {sheet && (
+   545→   545→            <div className="space-y-5 p-5">
+   546→   546→              <SheetHeader className="p-0 text-left">
+   547→   547→                <SheetTitle className="flex items-center gap-2">
+   548→   548→                  {sheet.name}
+   549→   549→                  <Badge variant="outline" className={cn("ml-auto", URGENCY[sheet.urgencyLevel] ?? URGENCY.MEDIUM)}>
+   550→   550→                    {titleCase(sheet.urgencyLevel)}
+   551→   551→                  </Badge>
+   552→   552→                </SheetTitle>
+   553→   553→                <SheetDescription>
+   554→   554→                  {titleCase(sheet.category)} · onboarded by {sheet.onboardedByName || "—"}
+   555→   555→                </SheetDescription>
+   556→   556→              </SheetHeader>
+   557→   557→
+   558→   558→              <div className="grid grid-cols-2 gap-3">
+   559→   559→                <DataField label="Phone" value={sheet.phone || "—"} icon={<Phone className="size-3.5" aria-hidden="true" />} mono />
+   560→   560→                <DataField label="Email" value={sheet.email || "—"} />
+   561→   561→                <DataField label="City" value={sheet.city || "—"} icon={<MapPin className="size-3.5" aria-hidden="true" />} />
+   562→   562→                <DataField label="State" value={sheet.state || "—"} />
+   563→   563→                <DataField label="Pincode" value={sheet.pincode || "—"} mono />
+   564→   564→                <DataField label="Family members" value={String(sheet.familyMembers)} />
+   565→   565→                <DataField label="Monthly income" value={sheet.monthlyIncome != null ? formatINR(sheet.monthlyIncome) : "—"} />
+   566→   566→                <DataField label="Monthly need" value={sheet.monthlyNeed != null ? formatINR(sheet.monthlyNeed) : "—"} />
+   567→   567→                <DataField label="Documents" value={sheet.documents || "—"} />
+   568→   568→                <DataField label="Status" value={sheet.isActive ? "Active" : "Inactive"} />
+   569→   569→              </div>
+   570→   570→
+   571→   571→              {sheet.address ? (
+   572→   572→                <SectionCard title="Address">
+   573→   573→                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.address}</p>
+   574→   574→                </SectionCard>
+   575→   575→              ) : null}
+   576→   576→
+   577→   577→              {sheet.needs ? (
+   578→   578→                <SectionCard title="Needs">
+   579→   579→                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.needs}</p>
+   580→   580→                </SectionCard>
+   581→   581→              ) : null}
+   582→   582→
+   583→   583→              {sheet.notes ? (
+   584→   584→                <SectionCard title="Notes">
+   585→   585→                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.notes}</p>
+   586→   586→                </SectionCard>
+   587→   587→              ) : null}
+   588→   588→
+   589→   589→              <SectionCard title={`Distributions (${sheetDistributions.length})`}>
+   590→   590→                {sheetDistributionsLoading ? (
+   591→   591→                  <div className="space-y-2" aria-busy="true">
+   592→   592→                    {[0, 1].map((i) => (
+   593→   593→                      <Skeleton key={i} className="h-10 rounded-lg" />
+   594→   594→                    ))}
+   595→   595→                  </div>
+   596→   596→                ) : sheetDistributions.length === 0 ? (
+   597→   597→                  <p className="text-sm text-muted-foreground">No distributions recorded for this beneficiary yet.</p>
+   598→   598→                ) : (
+   599→   599→                  <ul className="max-h-60 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
+   600→   600→                    {sheetDistributions.map((d) => (
+   601→   601→                      <li key={d.id} className="flex items-center gap-2 rounded-lg border p-2.5 text-sm">
+   602→   602→                        <div className="min-w-0 flex-1">
+   603→   603→                          <p className="truncate font-medium">
+   604→   604→                            {titleCase(d.type)} × {d.quantity}
+   605→   605→                          </p>
+   606→   606→                          <p className="text-xs text-muted-foreground">
+   607→   607→                            {formatDateTime(d.distributedAt)}
+   608→   608→                            {d.location ? ` · ${d.location}` : ""}
+   609→   609→                          </p>
+   610→   610→                        </div>
+   611→   611→                        <span className="shrink-0 text-xs font-medium">
+   612→   612→                          {d.value != null ? formatINR(d.value) : ""}
+   613→   613→                        </span>
+   614→   614→                      </li>
+   615→   615→                    ))}
+   616→   616→                  </ul>
+   617→   617→                )}
+   618→   618→              </SectionCard>
+   619→   619→
+   620→   620→              <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+   621→   621→                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+   622→   622→                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+   623→   623→                </Button>
+   624→   624→                <div className="ml-auto flex items-center gap-2">
+   625→   625→                  <Label htmlFor="sheet-active" className="text-xs text-muted-foreground">
+   626→   626→                    {sheet.isActive ? "Active" : "Inactive"}
+   627→   627→                  </Label>
+   628→   628→                  <Switch
+   629→   629→                    id="sheet-active"
+   630→   630→                    checked={sheet.isActive}
+   631→   631→                    disabled={toggling === sheet.id}
+   632→   632→                    onCheckedChange={() => toggleActive(sheet)}
+   633→   633→                    aria-label={`${sheet.isActive ? "Deactivate" : "Activate"} ${sheet.name}`}
+   634→   634→                  />
+   635→   635→                </div>
+   636→   636→              </div>
+   637→   637→            </div>
+   638→   638→          )}
+   639→   639→        </SheetContent>
+   640→   640→      </Sheet>
+   641→   641→
+   642→   642→      {/* ============================ CREATE / EDIT ============================= */}
+   643→   643→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   644→   644→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   645→   645→          <DialogHeader>
+   646→   646→            <DialogTitle>{editing ? `Edit ${editing.name}` : "Onboard beneficiary"}</DialogTitle>
+   647→   647→            <DialogDescription>
+   648→   648→              All fields help volunteers plan distribution visits. Phone and pincode are validated.
+   649→   649→            </DialogDescription>
+   650→   650→          </DialogHeader>
+   651→   651→          <div className="grid gap-4">
+   652→   652→            <div className="grid gap-4 sm:grid-cols-2">
+   653→   653→              <div className="grid gap-2">
+   654→   654→                <Label htmlFor="ben-name">Name *</Label>
+   655→   655→                <Input
+   656→   656→                  id="ben-name"
+   657→   657→                  value={form.name}
+   658→   658→                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+   659→   659→                  placeholder="Lakshmi Devi"
+   660→   660→                />
+   661→   661→              </div>
+   662→   662→              <div className="grid gap-2">
+   663→   663→                <Label htmlFor="ben-phone">Phone (10 digits)</Label>
+   664→   664→                <Input
+   665→   665→                  id="ben-phone"
+   666→   666→                  inputMode="numeric"
+   667→   667→                  value={form.phone}
+   668→   668→                  onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d]/g, "").slice(0, 10) })}
+   669→   669→                  placeholder="9876543210"
+   670→   670→                />
+   671→   671→              </div>
+   672→   672→            </div>
+   673→   673→            <div className="grid gap-2">
+   674→   674→              <Label htmlFor="ben-email">Email</Label>
+   675→   675→              <Input
+   676→   676→                id="ben-email"
+   677→   677→                type="email"
+   678→   678→                value={form.email}
+   679→   679→                onChange={(e) => setForm({ ...form, email: e.target.value })}
+   680→   680→                placeholder="optional"
+   681→   681→              />
+   682→   682→            </div>
+   683→   683→            <div className="grid gap-2">
+   684→   684→              <Label htmlFor="ben-address">Address</Label>
+   685→   685→              <Textarea
+   686→   686→                id="ben-address"
+   687→   687→                rows={2}
+   688→   688→                value={form.address}
+   689→   689→                onChange={(e) => setForm({ ...form, address: e.target.value })}
+   690→   690→              />
+   691→   691→            </div>
+   692→   692→            <div className="grid gap-4 sm:grid-cols-3">
+   693→   693→              <div className="grid gap-2">
+   694→   694→                <Label htmlFor="ben-city">City</Label>
+   695→   695→                <Input id="ben-city" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+   696→   696→              </div>
+   697→   697→              <div className="grid gap-2">
+   698→   698→                <Label htmlFor="ben-state">State</Label>
+   699→   699→                <Input id="ben-state" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+   700→   700→              </div>
+   701→   701→              <div className="grid gap-2">
+   702→   702→                <Label htmlFor="ben-pin">Pincode (6 digits)</Label>
+   703→   703→                <Input
+   704→   704→                  id="ben-pin"
+   705→   705→                  inputMode="numeric"
+   706→   706→                  value={form.pincode}
+   707→   707→                  onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/[^\d]/g, "").slice(0, 6) })}
+   708→   708→                />
+   709→   709→              </div>
+   710→   710→            </div>
+   711→   711→            <div className="grid gap-4 sm:grid-cols-2">
+   712→   712→              <div className="grid gap-2">
+   713→   713→                <Label>Category</Label>
+   714→   714→                <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+   715→   715→                  <SelectTrigger aria-label="Category">
+   716→   716→                    <SelectValue />
+   717→   717→                  </SelectTrigger>
+   718→   718→                  <SelectContent>
+   719→   719→                    {CATEGORIES.map((c) => (
+   720→   720→                      <SelectItem key={c} value={c}>
+   721→   721→                        {titleCase(c)}
+   722→   722→                      </SelectItem>
+   723→   723→                    ))}
+   724→   724→                  </SelectContent>
+   725→   725→                </Select>
+   726→   726→              </div>
+   727→   727→              <div className="grid gap-2">
+   728→   728→                <Label>Urgency</Label>
+   729→   729→                <Select value={form.urgencyLevel} onValueChange={(v) => setForm({ ...form, urgencyLevel: v })}>
+   730→   730→                  <SelectTrigger aria-label="Urgency level">
+   731→   731→                    <SelectValue />
+   732→   732→                  </SelectTrigger>
+   733→   733→                  <SelectContent>
+   734→   734→                    {URGENCIES.map((u) => (
+   735→   735→                      <SelectItem key={u} value={u}>
+   736→   736→                        {titleCase(u)}
+   737→   737→                      </SelectItem>
+   738→   738→                    ))}
+   739→   739→                  </SelectContent>
+   740→   740→                </Select>
+   741→   741→              </div>
+   742→   742→            </div>
+   743→   743→            <div className="grid gap-4 sm:grid-cols-3">
+   744→   744→              <div className="grid gap-2">
+   745→   745→                <Label htmlFor="ben-family">Family members</Label>
+   746→   746→                <Input
+   747→   747→                  id="ben-family"
+   748→   748→                  type="number"
+   749→   749→                  min={0}
+   750→   750→                  value={form.familyMembers}
+   751→   751→                  onChange={(e) => setForm({ ...form, familyMembers: e.target.value })}
+   752→   752→                />
+   753→   753→              </div>
+   754→   754→              <div className="grid gap-2">
+   755→   755→                <Label htmlFor="ben-income">Monthly income (₹)</Label>
+   756→   756→                <Input
+   757→   757→                  id="ben-income"
+   758→   758→                  type="number"
+   759→   759→                  min={0}
+   760→   760→                  value={form.monthlyIncome}
+   761→   761→                  onChange={(e) => setForm({ ...form, monthlyIncome: e.target.value })}
+   762→   762→                />
+   763→   763→              </div>
+   764→   764→              <div className="grid gap-2">
+   765→   765→                <Label htmlFor="ben-need">Monthly need (₹)</Label>
+   766→   766→                <Input
+   767→   767→                  id="ben-need"
+   768→   768→                  type="number"
+   769→   769→                  min={0}
+   770→   770→                  value={form.monthlyNeed}
+   771→   771→                  onChange={(e) => setForm({ ...form, monthlyNeed: e.target.value })}
+   772→   772→                />
+   773→   773→              </div>
+   774→   774→            </div>
+   775→   775→            <div className="grid gap-2">
+   776→   776→              <Label htmlFor="ben-needs">Needs</Label>
+   777→   777→              <Textarea
+   778→   778→                id="ben-needs"
+   779→   779→                rows={2}
+   780→   780→                value={form.needs}
+   781→   781→                onChange={(e) => setForm({ ...form, needs: e.target.value })}
+   782→   782→                placeholder="Ration support, medicines, school fees…"
+   783→   783→              />
+   784→   784→            </div>
+   785→   785→            <div className="grid gap-2">
+   786→   786→              <Label htmlFor="ben-docs">Documents</Label>
+   787→   787→              <Input
+   788→   788→                id="ben-docs"
+   789→   789→                value={form.documents}
+   790→   790→                onChange={(e) => setForm({ ...form, documents: e.target.value })}
+   791→   791→                placeholder="Aadhaar verified, BPL card"
+   792→   792→              />
+   793→   793→            </div>
+   794→   794→            <div className="grid gap-2">
+   795→   795→              <Label htmlFor="ben-notes">Notes</Label>
+   796→   796→              <Textarea id="ben-notes" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+   797→   797→            </div>
+   798→   798→          </div>
+   799→   799→          <DialogFooter>
+   800→   800→            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+   801→   801→              Cancel
+   802→   802→            </Button>
+   803→   803→            <Button onClick={save} disabled={saving}>
+   804→   804→              {saving ? "Saving…" : editing ? "Save changes" : "Onboard"}
+   805→   805→            </Button>
+   806→   806→          </DialogFooter>
+   807→   807→        </DialogContent>
+   808→   808→      </Dialog>
+   809→   809→
+   810→   810→      {/* ============================ DELETE CONFIRM ============================ */}
+   811→   811→      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   812→   812→        <AlertDialogContent>
+   813→   813→          <AlertDialogHeader>
+   814→   814→            <AlertDialogTitle>Remove {deleteTarget?.name}?</AlertDialogTitle>
+   815→   815→            <AlertDialogDescription>
+   816→   816→              The beneficiary record is deleted permanently. Past distributions keep their history.
+   817→   817→            </AlertDialogDescription>
+   818→   818→          </AlertDialogHeader>
+   819→   819→          <AlertDialogFooter>
+   820→   820→            <AlertDialogCancel>Keep record</AlertDialogCancel>
+   821→   821→            <AlertDialogAction
+   822→   822→              className="bg-red-600 text-white hover:bg-red-700"
+   823→   823→              onClick={(e) => {
+   824→   824→                e.preventDefault();
+   825→   825→                remove();
+   826→   826→              }}
+   827→   827→            >
+   828→   828→              Delete
+   829→   829→            </AlertDialogAction>
+   830→   830→          </AlertDialogFooter>
+   831→   831→        </AlertDialogContent>
+   832→   832→      </AlertDialog>
+   833→   833→    </div>
+   834→   834→  );
+   835→   835→}
+   836→   836→

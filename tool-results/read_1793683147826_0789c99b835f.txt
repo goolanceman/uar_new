@@ -1,0 +1,789 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  Eye,
+     6→  KeyRound,
+     7→  Pencil,
+     8→  Plus,
+     9→  Search,
+    10→  ShieldCheck,
+    11→  Trash2,
+    12→  Users,
+    13→} from "lucide-react";
+    14→import { toast } from "sonner";
+    15→import { del, get, patch, post } from "@/lib/api-client";
+    16→import { useAuth } from "@/hooks/use-auth";
+    17→import { cn } from "@/lib/utils";
+    18→import { formatDateTime, initials, titleCase } from "@/lib/format";
+    19→import { PageHeader } from "@/components/shared/page-header";
+    20→import { DataField } from "@/components/shared/data-field";
+    21→import { EmptyState } from "@/components/shared/empty-state";
+    22→import { SectionCard } from "@/components/shared/section-card";
+    23→import { Button } from "@/components/ui/button";
+    24→import { Input } from "@/components/ui/input";
+    25→import { Label } from "@/components/ui/label";
+    26→import { Textarea } from "@/components/ui/textarea";
+    27→import { Switch } from "@/components/ui/switch";
+    28→import { Skeleton } from "@/components/ui/skeleton";
+    29→import {
+    30→  Dialog,
+    31→  DialogContent,
+    32→  DialogDescription,
+    33→  DialogFooter,
+    34→  DialogHeader,
+    35→  DialogTitle,
+    36→} from "@/components/ui/dialog";
+    37→import {
+    38→  AlertDialog,
+    39→  AlertDialogAction,
+    40→  AlertDialogCancel,
+    41→  AlertDialogContent,
+    42→  AlertDialogDescription,
+    43→  AlertDialogFooter,
+    44→  AlertDialogHeader,
+    45→  AlertDialogTitle,
+    46→} from "@/components/ui/alert-dialog";
+    47→import {
+    48→  Sheet,
+    49→  SheetContent,
+    50→  SheetDescription,
+    51→  SheetHeader,
+    52→  SheetTitle,
+    53→} from "@/components/ui/sheet";
+    54→import {
+    55→  Select,
+    56→  SelectContent,
+    57→  SelectItem,
+    58→  SelectTrigger,
+    59→  SelectValue,
+    60→} from "@/components/ui/select";
+    61→import {
+    62→  Table,
+    63→  TableBody,
+    64→  TableCell,
+    65→  TableHead,
+    66→  TableHeader,
+    67→  TableRow,
+    68→} from "@/components/ui/table";
+    69→
+    70→/* ------------------------------ types & helpers ----------------------------- */
+    71→
+    72→interface UserRow {
+    73→  id: string;
+    74→  name: string;
+    75→  email: string;
+    76→  role: string;
+    77→  status: string;
+    78→  isActive?: boolean;
+    79→  phone?: string | null;
+    80→  city?: string | null;
+    81→  pan?: string | null;
+    82→  about?: string | null;
+    83→  createdAt: string;
+    84→  updatedAt?: string;
+    85→}
+    86→
+    87→interface DonationLite {
+    88→  id: string;
+    89→  donorId?: string | null;
+    90→  amount: number;
+    91→  paymentStatus: string;
+    92→}
+    93→
+    94→const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"];
+    95→const STATUSES = ["ACTIVE", "PENDING", "SUSPENDED"];
+    96→const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    97→
+    98→function roleTone(role: string): string {
+    99→  switch (role) {
+   100→    case "ADMIN":
+   101→      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+   102→    case "VOLUNTEER":
+   103→      return "bg-teal-500/10 text-teal-700 dark:text-teal-400";
+   104→    case "DONOR":
+   105→      return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
+   106→    case "BENEFICIARY":
+   107→      return "bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400";
+   108→    default:
+   109→      return "bg-muted text-muted-foreground";
+   110→  }
+   111→}
+   112→
+   113→function statusTone(status: string): string {
+   114→  switch (status) {
+   115→    case "ACTIVE":
+   116→      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+   117→    case "PENDING":
+   118→      return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
+   119→    case "SUSPENDED":
+   120→      return "bg-red-500/10 text-red-700 dark:text-red-400";
+   121→    default:
+   122→      return "bg-muted text-muted-foreground";
+   123→  }
+   124→}
+   125→
+   126→const emptyCreateForm = { name: "", email: "", password: "", role: "DONOR", city: "", phone: "" };
+   127→
+   128→const emptyEditForm = {
+   129→  name: "",
+   130→  phone: "",
+   131→  city: "",
+   132→  pan: "",
+   133→  about: "",
+   134→  role: "DONOR",
+   135→  status: "ACTIVE",
+   136→  isActive: true,
+   137→  password: "",
+   138→};
+   139→
+   140→/* ---------------------------------- view ----------------------------------- */
+   141→
+   142→export default function UsersView() {
+   143→  const { user } = useAuth();
+   144→  const [rows, setRows] = useState<UserRow[]>([]);
+   145→  const [loading, setLoading] = useState(true);
+   146→  const [saving, setSaving] = useState(false);
+   147→  const [q, setQ] = useState("");
+   148→  const [search, setSearch] = useState("");
+   149→  const [role, setRole] = useState("ALL");
+   150→  const [status, setStatus] = useState("ALL");
+   151→
+   152→  const [createOpen, setCreateOpen] = useState(false);
+   153→  const [createForm, setCreateForm] = useState({ ...emptyCreateForm });
+   154→  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+   155→  const [editForm, setEditForm] = useState({ ...emptyEditForm });
+   156→  const [roleConfirmOpen, setRoleConfirmOpen] = useState(false);
+   157→  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+   158→  const [viewTarget, setViewTarget] = useState<UserRow | null>(null);
+   159→  const [donorStats, setDonorStats] = useState<{ count: number; sum: number } | null>(null);
+   160→
+   161→  /* -------------------------------- loading -------------------------------- */
+   162→
+   163→  const load = useCallback(async () => {
+   164→    setLoading(true);
+   165→    try {
+   166→      const data = await get<UserRow[] | { items?: UserRow[] }>("/api/users?limit=500");
+   167→      setRows(Array.isArray(data) ? data : (data.items ?? []));
+   168→    } catch (e) {
+   169→      toast.error(e instanceof Error ? e.message : "Failed to load users");
+   170→    } finally {
+   171→      setLoading(false);
+   172→    }
+   173→  }, []);
+   174→
+   175→  useEffect(() => {
+   176→    load();
+   177→  }, [load]);
+   178→
+   179→  useEffect(() => {
+   180→    const t = setTimeout(() => setSearch(q), 350);
+   181→    return () => clearTimeout(t);
+   182→  }, [q]);
+   183→
+   184→  const filtered = useMemo(() => {
+   185→    const needle = search.trim().toLowerCase();
+   186→    return rows.filter((u) => {
+   187→      if (role !== "ALL" && u.role !== role) return false;
+   188→      if (status !== "ALL" && u.status !== status) return false;
+   189→      if (needle && !`${u.name} ${u.email} ${u.phone ?? ""} ${u.city ?? ""}`.toLowerCase().includes(needle)) return false;
+   190→      return true;
+   191→    });
+   192→  }, [rows, search, role, status]);
+   193→
+   194→  /* -------------------------------- actions ------------------------------- */
+   195→
+   196→  const createUser = async () => {
+   197→    if (!createForm.name.trim() || !createForm.email.trim() || !createForm.password) {
+   198→      toast.error("Name, email and password are required");
+   199→      return;
+   200→    }
+   201→    if (!EMAIL_RE.test(createForm.email.trim())) {
+   202→      toast.error("Enter a valid email address");
+   203→      return;
+   204→    }
+   205→    if (createForm.password.length < 8) {
+   206→      toast.error("Password must be at least 8 characters");
+   207→      return;
+   208→    }
+   209→    setSaving(true);
+   210→    try {
+   211→      await post("/api/users", {
+   212→        name: createForm.name.trim(),
+   213→        email: createForm.email.trim(),
+   214→        password: createForm.password,
+   215→        role: createForm.role,
+   216→        city: createForm.city.trim() || undefined,
+   217→        phone: createForm.phone.trim() || undefined,
+   218→      });
+   219→      toast.success(`User ${createForm.name.trim()} created`);
+   220→      setCreateOpen(false);
+   221→      setCreateForm({ ...emptyCreateForm });
+   222→      await load();
+   223→    } catch (e) {
+   224→      toast.error(e instanceof Error ? e.message : "Failed to create user");
+   225→    } finally {
+   226→      setSaving(false);
+   227→    }
+   228→  };
+   229→
+   230→  const openEdit = (u: UserRow) => {
+   231→    setEditTarget(u);
+   232→    setEditForm({
+   233→      name: u.name ?? "",
+   234→      phone: u.phone ?? "",
+   235→      city: u.city ?? "",
+   236→      pan: u.pan ?? "",
+   237→      about: u.about ?? "",
+   238→      role: u.role ?? "DONOR",
+   239→      status: u.status ?? "ACTIVE",
+   240→      isActive: u.isActive ?? u.status === "ACTIVE",
+   241→      password: "",
+   242→    });
+   243→  };
+   244→
+   245→  const saveEdit = () => {
+   246→    if (!editTarget?.id) {
+   247→      toast.error("No user selected — close the dialog and try again");
+   248→      return;
+   249→    }
+   250→    if (!editForm.name.trim()) {
+   251→      toast.error("Name cannot be empty");
+   252→      return;
+   253→    }
+   254→    if (editForm.password && editForm.password.length < 8) {
+   255→      toast.error("Password must be at least 8 characters");
+   256→      return;
+   257→    }
+   258→    if (editForm.role !== editTarget.role) {
+   259→      setRoleConfirmOpen(true);
+   260→      return;
+   261→    }
+   262→    doSaveEdit();
+   263→  };
+   264→
+   265→  const doSaveEdit = async () => {
+   266→    if (!editTarget?.id) return;
+   267→    setRoleConfirmOpen(false);
+   268→    setSaving(true);
+   269→    try {
+   270→      await patch(`/api/users/${editTarget.id}`, {
+   271→        name: editForm.name.trim(),
+   272→        phone: editForm.phone.trim() || null,
+   273→        city: editForm.city.trim() || null,
+   274→        pan: editForm.pan.trim().toUpperCase() || null,
+   275→        about: editForm.about.trim() || null,
+   276→        role: editForm.role,
+   277→        status: editForm.status,
+   278→        isActive: editForm.isActive,
+   279→        ...(editForm.password ? { password: editForm.password } : {}),
+   280→      });
+   281→      toast.success(`${editForm.name.trim()} updated`);
+   282→      setEditTarget(null);
+   283→      await load();
+   284→    } catch (e) {
+   285→      toast.error(e instanceof Error ? e.message : "Failed to update user");
+   286→    } finally {
+   287→      setSaving(false);
+   288→    }
+   289→  };
+   290→
+   291→  const confirmDelete = async () => {
+   292→    if (!deleteTarget) return;
+   293→    if (deleteTarget.id === user?.id) {
+   294→      toast.error("You cannot delete your own account");
+   295→      setDeleteTarget(null);
+   296→      return;
+   297→    }
+   298→    setSaving(true);
+   299→    try {
+   300→      await del(`/api/users/${deleteTarget.id}`);
+   301→      toast.success("User deleted");
+   302→      setDeleteTarget(null);
+   303→      await load();
+   304→    } catch (e) {
+   305→      toast.error(e instanceof Error ? e.message : "Failed to delete user");
+   306→    } finally {
+   307→      setSaving(false);
+   308→    }
+   309→  };
+   310→
+   311→  const openView = (u: UserRow) => {
+   312→    setViewTarget(u);
+   313→    setDonorStats(null);
+   314→    if (u.role === "DONOR") {
+   315→      get<DonationLite[] | { items?: DonationLite[] }>("/api/donations?limit=500")
+   316→        .then((data) => {
+   317→          const list = Array.isArray(data) ? data : (data.items ?? []);
+   318→          const mine = list.filter((d) => d.donorId === u.id && d.paymentStatus === "COMPLETED");
+   319→          setDonorStats({
+   320→            count: mine.length,
+   321→            sum: mine.reduce((acc, d) => acc + (Number(d.amount) || 0), 0),
+   322→          });
+   323→        })
+   324→        .catch(() => setDonorStats(null));
+   325→    }
+   326→  };
+   327→
+   328→  const rowActions = (u: UserRow, withLabels = false) => {
+   329→    const self = u.id === user?.id;
+   330→    return (
+   331→      <div className={cn("items-center", withLabels ? "flex flex-wrap gap-2" : "flex justify-end gap-1")}>
+   332→        <Button
+   333→          size={withLabels ? "sm" : "icon"}
+   334→          variant="ghost"
+   335→          className={withLabels ? "" : "size-11 md:size-9"}
+   336→          aria-label={`View user ${u.name}`}
+   337→          onClick={() => openView(u)}
+   338→        >
+   339→          <Eye className="size-4" />
+   340→          {withLabels && <span>View</span>}
+   341→        </Button>
+   342→        <Button
+   343→          size={withLabels ? "sm" : "icon"}
+   344→          variant="ghost"
+   345→          className={withLabels ? "" : "size-11 md:size-9"}
+   346→          aria-label={`Edit user ${u.name}`}
+   347→          onClick={() => openEdit(u)}
+   348→        >
+   349→          <Pencil className="size-4" />
+   350→          {withLabels && <span>Edit</span>}
+   351→        </Button>
+   352→        <Button
+   353→          size={withLabels ? "sm" : "icon"}
+   354→          variant="ghost"
+   355→          className={cn(withLabels ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "size-11 md:size-9 text-red-600 hover:bg-red-500/10 hover:text-red-700")}
+   356→          aria-label={self ? "You cannot delete your own account" : `Delete user ${u.name}`}
+   357→          disabled={self}
+   358→          onClick={() => setDeleteTarget(u)}
+   359→        >
+   360→          <Trash2 className="size-4" />
+   361→          {withLabels && <span>Delete</span>}
+   362→        </Button>
+   363→      </div>
+   364→    );
+   365→  };
+   366→
+   367→  /* --------------------------------- render -------------------------------- */
+   368→
+   369→  return (
+   370→    <div className="space-y-4 sm:space-y-6">
+   371→      <PageHeader
+   372→        title="Users & Roles"
+   373→        description="Manage accounts, roles and access across the trust."
+   374→        icon={<Users className="size-5" aria-hidden="true" />}
+   375→        actions={
+   376→          <Button onClick={() => setCreateOpen(true)} aria-label="Create new user">
+   377→            <Plus className="size-4" /> New user
+   378→          </Button>
+   379→        }
+   380→      />
+   381→
+   382→      {/* Filters */}
+   383→      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+   384→        <div className="relative flex-1">
+   385→          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+   386→          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, email, phone or city…" className="pl-9" aria-label="Search users" />
+   387→        </div>
+   388→        <div className="flex flex-wrap gap-2">
+   389→          <Select value={role} onValueChange={setRole}>
+   390→            <SelectTrigger className="w-full sm:w-40" aria-label="Filter by role">
+   391→              <SelectValue placeholder="All roles" />
+   392→            </SelectTrigger>
+   393→            <SelectContent>
+   394→              <SelectItem value="ALL">All roles</SelectItem>
+   395→              {ROLES.map((r) => (
+   396→                <SelectItem key={r} value={r}>{titleCase(r)}</SelectItem>
+   397→              ))}
+   398→            </SelectContent>
+   399→          </Select>
+   400→          <Select value={status} onValueChange={setStatus}>
+   401→            <SelectTrigger className="w-full sm:w-40" aria-label="Filter by status">
+   402→              <SelectValue placeholder="All statuses" />
+   403→            </SelectTrigger>
+   404→            <SelectContent>
+   405→              <SelectItem value="ALL">All statuses</SelectItem>
+   406→              {STATUSES.map((s) => (
+   407→                <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+   408→              ))}
+   409→            </SelectContent>
+   410→          </Select>
+   411→          <span className="ml-auto self-center text-xs text-muted-foreground" aria-live="polite">
+   412→            {loading ? "Loading…" : `${filtered.length} of ${rows.length} users`}
+   413→          </span>
+   414→        </div>
+   415→      </div>
+   416→
+   417→      {/* Desktop table */}
+   418→      <div className="hidden rounded-xl border bg-card md:block">
+   419→        {loading ? (
+   420→          <div className="space-y-2 p-4">
+   421→            {Array.from({ length: 6 }).map((_, i) => (
+   422→              <Skeleton key={i} className="h-11 w-full" />
+   423→            ))}
+   424→          </div>
+   425→        ) : filtered.length === 0 ? (
+   426→          <div className="p-6">
+   427→            <EmptyState
+   428→              icon={<Users className="size-6" aria-hidden="true" />}
+   429→              title="No users found"
+   430→              hint="Adjust the filters or create a new account."
+   431→            >
+   432→              <Button size="sm" variant="outline" onClick={() => { setQ(""); setRole("ALL"); setStatus("ALL"); }}>
+   433→                Clear filters
+   434→              </Button>
+   435→            </EmptyState>
+   436→          </div>
+   437→        ) : (
+   438→          <div className="overflow-x-auto">
+   439→            <Table>
+   440→              <TableHeader>
+   441→                <TableRow>
+   442→                  <TableHead>User</TableHead>
+   443→                  <TableHead>Role</TableHead>
+   444→                  <TableHead>Status</TableHead>
+   445→                  <TableHead className="hidden md:table-cell">City</TableHead>
+   446→                  <TableHead className="hidden lg:table-cell">Phone</TableHead>
+   447→                  <TableHead className="hidden sm:table-cell">Joined</TableHead>
+   448→                  <TableHead className="text-right">Actions</TableHead>
+   449→                </TableRow>
+   450→              </TableHeader>
+   451→              <TableBody>
+   452→                {filtered.map((u) => {
+   453→                  const self = u.id === user?.id;
+   454→                  return (
+   455→                    <TableRow key={u.id}>
+   456→                      <TableCell>
+   457→                        <div className="flex items-center gap-2.5">
+   458→                          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary" aria-hidden="true">
+   459→                            {initials(u.name)}
+   460→                          </span>
+   461→                          <div className="min-w-0">
+   462→                            <p className="truncate font-medium">
+   463→                              {u.name}
+   464→                              {self && <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">You</span>}
+   465→                            </p>
+   466→                            <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+   467→                          </div>
+   468→                        </div>
+   469→                      </TableCell>
+   470→                      <TableCell>
+   471→                        <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold", roleTone(u.role))}>{titleCase(u.role)}</span>
+   472→                      </TableCell>
+   473→                      <TableCell>
+   474→                        <span className={cn("whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold", statusTone(u.status))}>{titleCase(u.status)}</span>
+   475→                      </TableCell>
+   476→                      <TableCell className="hidden md:table-cell">{u.city || "—"}</TableCell>
+   477→                      <TableCell className="hidden lg:table-cell">{u.phone || "—"}</TableCell>
+   478→                      <TableCell className="hidden whitespace-nowrap text-sm sm:table-cell">{formatDateTime(u.createdAt)}</TableCell>
+   479→                      <TableCell className="text-right">{rowActions(u)}</TableCell>
+   480→                    </TableRow>
+   481→                  );
+   482→                })}
+   483→              </TableBody>
+   484→            </Table>
+   485→          </div>
+   486→        )}
+   487→      </div>
+   488→
+   489→      {/* Mobile stacked cards */}
+   490→      <div className="space-y-3 md:hidden">
+   491→        {loading ? (
+   492→          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)
+   493→        ) : filtered.length === 0 ? (
+   494→          <EmptyState
+   495→            icon={<Users className="size-6" aria-hidden="true" />}
+   496→            title="No users found"
+   497→            hint="Adjust the filters or create a new account."
+   498→          />
+   499→        ) : (
+   500→          filtered.map((u) => {
+   501→            const self = u.id === user?.id;
+   502→            return (
+   503→              <article key={u.id} className="space-y-2.5 rounded-xl border bg-card p-4">
+   504→                <div className="flex items-start gap-2.5">
+   505→                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-hidden="true">
+   506→                    {initials(u.name)}
+   507→                  </span>
+   508→                  <div className="min-w-0 flex-1">
+   509→                    <p className="truncate text-sm font-semibold">
+   510→                      {u.name}
+   511→                      {self && <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">You</span>}
+   512→                    </p>
+   513→                    <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+   514→                  </div>
+   515→                </div>
+   516→                <div className="flex flex-wrap items-center gap-1.5">
+   517→                  <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", roleTone(u.role))}>{titleCase(u.role)}</span>
+   518→                  <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", statusTone(u.status))}>{titleCase(u.status)}</span>
+   519→                  {u.city && <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">{u.city}</span>}
+   520→                </div>
+   521→                <p className="text-xs text-muted-foreground">Joined {formatDateTime(u.createdAt)}</p>
+   522→                <div className="border-t pt-2">{rowActions(u, true)}</div>
+   523→              </article>
+   524→            );
+   525→          })
+   526→        )}
+   527→      </div>
+   528→
+   529→      {/* ------------------------------ View sheet ---------------------------- */}
+   530→      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
+   531→        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg">
+   532→          <SheetHeader className="text-left">
+   533→            <SheetTitle className="flex items-center gap-2">
+   534→              <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
+   535→              {viewTarget?.name ?? "User"}
+   536→            </SheetTitle>
+   537→            <SheetDescription>{viewTarget ? `${viewTarget.email} · ${titleCase(viewTarget.role)}` : ""}</SheetDescription>
+   538→          </SheetHeader>
+   539→          {viewTarget && (
+   540→            <div className="flex-1 space-y-4 px-4 pb-6">
+   541→              <SectionCard title="Account" icon={<ShieldCheck className="size-4" aria-hidden="true" />}>
+   542→                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   543→                  <DataField label="Name" value={viewTarget.name} />
+   544→                  <DataField label="Email" value={viewTarget.email} copy />
+   545→                  <DataField label="Role" value={<span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", roleTone(viewTarget.role))}>{titleCase(viewTarget.role)}</span>} />
+   546→                  <DataField label="Status" value={<span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", statusTone(viewTarget.status))}>{titleCase(viewTarget.status)}</span>} />
+   547→                  <DataField label="Active" value={viewTarget.isActive ? "Yes" : "No"} />
+   548→                  <DataField label="User ID" value={viewTarget.id} mono copy />
+   549→                </div>
+   550→              </SectionCard>
+   551→
+   552→              <SectionCard title="Profile" icon={<Users className="size-4" aria-hidden="true" />}>
+   553→                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   554→                  <DataField label="Phone" value={viewTarget.phone} copy />
+   555→                  <DataField label="City" value={viewTarget.city} />
+   556→                  <DataField label="PAN" value={viewTarget.pan} mono copy />
+   557→                  <DataField label="Joined" value={formatDateTime(viewTarget.createdAt)} />
+   558→                  {viewTarget.updatedAt && <DataField label="Updated" value={formatDateTime(viewTarget.updatedAt)} />}
+   559→                </div>
+   560→                {viewTarget.about && (
+   561→                  <p className="mt-4 whitespace-pre-line rounded-md bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+   562→                    {viewTarget.about}
+   563→                  </p>
+   564→                )}
+   565→              </SectionCard>
+   566→
+   567→              {viewTarget.role === "DONOR" && (
+   568→                <SectionCard title="Giving history" icon={<KeyRound className="size-4" aria-hidden="true" />}>
+   569→                  {donorStats === null ? (
+   570→                    <Skeleton className="h-12 w-full" />
+   571→                  ) : (
+   572→                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+   573→                      <DataField label="Completed donations" value={String(donorStats.count)} />
+   574→                      <DataField label="Total given" value={donorStats.count > 0 ? `₹${donorStats.sum.toLocaleString("en-IN")}` : "—"} />
+   575→                    </div>
+   576→                  )}
+   577→                </SectionCard>
+   578→              )}
+   579→
+   580→              <div className="flex flex-wrap gap-2">
+   581→                <Button
+   582→                  size="sm"
+   583→                  variant="outline"
+   584→                  onClick={() => {
+   585→                    setViewTarget(null);
+   586→                    openEdit(viewTarget);
+   587→                  }}
+   588→                  aria-label="Edit this user"
+   589→                >
+   590→                  <Pencil className="size-4" /> Edit user
+   591→                </Button>
+   592→              </div>
+   593→            </div>
+   594→          )}
+   595→        </SheetContent>
+   596→      </Sheet>
+   597→
+   598→      {/* ----------------------------- Create dialog -------------------------- */}
+   599→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   600→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   601→          <DialogHeader>
+   602→            <DialogTitle>Create user</DialogTitle>
+   603→            <DialogDescription>Add an admin, volunteer, donor or beneficiary account.</DialogDescription>
+   604→          </DialogHeader>
+   605→          <div className="grid gap-4">
+   606→            <div className="grid gap-4 sm:grid-cols-2">
+   607→              <div className="grid gap-2">
+   608→                <Label htmlFor="u-name">Name *</Label>
+   609→                <Input id="u-name" value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} placeholder="Full name" />
+   610→              </div>
+   611→              <div className="grid gap-2">
+   612→                <Label htmlFor="u-email">Email *</Label>
+   613→                <Input id="u-email" type="email" value={createForm.email} onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })} placeholder="user@example.org" />
+   614→              </div>
+   615→            </div>
+   616→            <div className="grid gap-4 sm:grid-cols-2">
+   617→              <div className="grid gap-2">
+   618→                <Label htmlFor="u-password">Password *</Label>
+   619→                <Input id="u-password" type="password" value={createForm.password} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} placeholder="Min 8 characters" />
+   620→              </div>
+   621→              <div className="grid gap-2">
+   622→                <Label>Role</Label>
+   623→                <Select value={createForm.role} onValueChange={(v) => setCreateForm({ ...createForm, role: v })}>
+   624→                  <SelectTrigger aria-label="User role"><SelectValue /></SelectTrigger>
+   625→                  <SelectContent>
+   626→                    {ROLES.map((r) => (
+   627→                      <SelectItem key={r} value={r}>{titleCase(r)}</SelectItem>
+   628→                    ))}
+   629→                  </SelectContent>
+   630→                </Select>
+   631→              </div>
+   632→            </div>
+   633→            <div className="grid gap-4 sm:grid-cols-2">
+   634→              <div className="grid gap-2">
+   635→                <Label htmlFor="u-city">City</Label>
+   636→                <Input id="u-city" value={createForm.city} onChange={(e) => setCreateForm({ ...createForm, city: e.target.value })} placeholder="Bengaluru" />
+   637→              </div>
+   638→              <div className="grid gap-2">
+   639→                <Label htmlFor="u-phone">Phone</Label>
+   640→                <Input id="u-phone" type="tel" value={createForm.phone} onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })} placeholder="+91…" />
+   641→              </div>
+   642→            </div>
+   643→          </div>
+   644→          <DialogFooter>
+   645→            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+   646→            <Button onClick={createUser} disabled={saving}>{saving ? "Creating…" : "Create user"}</Button>
+   647→          </DialogFooter>
+   648→        </DialogContent>
+   649→      </Dialog>
+   650→
+   651→      {/* ------------------------------ Edit dialog --------------------------- */}
+   652→      <Dialog open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
+   653→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   654→          <DialogHeader>
+   655→            <DialogTitle>Edit user</DialogTitle>
+   656→            <DialogDescription>{editTarget ? `${editTarget.name} · ${editTarget.email}` : ""}</DialogDescription>
+   657→          </DialogHeader>
+   658→          <div className="grid gap-4">
+   659→            <div className="grid gap-4 sm:grid-cols-2">
+   660→              <div className="grid gap-2">
+   661→                <Label htmlFor="ue-name">Name *</Label>
+   662→                <Input id="ue-name" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+   663→              </div>
+   664→              <div className="grid gap-2">
+   665→                <Label htmlFor="ue-phone">Phone</Label>
+   666→                <Input id="ue-phone" type="tel" value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
+   667→              </div>
+   668→            </div>
+   669→            <div className="grid gap-4 sm:grid-cols-2">
+   670→              <div className="grid gap-2">
+   671→                <Label htmlFor="ue-city">City</Label>
+   672→                <Input id="ue-city" value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} />
+   673→              </div>
+   674→              <div className="grid gap-2">
+   675→                <Label htmlFor="ue-pan">PAN</Label>
+   676→                <Input id="ue-pan" value={editForm.pan} onChange={(e) => setEditForm({ ...editForm, pan: e.target.value.toUpperCase() })} className="font-mono uppercase" placeholder="ABCDE1234F" />
+   677→              </div>
+   678→            </div>
+   679→            <div className="grid gap-2">
+   680→              <Label htmlFor="ue-about">About</Label>
+   681→              <Textarea id="ue-about" value={editForm.about} onChange={(e) => setEditForm({ ...editForm, about: e.target.value })} rows={2} placeholder="Short bio or context" />
+   682→            </div>
+   683→            <div className="grid gap-4 sm:grid-cols-2">
+   684→              <div className="grid gap-2">
+   685→                <Label>Role</Label>
+   686→                <Select value={editForm.role} onValueChange={(v) => setEditForm({ ...editForm, role: v })}>
+   687→                  <SelectTrigger aria-label="User role"><SelectValue /></SelectTrigger>
+   688→                  <SelectContent>
+   689→                    {ROLES.map((r) => (
+   690→                      <SelectItem key={r} value={r}>{titleCase(r)}</SelectItem>
+   691→                    ))}
+   692→                  </SelectContent>
+   693→                </Select>
+   694→              </div>
+   695→              <div className="grid gap-2">
+   696→                <Label>Status</Label>
+   697→                <Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}>
+   698→                  <SelectTrigger aria-label="User status"><SelectValue /></SelectTrigger>
+   699→                  <SelectContent>
+   700→                    {STATUSES.map((s) => (
+   701→                      <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+   702→                    ))}
+   703→                  </SelectContent>
+   704→                </Select>
+   705→              </div>
+   706→            </div>
+   707→            <div className="flex items-center justify-between rounded-lg border p-3">
+   708→              <div>
+   709→                <Label htmlFor="ue-active" className="text-sm">Account active</Label>
+   710→                <p className="text-xs text-muted-foreground">Inactive accounts cannot sign in</p>
+   711→              </div>
+   712→              <Switch id="ue-active" checked={editForm.isActive} onCheckedChange={(v) => setEditForm({ ...editForm, isActive: v })} />
+   713→            </div>
+   714→            <div className="grid gap-2">
+   715→              <Label htmlFor="ue-pass">Reset password</Label>
+   716→              <div className="relative">
+   717→                <KeyRound className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+   718→                <Input
+   719→                  id="ue-pass"
+   720→                  type="password"
+   721→                  className="pl-9"
+   722→                  value={editForm.password}
+   723→                  onChange={(e) => setEditForm({ ...editForm, password: e.target.value })}
+   724→                  placeholder="Leave blank to keep current password"
+   725→                />
+   726→              </div>
+   727→            </div>
+   728→          </div>
+   729→          <DialogFooter>
+   730→            <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+   731→            <Button onClick={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button>
+   732→          </DialogFooter>
+   733→        </DialogContent>
+   734→      </Dialog>
+   735→
+   736→      {/* ---------------------- Role change confirm --------------------------- */}
+   737→      <AlertDialog open={roleConfirmOpen} onOpenChange={setRoleConfirmOpen}>
+   738→        <AlertDialogContent>
+   739→          <AlertDialogHeader>
+   740→            <AlertDialogTitle>Confirm role change</AlertDialogTitle>
+   741→            <AlertDialogDescription>
+   742→              {editTarget
+   743→                ? `You are changing ${editTarget.name}'s role from ${titleCase(editTarget.role)} to ${titleCase(editForm.role)}. This changes portal access and permissions immediately.`
+   744→                : ""}
+   745→            </AlertDialogDescription>
+   746→          </AlertDialogHeader>
+   747→          <AlertDialogFooter>
+   748→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   749→            <AlertDialogAction
+   750→              onClick={(e) => {
+   751→                e.preventDefault();
+   752→                doSaveEdit();
+   753→              }}
+   754→            >
+   755→              {saving ? "Saving…" : "Change role"}
+   756→            </AlertDialogAction>
+   757→          </AlertDialogFooter>
+   758→        </AlertDialogContent>
+   759→      </AlertDialog>
+   760→
+   761→      {/* ---------------------------- Delete confirm -------------------------- */}
+   762→      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   763→        <AlertDialogContent>
+   764→          <AlertDialogHeader>
+   765→            <AlertDialogTitle>Delete user?</AlertDialogTitle>
+   766→            <AlertDialogDescription>
+   767→              {deleteTarget
+   768→                ? `${deleteTarget.name} (${deleteTarget.email}) will be permanently removed. Their donations and logs stay but become unlinked. This cannot be undone.`
+   769→                : ""}
+   770→            </AlertDialogDescription>
+   771→          </AlertDialogHeader>
+   772→          <AlertDialogFooter>
+   773→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   774→            <AlertDialogAction
+   775→              className="bg-destructive text-white hover:bg-destructive/90"
+   776→              onClick={(e) => {
+   777→                e.preventDefault();
+   778→                confirmDelete();
+   779→              }}
+   780→            >
+   781→              {saving ? "Deleting…" : "Delete"}
+   782→            </AlertDialogAction>
+   783→          </AlertDialogFooter>
+   784→        </AlertDialogContent>
+   785→      </AlertDialog>
+   786→    </div>
+   787→  );
+   788→}
+   789→

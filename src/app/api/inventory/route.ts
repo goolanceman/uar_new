@@ -66,6 +66,7 @@ export async function POST(req: Request) {
             ? Number(body.pricePerUnit)
             : null,
         description: body.description ? String(body.description) : null,
+        expiryDate: body.expiryDate ? new Date(String(body.expiryDate)) : null,
       },
     });
 

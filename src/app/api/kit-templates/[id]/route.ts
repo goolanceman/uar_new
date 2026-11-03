@@ -24,6 +24,20 @@ export async function PATCH(req: Request, { params }: Ctx) {
 
     const data: Prisma.KitTemplateUpdateInput = {};
     if (body.name !== undefined) data.name = String(body.name).trim();
+    if (body.kind !== undefined) {
+      const KINDS = ["RATION","FOOD","EDUCATION","MEDICAL","HYGIENE","CLOTHING","EMERGENCY","CUSTOM"];
+      const k = String(body.kind).toUpperCase();
+      if (!KINDS.includes(k)) throw new ApiError("Invalid kit kind", 400);
+      data.kind = k;
+    }
+    if (body.codePrefix !== undefined)
+      data.codePrefix = body.codePrefix ? String(body.codePrefix).trim().toUpperCase() : null;
+    if (body.image !== undefined) data.image = body.image ? String(body.image).trim() : null;
+    if (body.status !== undefined) {
+      const st = String(body.status).toUpperCase();
+      if (!["ACTIVE","RETIRED"].includes(st)) throw new ApiError("Invalid status", 400);
+      data.status = st;
+    }
     if (body.description !== undefined)
       data.description = body.description ? String(body.description) : null;
     if (body.items !== undefined) {

@@ -12,6 +12,22 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+// GET /api/inventory/:id — item + purchase history (ADMIN | VOLUNTEER)
+export async function GET(_req: Request, { params }: Ctx) {
+  try {
+    await requireRole("ADMIN", "VOLUNTEER");
+    const { id } = await params;
+    const item = await db.inventoryItem.findUnique({
+      where: { id },
+      include: { purchases: { orderBy: { purchaseDate: "desc" }, take: 50 } },
+    });
+    if (!item) throw new ApiError("Inventory item not found", 404);
+    return json(item);
+  } catch (e) {
+    return handleError(e);
+  }
+}
+
 // PATCH /api/inventory/:id (ADMIN | VOLUNTEER)
 //   {addQuantity}          → increment quantity (never below 0)
 //   ...or set plain fields {name?, category?, quantity?, minStock?, unit?, location?, pricePerUnit?, description?}
@@ -48,6 +64,26 @@ export async function PATCH(req: Request, { params }: Ctx) {
           : Number(body.pricePerUnit);
     if (body.description !== undefined)
       data.description = body.description ? String(body.description) : null;
+    if (body.expiryDate !== undefined)
+      data.expiryDate = body.expiryDate ? new Date(String(body.expiryDate)) : null;
+
+    // Stock-in with supplier details → record an InventoryPurchase row
+    if (body.addQuantity !== undefined && (body.supplier || body.invoiceNumber || body.purchasePrice)) {
+      const add = Math.trunc(Number(body.addQuantity) || 0);
+      await db.inventoryPurchase.create({
+        data: {
+          itemId: id,
+          quantity: add,
+          pricePerUnit:
+            body.purchasePrice !== undefined && body.purchasePrice !== "" && Number.isFinite(Number(body.purchasePrice))
+              ? Number(body.purchasePrice)
+              : null,
+          supplier: body.supplier ? String(body.supplier).trim() : null,
+          invoiceNumber: body.invoiceNumber ? String(body.invoiceNumber).trim() : null,
+          purchaseDate: body.purchaseDate ? new Date(String(body.purchaseDate)) : new Date(),
+        },
+      });
+    }
 
     const item = await db.inventoryItem.update({ where: { id }, data });
     await logActivity(

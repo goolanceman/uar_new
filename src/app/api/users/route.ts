@@ -74,6 +74,10 @@ export async function POST(req: NextRequest) {
 
     if (!name || !email || !password || !role)
       throw new ApiError("Name, email, password and role are required", 400);
+    if (!/^\S+@\S+\.\S+$/.test(email))
+      throw new ApiError("Please enter a valid email address", 400);
+    if (password.length < 6)
+      throw new ApiError("Password must be at least 6 characters", 400);
 
     const existing = await db.user.findFirst({
       where: { email: { equals: email } },

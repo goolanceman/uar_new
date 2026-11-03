@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Download,
   FolderTree,
   Info,
   Loader2,
@@ -10,11 +11,15 @@ import {
   ShieldCheck,
   Tag,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { titleCase } from "@/lib/format";
+import { downloadCsv } from "@/components/shared/csv";
+import { FormSheet } from "@/components/shared/form-sheet";
+import { TextareaField } from "@/components/shared/form-fields";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Button } from "@/components/ui/button";
@@ -69,6 +74,19 @@ interface MasterEntry {
   active: boolean;
 }
 
+interface ImportResult {
+  line: number;
+  value: string;
+  ok: boolean;
+  message: string;
+}
+
+interface ParsedLine {
+  value: string;
+  label: string;
+  sortOrder: number;
+}
+
 /** Where each registry surfaces in the product — shown as a hint per tab. */
 const USAGE_HINTS: Record<string, string> = {
   CITY: "Fills city dropdowns across onboarding forms",
@@ -90,6 +108,27 @@ function usageHint(category: string): string {
   return USAGE_HINTS[category] ?? "Used across forms that reference this registry";
 }
 
+/** Parses "value,label,sortOrder" lines; label and sortOrder are optional. */
+function parseImportLines(text: string): { rows: ParsedLine[]; errors: string[] } {
+  const rows: ParsedLine[] = [];
+  const errors: string[] = [];
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    const parts = line.split(",").map((s) => s.trim());
+    const value = parts[0] ?? "";
+    if (!value) {
+      errors.push(`Line ${i + 1}: value is required`);
+      return;
+    }
+    const label = parts[1] || value;
+    const sortOrderRaw = parts[2];
+    const sortOrder = sortOrderRaw ? Math.trunc(Number(sortOrderRaw)) || 0 : 0;
+    rows.push({ value, label, sortOrder });
+  });
+  return { rows, errors };
+}
+
 /* ---------------------------------- view ----------------------------------- */
 
 export default function MastersView() {
@@ -107,6 +146,12 @@ export default function MastersView() {
   // add entry dialog
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState({ category: "", newCategory: "", value: "", label: "", sortOrder: "0" });
+
+  // bulk import
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResults, setImportResults] = useState<ImportResult[]>([]);
 
   const [deleteTarget, setDeleteTarget] = useState<MasterEntry | null>(null);
 
@@ -155,6 +200,8 @@ export default function MastersView() {
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.label.localeCompare(b.label)),
     [entries, selected]
   );
+
+  const parsedImport = useMemo(() => parseImportLines(importText), [importText]);
 
   /* ------------------------------- mutations ------------------------------ */
 
@@ -252,6 +299,69 @@ export default function MastersView() {
     }
   };
 
+  /* ----------------------------- export / import --------------------------- */
+
+  const exportCategory = () => {
+    if (!selected || selectedEntries.length === 0) {
+      toast.info("Nothing to export in this category yet");
+      return;
+    }
+    downloadCsv(`uar-masters-${selected.toLowerCase()}`, [
+      { header: "value", value: (e: MasterEntry) => e.value },
+      { header: "label", value: (e: MasterEntry) => e.label },
+      { header: "sortOrder", value: (e: MasterEntry) => e.sortOrder },
+      { header: "active", value: (e: MasterEntry) => (e.active ? "1" : "0") },
+    ], selectedEntries);
+    toast.success(`Exported ${selectedEntries.length} ${selectedEntries.length === 1 ? "entry" : "entries"}`);
+  };
+
+  const openImport = () => {
+    setImportText("");
+    setImportResults([]);
+    setImportOpen(true);
+  };
+
+  const runImport = async () => {
+    const { rows, errors } = parsedImport;
+    if (!selected) {
+      toast.error("Choose a category first");
+      return;
+    }
+    if (rows.length === 0) {
+      toast.error("Nothing to import — add lines like value,label,sortOrder");
+      return;
+    }
+    setImporting(true);
+    setImportResults([]);
+    const results: ImportResult[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        await post("/api/masters", {
+          category: selected,
+          value: r.value,
+          label: r.label,
+          sortOrder: r.sortOrder,
+        });
+        results.push({ line: i + 1, value: r.value, ok: true, message: "Imported" });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Failed";
+        results.push({ line: i + 1, value: r.value, ok: false, message });
+        toast.error(`Row ${i + 1} (${r.value}): ${message}`);
+      }
+      setImportResults([...results]);
+    }
+    setImporting(false);
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    if (failCount === 0) {
+      toast.success(`Imported ${okCount} ${okCount === 1 ? "entry" : "entries"} into ${titleCase(selected)}`);
+    } else {
+      toast.warning(`${okCount} imported · ${failCount} failed${errors.length ? ` · ${errors.length} unparsed line${errors.length === 1 ? "" : "s"}` : ""}`);
+    }
+    await load();
+  };
+
   /* --------------------------------- render -------------------------------- */
 
   return (
@@ -309,9 +419,29 @@ export default function MastersView() {
             </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">{usageHint(selected ?? "")}</p>
           </div>
-          <span className="text-xs text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `${selectedEntries.length} entr${selectedEntries.length === 1 ? "y" : "ies"}`}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground" aria-live="polite">
+              {loading ? "Loading…" : `${selectedEntries.length} entr${selectedEntries.length === 1 ? "y" : "ies"}`}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportCategory}
+              disabled={!selected || selectedEntries.length === 0}
+              aria-label={`Export ${selected} entries as CSV`}
+            >
+              <Download className="size-4" aria-hidden="true" /> Export
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openImport}
+              disabled={!selected}
+              aria-label={`Bulk import ${selected} entries`}
+            >
+              <Upload className="size-4" aria-hidden="true" /> Import
+            </Button>
+          </div>
         </div>
 
         {loading ? (
@@ -501,6 +631,72 @@ export default function MastersView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* --------------------------- Bulk import sheet ------------------------- */}
+      <FormSheet
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        title={`Import ${selected ? titleCase(selected) : "entries"}`}
+        description="Paste one entry per line as value,label,sortOrder. Label and sort order are optional — existing values are updated."
+        submitLabel={importing ? "Importing…" : `Import ${parsedImport.rows.length || ""}`.trim()}
+        cancelLabel="Cancel"
+        loading={importing}
+        dirty={importText.trim().length > 0}
+        size="md"
+        onSubmit={runImport}
+      >
+        <TextareaField
+          label="Entries to import"
+          value={importText}
+          onChange={setImportText}
+          rows={10}
+          placeholder={"WHITEFIELD, Whitefield, 1\nKORAMANGALA, Koramangala, 2\nINDIRANAGAR, Indiranagar, 3"}
+          hint="One per line — value is required; label defaults to the value; sort order defaults to 0."
+          disabled={importing}
+        />
+        <div className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <p aria-live="polite">
+            <strong className="text-foreground">{parsedImport.rows.length}</strong> line
+            {parsedImport.rows.length === 1 ? "" : "s"} ready to import
+            {parsedImport.errors.length > 0 && (
+              <>
+                {" · "}
+                <span className="text-red-600 dark:text-red-400">{parsedImport.errors.length} unparsable</span>
+              </>
+            )}{" "}
+            into <strong className="text-foreground">{selected ? titleCase(selected) : "—"}</strong>
+          </p>
+          {parsedImport.errors.length > 0 && (
+            <ul className="mt-2 list-inside list-disc space-y-0.5">
+              {parsedImport.errors.slice(0, 5).map((err) => (
+                <li key={err} className="text-red-600 dark:text-red-400">{err}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {importResults.length > 0 && (
+          <div className="max-h-48 overflow-y-auto rounded-lg border scrollbar-thin" aria-live="polite">
+            <ul className="divide-y text-xs">
+              {importResults.map((r) => (
+                <li key={r.line} className="flex items-center gap-2 px-3 py-2">
+                  <span className="w-10 shrink-0 text-muted-foreground">#{r.line}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono">{r.value}</span>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-2 py-0.5 font-medium",
+                      r.ok
+                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                        : "bg-red-500/10 text-red-700 dark:text-red-400"
+                    )}
+                  >
+                    {r.ok ? "Imported" : r.message}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </FormSheet>
 
       {/* ---------------------------- Delete confirm -------------------------- */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
