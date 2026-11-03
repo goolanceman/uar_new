@@ -1,24 +1,22 @@
 "use client";
 
 /**
- * Users & Roles — admin directory with inline role management.
- * Table/grid/list views, add/edit FormSheets, donor stats, linked
- * volunteer/beneficiary summary and security block on the detail sheet.
+ * Users & Roles — round-5: DataTable (fill height, skeleton rows, built-in
+ * pagination), full-screen DetailSheet with every account field, activity
+ * count and SUSPENDED safety copy, lg FormSheets for create/edit, grid/list
+ * views, CSV export and shared ConfirmDialogs for role changes and deletes.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarClock,
   Eye,
-  HeartHandshake,
-  KeyRound,
   Pencil,
   Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
+  ShieldAlert,
   Trash2,
-  UserRound,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -36,8 +34,12 @@ import {
 import { PageHeader } from "@/components/shared/page-header";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
-import { SectionCard } from "@/components/shared/section-card";
 import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
 import {
   FieldGrid,
   FormSection,
@@ -50,12 +52,15 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
 import {
-  PageSizeSelect,
   PaginationBar,
   ViewSwitcher,
   useViewPref,
   type DataViewMode,
 } from "@/components/shared/view-switcher";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -66,21 +71,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ------------------------------ types & constants --------------------------- */
 
@@ -228,6 +218,7 @@ export default function UsersView() {
   >(null);
   const [linkedVolunteer, setLinkedVolunteer] = useState<VolunteerLite | null>(null);
   const [linkedBeneficiary, setLinkedBeneficiary] = useState<BeneficiaryLite | null>(null);
+  const [activityCount, setActivityCount] = useState<number | null>(null);
 
   const adminCount = useMemo(() => rows.filter((r) => r.role === "ADMIN").length, [rows]);
 
@@ -277,7 +268,18 @@ export default function UsersView() {
     [filtered, page, pageSize]
   );
 
+  const hasFilters = roleFilter !== "ALL" || statusFilter !== "ALL" || search.trim() !== "";
+
+  const clearFilters = () => {
+    setQ("");
+    setRoleFilter("ALL");
+    setStatusFilter("ALL");
+  };
+
   /* -------------------------------- create ---------------------------------- */
+
+  const createDirty =
+    createOpen && JSON.stringify(createForm) !== JSON.stringify(emptyCreateForm);
 
   const submitCreate = async () => {
     const errors: string[] = [];
@@ -439,6 +441,7 @@ export default function UsersView() {
     setDonorStats(null);
     setLinkedVolunteer(null);
     setLinkedBeneficiary(null);
+    setActivityCount(null);
 
     if (u.role === "DONOR") {
       // Aggregation is capped at the latest 500 donations (API limit) — close
@@ -474,6 +477,16 @@ export default function UsersView() {
         })
         .catch(() => setLinkedBeneficiary(null));
     }
+
+    // Activity count from the newest log pool (capped at 500 by the API).
+    get<{ items?: Array<{ userId?: string | null }> } | Array<{ userId?: string | null }>>(
+      "/api/activity-logs?limit=500"
+    )
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (data.items ?? []);
+        setActivityCount(list.filter((l) => l.userId === u.id).length);
+      })
+      .catch(() => setActivityCount(null));
   };
 
   /* --------------------------------- actions UI ------------------------------ */
@@ -518,7 +531,10 @@ export default function UsersView() {
           variant="ghost"
           className={withLabels ? "" : "size-11 md:size-9"}
           aria-label={`View user ${u.name}`}
-          onClick={() => openView(u)}
+          onClick={(e) => {
+            e.stopPropagation();
+            openView(u);
+          }}
         >
           <Eye className="size-4" />
           {withLabels && <span>View</span>}
@@ -528,7 +544,10 @@ export default function UsersView() {
           variant="ghost"
           className={withLabels ? "" : "size-11 md:size-9"}
           aria-label={`Edit user ${u.name}`}
-          onClick={() => openEdit(u)}
+          onClick={(e) => {
+            e.stopPropagation();
+            openEdit(u);
+          }}
         >
           <Pencil className="size-4" />
           {withLabels && <span>Edit</span>}
@@ -548,7 +567,10 @@ export default function UsersView() {
                 : `Delete user ${u.name}`
           }
           disabled={self || lastAdmin}
-          onClick={() => setDeleteTarget(u)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setDeleteTarget(u);
+          }}
         >
           <Trash2 className="size-4" />
           {withLabels && <span>Delete</span>}
@@ -573,6 +595,19 @@ export default function UsersView() {
     ],
     []
   );
+
+  /* ------------------------------- table columns ----------------------------- */
+
+  const columns: DataTableColumn<UserRow>[] = [
+    { key: "user", header: "User" },
+    { key: "role", header: "Role" },
+    { key: "status", header: "Status" },
+    { key: "city", header: "City", hideBelow: "md" },
+    { key: "phone", header: "Phone", mono: true, hideBelow: "lg" },
+    { key: "pan", header: "PAN", mono: true, hideBelow: "sm" },
+    { key: "joined", header: "Joined", hideBelow: "sm" },
+    { key: "actions", header: "", align: "right", className: "w-28" },
+  ];
 
   /* --------------------------------- render ---------------------------------- */
 
@@ -636,6 +671,11 @@ export default function UsersView() {
               ))}
             </SelectContent>
           </Select>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} aria-label="Clear filters">
+              Clear
+            </Button>
+          )}
           <ViewSwitcher value={mode} onChange={(m: DataViewMode) => setMode(m)} />
           <ExportMenu
             columns={csvColumns}
@@ -651,110 +691,83 @@ export default function UsersView() {
 
       {/* Table view */}
       {mode === "table" ? (
-        <div className="rounded-xl border bg-card">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">City</TableHead>
-                  <TableHead className="hidden lg:table-cell">Phone</TableHead>
-                  <TableHead className="hidden sm:table-cell">PAN</TableHead>
-                  <TableHead className="hidden sm:table-cell">Joined</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading
-                  ? Array.from({ length: 6 }).map((_, i) => (
-                      <TableRow key={i}>
-                        {Array.from({ length: 8 }).map((__, j) => (
-                          <TableCell key={j}>
-                            <Skeleton className="h-5 w-full" />
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))
-                  : paged.map((u) => {
-                      const self = isSelf(u);
-                      return (
-                        <TableRow
-                          key={u.id}
-                          className="cursor-pointer"
-                          onClick={() => openView(u)}
-                        >
-                          <TableCell>
-                            <div className="flex items-center gap-2.5">
-                              <span
-                                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                                aria-hidden="true"
-                              >
-                                {initials(u.name)}
-                              </span>
-                              <div className="min-w-0">
-                                <p className="truncate font-medium">
-                                  {u.name}
-                                  {self && (
-                                    <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                                      You
-                                    </span>
-                                  )}
-                                </p>
-                                <p className="truncate text-xs text-muted-foreground">{u.email}</p>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell onClick={(e) => e.stopPropagation()}>
-                            {inlineRoleSelect(u)}
-                          </TableCell>
-                          <TableCell>
-                            <StatusBadge status={u.status} />
-                          </TableCell>
-                          <TableCell className="hidden text-sm md:table-cell">
-                            {u.city || "—"}
-                          </TableCell>
-                          <TableCell className="hidden text-sm lg:table-cell">
-                            {u.phone || "—"}
-                          </TableCell>
-                          <TableCell className="hidden font-mono text-xs sm:table-cell">
-                            {u.pan || "—"}
-                          </TableCell>
-                          <TableCell className="hidden whitespace-nowrap text-sm sm:table-cell">
-                            {formatDateTime(u.createdAt)}
-                          </TableCell>
-                          <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                            {rowActions(u)}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-              </TableBody>
-            </Table>
-          </div>
-          {!loading && paged.length === 0 ? (
-            <div className="p-6">
-              <EmptyState
-                icon={<Users className="size-6" aria-hidden="true" />}
-                title="No users found"
-                hint="Adjust the filters or create a new account."
-              >
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setQ("");
-                    setRoleFilter("ALL");
-                    setStatusFilter("ALL");
-                  }}
-                >
+        <DataTable
+          columns={columns}
+          rows={paged}
+          rowKey={(u) => u.id}
+          loading={loading}
+          skeletonRows={8}
+          height="fill"
+          fillOffset={300}
+          onRowClick={openView}
+          page={page}
+          pages={pages}
+          total={filtered.length}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={setPageSize}
+          itemLabel="users"
+          empty={
+            <EmptyState
+              icon={<Users className="size-6" aria-hidden="true" />}
+              title="No users found"
+              hint="Adjust the filters or create a new account."
+            >
+              {hasFilters ? (
+                <Button size="sm" variant="outline" onClick={clearFilters}>
                   Clear filters
                 </Button>
-              </EmptyState>
-            </div>
-          ) : null}
-        </div>
+              ) : (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="size-4" /> New user
+                </Button>
+              )}
+            </EmptyState>
+          }
+        >
+          {(u, col) => {
+            switch (col.key) {
+              case "user":
+                return (
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                      aria-hidden="true"
+                    >
+                      {initials(u.name)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">
+                        {u.name}
+                        {isSelf(u) && (
+                          <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            You
+                          </span>
+                        )}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+                    </div>
+                  </div>
+                );
+              case "role":
+                return <div onClick={(e) => e.stopPropagation()}>{inlineRoleSelect(u)}</div>;
+              case "status":
+                return <StatusBadge status={u.status} />;
+              case "city":
+                return <span className="text-sm">{u.city || "—"}</span>;
+              case "phone":
+                return <span className="text-sm">{u.phone || "—"}</span>;
+              case "pan":
+                return <span className="font-mono text-xs">{u.pan || "—"}</span>;
+              case "joined":
+                return <span className="whitespace-nowrap text-sm">{formatDateTime(u.createdAt)}</span>;
+              case "actions":
+                return <div onClick={(e) => e.stopPropagation()}>{rowActions(u)}</div>;
+              default:
+                return null;
+            }
+          }}
+        </DataTable>
       ) : null}
 
       {/* Grid view */}
@@ -890,8 +903,8 @@ export default function UsersView() {
         </div>
       ) : null}
 
-      {/* Pagination */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Pagination for grid/list modes (table mode paginates inside DataTable) */}
+      {mode !== "table" ? (
         <PaginationBar
           page={page}
           pages={pages}
@@ -899,22 +912,21 @@ export default function UsersView() {
           onPage={setPage}
           itemLabel="users"
         />
-        <PageSizeSelect value={pageSize} onChange={setPageSize} />
-      </div>
+      ) : null}
 
       {/* ------------------------------ Create sheet ---------------------------- */}
       <FormSheet
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(o) => {
+          if (!o && !saving) setCreateOpen(false);
+        }}
         title="Create user"
         description="Add an admin, volunteer, donor or beneficiary account."
         onSubmit={submitCreate}
         submitLabel="Create user"
         loading={saving}
-        size="md"
-        dirty={
-          JSON.stringify(createForm) !== JSON.stringify(emptyCreateForm)
-        }
+        size="lg"
+        dirty={createDirty}
       >
         <FormSection title="Account" description="Sign-in identity — the user can change the password later.">
           <FieldGrid>
@@ -973,8 +985,10 @@ export default function UsersView() {
       <FormSheet
         open={editOpen}
         onOpenChange={(o) => {
-          setEditOpen(o);
-          if (!o) setEditTarget(null);
+          if (!o && !saving) {
+            setEditOpen(false);
+            setEditTarget(null);
+          }
         }}
         title={editTarget ? `Edit user — ${editTarget.name}` : "Edit user"}
         description={editTarget ? `${editTarget.email} · ${titleCase(editTarget.role)}` : ""}
@@ -1043,6 +1057,7 @@ export default function UsersView() {
               value={editForm.status as (typeof STATUSES)[number]}
               onChange={(v) => setEditForm({ ...editForm, status: v })}
               options={STATUSES.map((s) => ({ value: s, label: titleCase(s) }))}
+              hint="SUSPENDED immediately blocks sign-in for this account."
             />
             <SwitchField
               label="Account active"
@@ -1063,152 +1078,176 @@ export default function UsersView() {
       </FormSheet>
 
       {/* ------------------------------ Detail sheet ----------------------------- */}
-      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-xl">
-          <SheetHeader className="text-left">
-            <SheetTitle className="flex items-center gap-2">
-              <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-              {viewTarget?.name ?? "User"}
-            </SheetTitle>
-            <SheetDescription>
-              {viewTarget ? `${viewTarget.email} · ${titleCase(viewTarget.role)}` : ""}
-            </SheetDescription>
-          </SheetHeader>
-          {viewTarget ? (
-            <div className="flex-1 space-y-4 px-4 pb-6">
-              <SectionCard title="Account" icon={<ShieldCheck className="size-4" aria-hidden="true" />}>
-                <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                  <DataField label="Name" value={viewTarget.name} />
-                  <DataField label="Email" value={viewTarget.email} copy />
-                  <DataField label="Role" value={titleCase(viewTarget.role)} />
-                  <DataField
-                    label="Status"
-                    value={<StatusBadge status={viewTarget.status} />}
-                  />
-                  <DataField label="Active" value={viewTarget.isActive ? "Yes" : "No"} />
-                  <DataField label="User ID" value={viewTarget.id} mono copy />
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Profile" icon={<UserRound className="size-4" aria-hidden="true" />}>
-                <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                  <DataField label="Phone" value={viewTarget.phone} copy />
-                  <DataField label="City" value={viewTarget.city} />
-                  <DataField label="PAN" value={viewTarget.pan} mono copy />
-                  <DataField label="Joined" value={formatDateTime(viewTarget.createdAt)} />
-                  {viewTarget.updatedAt ? (
-                    <DataField label="Updated" value={formatDateTime(viewTarget.updatedAt)} />
-                  ) : null}
-                </div>
-                {viewTarget.about ? (
-                  <p className="mt-4 whitespace-pre-line rounded-md bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                    {viewTarget.about}
-                  </p>
-                ) : null}
-              </SectionCard>
-
-              {viewTarget.role === "DONOR" ? (
-                <SectionCard
-                  title="Giving history"
-                  icon={<HeartHandshake className="size-4" aria-hidden="true" />}
-                  description="Completed donations linked to this account (latest 500 records)."
-                >
-                  {donorStats === null ? (
-                    <Skeleton className="h-12 w-full" />
-                  ) : donorStats === "unavailable" ? (
-                    <p className="text-sm text-muted-foreground">
-                      Donation stats are unavailable right now — try again later.
-                    </p>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                      <DataField label="Completed donations" value={String(donorStats.count)} />
-                      <DataField
-                        label="Total given"
-                        value={
-                          donorStats.count > 0
-                            ? `₹${donorStats.sum.toLocaleString("en-IN")}`
-                            : ""
-                        }
-                      />
-                    </div>
-                  )}
-                </SectionCard>
-              ) : null}
-
-              {viewTarget.role === "VOLUNTEER" ? (
-                <SectionCard
-                  title="Volunteer record"
-                  icon={<UserRound className="size-4" aria-hidden="true" />}
-                >
-                  {linkedVolunteer === null ? (
-                    <p className="text-sm text-muted-foreground">No linked volunteer profile yet.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                      <DataField label="Volunteer ID" value={linkedVolunteer.id} mono copy />
-                      <DataField label="Status" value={<StatusBadge status={linkedVolunteer.status} />} />
-                      <DataField label="Assigned area" value={linkedVolunteer.assignedArea} />
-                      <DataField label="Joined" value={formatDateTime(linkedVolunteer.joinedAt)} />
-                    </div>
-                  )}
-                </SectionCard>
-              ) : null}
-
-              {viewTarget.role === "BENEFICIARY" ? (
-                <SectionCard
-                  title="Linked case"
-                  icon={<HeartHandshake className="size-4" aria-hidden="true" />}
-                >
-                  {linkedBeneficiary === null ? (
-                    <p className="text-sm text-muted-foreground">No linked beneficiary case yet.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                      <DataField label="Case name" value={linkedBeneficiary.name} />
-                      <DataField label="Category" value={titleCase(linkedBeneficiary.category)} />
-                      <DataField
-                        label="Case status"
-                        value={<StatusBadge status={linkedBeneficiary.caseStatus ?? "INTAKE"} />}
-                      />
-                      <DataField label="City" value={linkedBeneficiary.city} />
-                    </div>
-                  )}
-                </SectionCard>
-              ) : null}
-
-              <SectionCard
-                title="Security"
-                icon={<KeyRound className="size-4" aria-hidden="true" />}
+      <DetailSheet
+        open={!!viewTarget}
+        onOpenChange={(o) => !o && setViewTarget(null)}
+        eyebrow="Users & Roles"
+        title={viewTarget?.name ?? "User"}
+        description={viewTarget ? `${viewTarget.email} · ${titleCase(viewTarget.role)}` : ""}
+        status={viewTarget ? <StatusBadge status={viewTarget.status} /> : undefined}
+        actions={
+          viewTarget ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setViewTarget(null);
+                openEdit(viewTarget);
+              }}
+              aria-label="Edit this user"
+            >
+              <Pencil className="size-4" /> Edit
+            </Button>
+          ) : undefined
+        }
+      >
+        {viewTarget ? (
+          <>
+            {viewTarget.status === "SUSPENDED" ? (
+              <div
+                className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
+                role="alert"
               >
-                <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                  <DataField label="Last login" value="Not tracked" />
-                  <DataField
-                    label="Account created"
-                    icon={<CalendarClock className="size-3.5" aria-hidden="true" />}
-                    value={formatDateTime(viewTarget.createdAt)}
-                  />
+                <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="font-semibold">This account is suspended</p>
+                  <p className="mt-0.5 text-xs leading-relaxed">
+                    Sign-in is blocked while the status is SUSPENDED. The person cannot access any
+                    portal — restore access by setting the status back to Active in the edit sheet.
+                  </p>
                 </div>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Login timestamps are not recorded — account creation is shown as the
-                  security anchor.
-                </p>
-              </SectionCard>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setViewTarget(null);
-                    openEdit(viewTarget);
-                  }}
-                  aria-label="Edit this user"
-                >
-                  <Pencil className="size-4" /> Edit user
-                </Button>
               </div>
-            </div>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+            ) : null}
+
+            <DetailSection title="Account" description="Core identity and access fields.">
+              <DetailGrid cols={2}>
+                <DataField label="Name" value={viewTarget.name} />
+                <DataField label="Email" value={viewTarget.email} copy />
+                <DataField label="Role" value={titleCase(viewTarget.role)} />
+                <DataField label="Status" value={<StatusBadge status={viewTarget.status} />} />
+                <DataField label="Active" value={viewTarget.isActive ? "Yes" : "No"} />
+                <DataField label="User ID" value={viewTarget.id} mono copy />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection title="Profile" description="Contact details held on the account.">
+              <DetailGrid cols={2}>
+                <DataField label="Phone" value={viewTarget.phone} copy mono />
+                <DataField label="City" value={viewTarget.city} />
+                <DataField label="PAN" value={viewTarget.pan} mono copy />
+                <DataField label="About" value={viewTarget.about} className="sm:col-span-2" />
+                <DataField
+                  label="Joined"
+                  icon={<CalendarClock className="size-3" aria-hidden="true" />}
+                  value={formatDateTime(viewTarget.createdAt)}
+                />
+                {viewTarget.updatedAt ? (
+                  <DataField label="Last updated" value={formatDateTime(viewTarget.updatedAt)} />
+                ) : null}
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection title="Activity" description="Audit-trail entries attributed to this account.">
+              <DetailGrid cols={2}>
+                <DataField
+                  label="Logged actions"
+                  value={
+                    activityCount === null ? (
+                      <Skeleton className="h-5 w-16" />
+                    ) : (
+                      <>
+                        {activityCount}
+                        {activityCount >= 500 ? "+" : ""}
+                      </>
+                    )
+                  }
+                />
+                <DataField label="Last login" value="Not tracked" />
+              </DetailGrid>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Counts come from the latest 500 audit-log entries; login timestamps are not recorded.
+              </p>
+            </DetailSection>
+
+            {viewTarget.role === "DONOR" ? (
+              <DetailSection
+                title="Giving history"
+                description="Completed donations linked to this account (latest 500 records)."
+              >
+                {donorStats === null ? (
+                  <Skeleton className="h-12 w-full" />
+                ) : donorStats === "unavailable" ? (
+                  <p className="text-sm text-muted-foreground">
+                    Donation stats are unavailable right now — try again later.
+                  </p>
+                ) : (
+                  <DetailGrid cols={2}>
+                    <DataField label="Completed donations" value={String(donorStats.count)} />
+                    <DataField
+                      label="Total given"
+                      value={
+                        donorStats.count > 0
+                          ? `₹${donorStats.sum.toLocaleString("en-IN")}`
+                          : ""
+                      }
+                    />
+                  </DetailGrid>
+                )}
+              </DetailSection>
+            ) : null}
+
+            {viewTarget.role === "VOLUNTEER" ? (
+              <DetailSection title="Volunteer record" description="Linked volunteer profile.">
+                {linkedVolunteer === null ? (
+                  <p className="text-sm text-muted-foreground">No linked volunteer profile yet.</p>
+                ) : (
+                  <DetailGrid cols={2}>
+                    <DataField label="Volunteer ID" value={linkedVolunteer.id} mono copy />
+                    <DataField label="Status" value={<StatusBadge status={linkedVolunteer.status} />} />
+                    <DataField label="Assigned area" value={linkedVolunteer.assignedArea} />
+                    <DataField label="Joined" value={formatDateTime(linkedVolunteer.joinedAt)} />
+                  </DetailGrid>
+                )}
+              </DetailSection>
+            ) : null}
+
+            {viewTarget.role === "BENEFICIARY" ? (
+              <DetailSection title="Linked case" description="Linked beneficiary case.">
+                {linkedBeneficiary === null ? (
+                  <p className="text-sm text-muted-foreground">No linked beneficiary case yet.</p>
+                ) : (
+                  <DetailGrid cols={2}>
+                    <DataField label="Case name" value={linkedBeneficiary.name} />
+                    <DataField label="Category" value={titleCase(linkedBeneficiary.category)} />
+                    <DataField
+                      label="Case status"
+                      value={<StatusBadge status={linkedBeneficiary.caseStatus ?? "INTAKE"} />}
+                    />
+                    <DataField label="City" value={linkedBeneficiary.city} />
+                  </DetailGrid>
+                )}
+              </DetailSection>
+            ) : null}
+
+            <DetailSection
+              title="Security"
+              description="Access-control reference for this account."
+            >
+              <DetailGrid cols={2}>
+                <DataField
+                  label="Password"
+                  value={viewTarget.isActive ? "Set (hashed)" : "Set (hashed) — sign-in disabled"}
+                />
+                <DataField
+                  label="Account created"
+                  icon={<CalendarClock className="size-3" aria-hidden="true" />}
+                  value={formatDateTime(viewTarget.createdAt)}
+                />
+              </DetailGrid>
+            </DetailSection>
+          </>
+        ) : null}
+      </DetailSheet>
 
       {/* ------------------------- Role change confirm -------------------------- */}
       <ConfirmDialog

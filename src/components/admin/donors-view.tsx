@@ -1,14 +1,16 @@
 "use client";
 
 /**
- * Donors (CRM) — the trust's supporter registry.
+ * Donors (CRM) — the trust's supporter registry (round-5 design system).
  *
  * - StatCards: total donors, major donors (lifetime ≥ ₹10,000), new this
  *   month, repeat donors
- * - Server-side pagination + q/type/category filters + debounced search
- * - Table / Grid / List layouts (preference persisted via useViewPref)
- * - Donor-360 detail sheet with tabs: Profile, Donations, Pledges &
- *   sponsorships, Certificates — plus a lifetime stats strip
+ * - Server-side pagination + q/type/category filters + debounced search, with
+ *   active-filter chips, clear-all and a live result count in one toolbar row
+ * - Table view = DataTable (height="fill", sticky header, skeleton rows,
+ *   built-in premium pager); grid/list persist via useViewPref
+ * - Donor-360 full-screen DetailSheet with tabs: Profile, Donations, Pledges
+ *   & sponsorships, Certificates — plus a lifetime stats strip
  * - Add/Edit FormSheet (lg) with rule-factory validation + dirty tracking
  * - Delete (ConfirmDialog — donations stay, CRM record removed), CSV export
  */
@@ -22,7 +24,6 @@ import {
   HeartHandshake,
   HeartPulse,
   Mail,
-  MapPin,
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
@@ -32,10 +33,8 @@ import {
   ReceiptText,
   Repeat,
   Search,
-  StickyNote,
   Trash2,
   UserPlus,
-  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -63,6 +62,12 @@ import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { DataField } from "@/components/shared/data-field";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import { FormSheet } from "@/components/shared/form-sheet";
 import {
   FieldGrid,
@@ -467,7 +472,7 @@ function RowActions({
   );
 }
 
-function ListSkeleton({ mode }: { mode: DataViewMode }) {
+function ListSkeleton({ mode }: { mode: "grid" | "list" }) {
   if (mode === "grid") {
     return (
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -477,19 +482,10 @@ function ListSkeleton({ mode }: { mode: DataViewMode }) {
       </div>
     );
   }
-  if (mode === "list") {
-    return (
-      <div className="flex flex-col gap-2">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Skeleton key={i} className="h-14 rounded-lg" />
-        ))}
-      </div>
-    );
-  }
   return (
     <div className="flex flex-col gap-2">
-      {Array.from({ length: 7 }).map((_, i) => (
-        <Skeleton key={i} className="h-12 rounded-lg" />
+      {Array.from({ length: 8 }).map((_, i) => (
+        <Skeleton key={i} className="h-14 rounded-lg" />
       ))}
     </div>
   );
@@ -546,72 +542,64 @@ function Donor360Content({ d }: { d: DonorDetail }) {
 
         {/* Profile */}
         <TabsContent value="profile" className="flex flex-col gap-4">
-          <SectionCard
-            title="Identity"
-            icon={<UserRound className="size-4" />}
-            bodyClassName="grid gap-4 sm:grid-cols-2"
-          >
-            <DataField label="Name" value={d.name} />
-            <DataField label="Type" value={humanize(d.type)} />
-            <DataField label="Organisation" value={d.organizationName ?? ""} />
-            <DataField label="Email" value={d.email} copy />
-            <DataField label="Phone" value={d.phone ?? ""} />
-            <DataField label="Alternate phone" value={d.altPhone ?? ""} />
-            <DataField
-              label="Linked account"
-              value={d.user ? `${humanize(d.user.role)} · ${humanize(d.user.status)}` : "Not linked"}
-            />
-            <DataField label="In CRM since" value={formatDateLong(d.createdAt)} />
-          </SectionCard>
+          <DetailSection title="Identity" description="Used to match donations and receipts.">
+            <DetailGrid cols={2}>
+              <DataField label="Name" value={d.name} />
+              <DataField label="Type" value={humanize(d.type)} />
+              <DataField label="Organisation" value={d.organizationName ?? ""} />
+              <DataField label="Email" value={d.email} copy />
+              <DataField label="Phone" value={d.phone ?? ""} />
+              <DataField label="Alternate phone" value={d.altPhone ?? ""} />
+              <DataField
+                label="Linked account"
+                value={
+                  d.user
+                    ? `${humanize(d.user.role)} · ${humanize(d.user.status)}`
+                    : "Not linked"
+                }
+              />
+              <DataField label="In CRM since" value={formatDateLong(d.createdAt)} />
+            </DetailGrid>
+          </DetailSection>
 
-          <SectionCard
-            title="Address"
-            icon={<MapPin className="size-4" />}
-            bodyClassName="grid gap-4 sm:grid-cols-2"
-          >
-            <DataField label="Address" value={d.address ?? ""} className="sm:col-span-2" />
-            <DataField label="City" value={d.city ?? ""} />
-            <DataField label="State" value={d.state ?? ""} />
-            <DataField label="PIN code" value={d.pincode ?? ""} mono />
-          </SectionCard>
+          <DetailSection title="Address">
+            <DetailGrid cols={2}>
+              <DataField label="Address" value={d.address ?? ""} className="sm:col-span-2" />
+              <DataField label="City" value={d.city ?? ""} />
+              <DataField label="State" value={d.state ?? ""} />
+              <DataField label="PIN code" value={d.pincode ?? ""} mono />
+            </DetailGrid>
+          </DetailSection>
 
-          <SectionCard
+          <DetailSection
             title="Tax & preferences"
-            icon={<ReceiptText className="size-4" />}
-            bodyClassName="grid gap-4 sm:grid-cols-2"
+            description="PAN powers 80G receipts; the segment drives outreach."
           >
-            <DataField label="PAN" value={d.pan ?? ""} mono copy />
-            <DataField label="Wants 80G receipts" value={d.wants80g ? "Yes" : "No"} />
-            <DataField
-              label="Anonymous by default"
-              value={d.anonymousByDefault ? "Yes" : "No"}
-            />
-            <DataField label="Language" value={d.language ?? ""} />
-            <DataField label="Source" value={d.source ? humanize(d.source) : "—"} />
-            <DataField
-              label="Segment"
-              value={d.category ? humanize(d.category) : "—"}
-            />
-          </SectionCard>
+            <DetailGrid cols={2}>
+              <DataField label="PAN" value={d.pan ?? ""} mono copy />
+              <DataField label="Wants 80G receipts" value={d.wants80g ? "Yes" : "No"} />
+              <DataField
+                label="Anonymous by default"
+                value={d.anonymousByDefault ? "Yes" : "No"}
+              />
+              <DataField label="Language" value={d.language ?? ""} />
+              <DataField label="Source" value={d.source ? humanize(d.source) : ""} />
+              <DataField label="Segment" value={d.category ? humanize(d.category) : ""} />
+            </DetailGrid>
+          </DetailSection>
 
-          <SectionCard
-            title="Communication"
-            icon={<Mail className="size-4" />}
-            bodyClassName="grid gap-4 sm:grid-cols-2"
-          >
-            <DataField label="Email updates" value={d.emailOptIn ? "Opted in" : "Opted out"} />
-            <DataField label="SMS updates" value={d.smsOptIn ? "Opted in" : "Opted out"} />
-            <DataField
-              label="WhatsApp updates"
-              value={d.whatsappOptIn ? "Opted in" : "Opted out"}
-            />
-          </SectionCard>
+          <DetailSection title="Communication" description="Consent for each outreach channel.">
+            <DetailGrid cols={2}>
+              <DataField label="Email updates" value={d.emailOptIn ? "Opted in" : "Opted out"} />
+              <DataField label="SMS updates" value={d.smsOptIn ? "Opted in" : "Opted out"} />
+              <DataField
+                label="WhatsApp updates"
+                value={d.whatsappOptIn ? "Opted in" : "Opted out"}
+              />
+            </DetailGrid>
+          </DetailSection>
 
-          <SectionCard
-            title="Tags & notes"
-            icon={<StickyNote className="size-4" />}
-            bodyClassName="flex flex-col gap-4"
-          >
+          <DetailSection title="Tags & notes">
             <div>
               <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Tags
@@ -636,7 +624,7 @@ function Donor360Content({ d }: { d: DonorDetail }) {
                 {d.notes || "—"}
               </p>
             </div>
-          </SectionCard>
+          </DetailSection>
         </TabsContent>
 
         {/* Donations */}
@@ -703,11 +691,10 @@ function Donor360Content({ d }: { d: DonorDetail }) {
 
         {/* Pledges & sponsorships */}
         <TabsContent value="pledges" className="flex flex-col gap-4">
-          <section className="flex flex-col gap-2.5">
-            <h4 className="flex items-center gap-2 text-sm font-semibold">
-              <HeartPulse className="size-4 text-primary" aria-hidden="true" />
-              Medicine adoption pledges
-            </h4>
+          <DetailSection
+            title="Medicine adoption pledges"
+            description="Adopt-a-Medicine causes this donor supports monthly."
+          >
             {d.pledges.length === 0 ? (
               <TabEmpty
                 icon={<HeartPulse className="size-5" />}
@@ -740,13 +727,12 @@ function Donor360Content({ d }: { d: DonorDetail }) {
                 </div>
               ))
             )}
-          </section>
+          </DetailSection>
 
-          <section className="flex flex-col gap-2.5">
-            <h4 className="flex items-center gap-2 text-sm font-semibold">
-              <PawPrint className="size-4 text-primary" aria-hidden="true" />
-              Animal sponsorship pledges
-            </h4>
+          <DetailSection
+            title="Animal sponsorship pledges"
+            description="Shelter animals and funds this donor sponsors."
+          >
             {d.animalPledges.length === 0 ? (
               <TabEmpty
                 icon={<PawPrint className="size-5" />}
@@ -781,7 +767,7 @@ function Donor360Content({ d }: { d: DonorDetail }) {
                 </div>
               ))
             )}
-          </section>
+          </DetailSection>
         </TabsContent>
 
         {/* Certificates */}
@@ -1121,6 +1107,100 @@ export default function DonorsView() {
     setPage(1);
   };
 
+  /* ---------------------------- table + toolbar ---------------------------- */
+
+  const filterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (q) filterChips.push({ key: "q", label: `“${q}”`, clear: () => setSearch("") });
+  if (type !== "ALL")
+    filterChips.push({ key: "type", label: humanize(type), clear: () => setType("ALL") });
+  if (category !== "ALL")
+    filterChips.push({ key: "category", label: humanize(category), clear: () => setCategory("ALL") });
+
+  const emptyNode = (
+    <EmptyState
+      icon={<HeartHandshake className="size-6" />}
+      title={hasFilters ? "No donors match your filters" : "No donors in the CRM yet"}
+      hint={
+        hasFilters
+          ? "Try a different search term or clear the filters."
+          : "Add your first supporter — every donation page sign-up lands here automatically."
+      }
+    >
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {hasFilters ? (
+          <Button variant="outline" size="sm" onClick={clearFilters}>
+            <X className="size-4" /> Clear filters
+          </Button>
+        ) : null}
+        <Button size="sm" onClick={openCreate}>
+          <Plus className="size-4" /> Add donor
+        </Button>
+      </div>
+    </EmptyState>
+  );
+
+  const donorColumns: DataTableColumn<DonorRow>[] = [
+    { key: "donor", header: "Donor" },
+    { key: "contact", header: "Contact", hideBelow: "lg" },
+    { key: "city", header: "City", hideBelow: "md" },
+    { key: "pan", header: "PAN", mono: true, hideBelow: "lg" },
+    { key: "lifetime", header: "Lifetime", align: "right", mono: true, className: "font-semibold" },
+    { key: "gifts", header: "Gifts", align: "right", mono: true, hideBelow: "md" },
+    { key: "lastGift", header: "Last gift", hideBelow: "lg" },
+    { key: "tags", header: "Tags", hideBelow: "lg" },
+    { key: "actions", header: <span className="sr-only">Actions</span>, align: "right" },
+  ];
+
+  const renderDonorCell = (d: DonorRow, col: DataTableColumn<DonorRow>) => {
+    switch (col.key) {
+      case "donor":
+        return (
+          <div className="flex min-w-0 items-center gap-2.5">
+            <DonorAvatar name={d.name} />
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 font-medium">
+                <span className="max-w-[160px] truncate">{d.name}</span>
+                <OrgBadge type={d.type} />
+              </p>
+              <p className="max-w-[200px] truncate text-xs text-muted-foreground">{d.email}</p>
+            </div>
+          </div>
+        );
+      case "contact":
+        return (
+          <div className="flex flex-col text-xs">
+            <span>{d.phone ?? "—"}</span>
+            {d.altPhone ? <span className="text-muted-foreground">{d.altPhone}</span> : null}
+          </div>
+        );
+      case "city":
+        return <span className="text-xs">{d.city ?? "—"}</span>;
+      case "pan":
+        return d.pan ?? "—";
+      case "lifetime":
+        return formatINRCompact(d.lifetimeValue);
+      case "gifts":
+        return d.donationsCount;
+      case "lastGift":
+        return <span className="text-xs">{formatDate(d.lastDonationAt)}</span>;
+      case "tags":
+        return <TagBadges tags={d.tags} max={2} />;
+      case "actions":
+        return (
+          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+            <RowActions
+              donor={d}
+              onView={() => openDetail(d)}
+              onEdit={() => openEdit(d)}
+              onDelete={() => askDelete(d)}
+            />
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   /* -------------------------------- render -------------------------------- */
 
   return (
@@ -1260,6 +1340,20 @@ export default function DonorsView() {
             </SelectContent>
           </Select>
 
+          {filterChips.map((chip) => (
+            <Badge key={chip.key} variant="outline" className="gap-1 pr-1 text-xs font-medium">
+              {chip.label}
+              <button
+                type="button"
+                aria-label={`Clear ${chip.label} filter`}
+                onClick={chip.clear}
+                className="rounded-full p-0.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="size-3" aria-hidden="true" />
+              </button>
+            </Badge>
+          ))}
+
           {hasFilters ? (
             <Button
               variant="ghost"
@@ -1267,113 +1361,47 @@ export default function DonorsView() {
               onClick={clearFilters}
               aria-label="Clear all filters"
             >
-              <X className="size-4" /> Clear
+              <X className="size-4" /> Clear all
             </Button>
           ) : null}
 
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="size-4" /> Add donor
-          </Button>
+          <span
+            className="ml-auto text-xs tabular-nums text-muted-foreground"
+            aria-live="polite"
+          >
+            {loading ? "Loading…" : `${total} result${total === 1 ? "" : "s"}`}
+          </span>
         </div>
 
         {/* Content */}
-        {loading ? (
+        {view === "table" ? (
+          <DataTable
+            columns={donorColumns}
+            rows={items}
+            rowKey={(d) => d.id}
+            loading={loading}
+            skeletonRows={9}
+            height="fill"
+            fillOffset={520}
+            onRowClick={openDetail}
+            page={page}
+            pages={pages}
+            total={total}
+            pageSize={limit}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setLimit(n);
+              setPage(1);
+            }}
+            itemLabel="donors"
+            empty={emptyNode}
+          >
+            {renderDonorCell}
+          </DataTable>
+        ) : loading ? (
           <ListSkeleton mode={view} />
         ) : items.length === 0 ? (
-          <EmptyState
-            icon={<HeartHandshake className="size-6" />}
-            title={hasFilters ? "No donors match your filters" : "No donors in the CRM yet"}
-            hint={
-              hasFilters
-                ? "Try a different search term or clear the filters."
-                : "Add your first supporter — every donation page sign-up lands here automatically."
-            }
-          >
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {hasFilters ? (
-                <Button variant="outline" size="sm" onClick={clearFilters}>
-                  <X className="size-4" /> Clear filters
-                </Button>
-              ) : null}
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="size-4" /> Add donor
-              </Button>
-            </div>
-          </EmptyState>
-        ) : view === "table" ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50 hover:bg-muted/50">
-                  <TableHead>Donor</TableHead>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>City</TableHead>
-                  <TableHead>PAN</TableHead>
-                  <TableHead className="text-right">Lifetime</TableHead>
-                  <TableHead className="text-right">Gifts</TableHead>
-                  <TableHead>Last gift</TableHead>
-                  <TableHead>Tags</TableHead>
-                  <TableHead className="w-12 text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((d) => (
-                  <TableRow
-                    key={d.id}
-                    onClick={() => openDetail(d)}
-                    className="cursor-pointer"
-                  >
-                    <TableCell>
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <DonorAvatar name={d.name} />
-                        <div className="min-w-0">
-                          <p className="flex items-center gap-1.5 font-medium">
-                            <span className="max-w-[160px] truncate">{d.name}</span>
-                            <OrgBadge type={d.type} />
-                          </p>
-                          <p className="max-w-[200px] truncate text-xs text-muted-foreground">
-                            {d.email}
-                          </p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col text-xs">
-                        <span>{d.phone ?? "—"}</span>
-                        {d.altPhone ? (
-                          <span className="text-muted-foreground">{d.altPhone}</span>
-                        ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {d.city ?? "—"}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{d.pan ?? "—"}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">
-                      {formatINRCompact(d.lifetimeValue)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {d.donationsCount}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDate(d.lastDonationAt)}
-                    </TableCell>
-                    <TableCell>
-                      <TagBadges tags={d.tags} max={2} />
-                    </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <RowActions
-                        donor={d}
-                        onView={() => openDetail(d)}
-                        onEdit={() => openEdit(d)}
-                        onDelete={() => askDelete(d)}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          emptyNode
         ) : view === "grid" ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {items.map((d) => (
@@ -1493,8 +1521,8 @@ export default function DonorsView() {
           </div>
         )}
 
-        {/* Pagination */}
-        {!loading && items.length > 0 ? (
+        {/* Pagination (grid / list — the DataTable pager covers the table view) */}
+        {view !== "table" && !loading && items.length > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
             <PaginationBar
               page={page}
@@ -1514,16 +1542,32 @@ export default function DonorsView() {
         ) : null}
       </SectionCard>
 
-      {/* Donor-360 detail sheet */}
-      <FormSheet
+      {/* Donor-360 detail sheet — full-screen */}
+      <DetailSheet
         open={detailOpen}
         onOpenChange={setDetailOpen}
-        size="xl"
-        title={detail ? `Donor 360 · ${detail.name}` : "Donor 360"}
+        eyebrow="Donors · CRM"
+        title={detailTarget?.name ?? "Donor 360"}
         description={
           detailTarget
             ? `${detailTarget.email} · lifetime ${formatINR(detailTarget.lifetimeValue)}`
             : "Loading donor…"
+        }
+        status={
+          detailTarget ? (
+            <Badge variant="outline" className="text-xs uppercase tracking-wide">
+              {humanize(detailTarget.type)}
+              {detailTarget.category ? ` · ${humanize(detailTarget.category)}` : ""}
+            </Badge>
+          ) : undefined
+        }
+        loading={detailLoading && !detail}
+        actions={
+          detailTarget ? (
+            <Button size="sm" onClick={() => openEdit(detailTarget)}>
+              <Pencil className="size-4" /> Edit donor
+            </Button>
+          ) : undefined
         }
       >
         {detail && !detailLoading ? (
@@ -1544,7 +1588,7 @@ export default function DonorsView() {
             </div>
           </div>
         )}
-      </FormSheet>
+      </DetailSheet>
 
       {/* Add / Edit donor form */}
       <FormSheet

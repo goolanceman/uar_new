@@ -5,8 +5,10 @@ import {
   BarChart3,
   Bot,
   Building2,
+  CalendarRange,
   CheckCircle2,
   Coins,
+  Download,
   Eye,
   EyeOff,
   HardDrive,
@@ -15,6 +17,7 @@ import {
   Mail,
   MapPin,
   MessageSquare,
+  QrCode,
   ReceiptText,
   RefreshCw,
   RotateCcw,
@@ -22,11 +25,14 @@ import {
   ScrollText,
   Send,
   ShieldCheck,
+  TriangleAlert,
   Webhook,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { get, patch, post } from "@/lib/api-client";
+import { downloadCsv } from "@/components/shared/csv";
+import { formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { Button } from "@/components/ui/button";
@@ -50,6 +56,7 @@ import { cn } from "@/lib/utils";
 
 type SettingsMap = Record<string, string>;
 type TestChannel = "email" | "sms" | "whatsapp" | "gateway";
+type Rec = Record<string, unknown>;
 
 interface TestResult {
   state: "running" | "ok" | "error";
@@ -71,14 +78,17 @@ const DEFAULTS: SettingsMap = {
   "org.darpan": "",
   "org.website": "",
   "org.vision": "To scale our service model to serve all of India.",
+  "finance.fyStartMonth": "4",
   "finance.upiId": "",
   "finance.razorpayKeyId": "",
+  "finance.stripeKeyId": "",
   "finance.gatewayProvider": "RAZORPAY",
   "finance.gatewayKeySecret": "",
   "finance.gatewayWebhookSecret": "",
   "finance.gatewayTestMode": "true",
   "finance.gatewayEnabled": "false",
   "finance.currency": "INR",
+  "payments.gst": "",
   "notify.email.enabled": "false",
   "notify.email.host": "",
   "notify.email.port": "587",
@@ -111,28 +121,36 @@ const DEFAULTS: SettingsMap = {
   "captcha.secretKey": "",
   "maps.provider": "GOOGLE",
   "maps.apiKey": "",
+  "kits.qrBaseUrl": "",
   "logs.enabled": "true",
   "logs.level": "INFO",
   "logs.retentionDays": "90",
+  "logs.track.logins": "true",
+  "logs.track.donations": "true",
+  "logs.track.distributions": "true",
+  "logs.track.adminEdits": "true",
   "app.language": "en",
   "app.timezone": "Asia/Kolkata",
+  "app.maintenance": "false",
   "receipts.signatoryName": "",
   "receipts.signatoryRole": "Trustee",
+  "receipts.prefix": "UAR-RCPT",
   "receipts.footer": "",
+  "assist.enabled": "true",
   "assist.model": "glm-4.6",
 };
 
 function normalize(raw: unknown): SettingsMap {
   if (Array.isArray(raw)) {
     const out: SettingsMap = {};
-    for (const item of raw as Record<string, unknown>[]) {
+    for (const item of raw as Rec[]) {
       if (item && typeof item.key === "string") out[item.key] = String(item.value ?? "");
     }
     return out;
   }
   if (raw && typeof raw === "object") {
     const out: SettingsMap = {};
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    for (const [k, v] of Object.entries(raw as Rec)) {
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = String(v);
     }
     return out;
@@ -144,10 +162,10 @@ function normalize(raw: unknown): SettingsMap {
 
 /**
  * Keys rendered as password inputs. Rule: a key is secret when its last
- * segment ends with Secret / Password / Key / Token — plus the Razorpay key
- * ID which UAR treats as a credential. captcha.siteKey is public by design.
+ * segment ends with Secret / Password / Key / Token — plus the gateway key
+ * IDs which UAR treats as credentials. captcha.siteKey is public by design.
  */
-const SECRET_OVERRIDES = new Set<string>(["finance.razorpayKeyId"]);
+const SECRET_OVERRIDES = new Set<string>(["finance.razorpayKeyId", "finance.stripeKeyId"]);
 const PUBLIC_KEY_NAMES = new Set<string>(["captcha.siteKey"]);
 
 function isSecretKey(key: string): boolean {
@@ -156,6 +174,34 @@ function isSecretKey(key: string): boolean {
   const last = key.split(".").pop() ?? "";
   return /(secret|password|key|token)$/i.test(last);
 }
+
+/* ------------------------- per-section save mapping ------------------------ */
+
+/** Prefix rules that map dirty keys → the card that owns them. */
+const SECTION_PREFIXES: Record<string, string[]> = {
+  org: ["org.", "finance.fyStartMonth"],
+  payments: [
+    "finance.upiId",
+    "finance.currency",
+    "finance.gateway",
+    "finance.razorpayKeyId",
+    "finance.stripeKeyId",
+    "payments.gst",
+  ],
+  email: ["notify.email."],
+  sms: ["notify.sms."],
+  whatsapp: ["notify.whatsapp."],
+  storage: ["storage."],
+  webhooks: ["webhooks."],
+  analytics: ["analytics."],
+  captcha: ["captcha."],
+  maps: ["maps."],
+  system: ["kits.", "app.maintenance"],
+  logs: ["logs."],
+  region: ["app.language", "app.timezone"],
+  receipts: ["receipts."],
+  assistant: ["assist."],
+};
 
 /** Webhook event chips (stored comma-separated in webhooks.events). */
 const WEBHOOK_EVENTS = [
@@ -176,8 +222,25 @@ const TIMEZONES = [
 
 const LANGUAGES = [
   { value: "en", label: "English" },
-  { value: "hi", label: "हिंदी" },
-  { value: "kn", label: "ಕನ್ನಡ" },
+  { value: "hi", label: "हिन्दी — Hindi" },
+  { value: "kn", label: "ಕನ್ನಡ — Kannada" },
+  { value: "ta", label: "தமிழ் — Tamil" },
+  { value: "te", label: "తెలుగు — Telugu" },
+];
+
+const FY_MONTH_OPTIONS = [
+  { value: "1", label: "January" },
+  { value: "2", label: "February" },
+  { value: "3", label: "March" },
+  { value: "4", label: "April — standard for Indian trusts" },
+  { value: "5", label: "May" },
+  { value: "6", label: "June" },
+  { value: "7", label: "July" },
+  { value: "8", label: "August" },
+  { value: "9", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
 ];
 
 const SMS_PROVIDERS = ["Twilio", "MSG91", "Gupshup", "Other"];
@@ -209,6 +272,15 @@ const MAP_PROVIDERS = [
 ];
 
 /* ------------------------------ small helpers ------------------------------ */
+
+function pickStr(o: Rec | null | undefined, keys: string[], fb = ""): string {
+  if (!o) return fb;
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && v) return v;
+  }
+  return fb;
+}
 
 function Field({
   id,
@@ -256,6 +328,24 @@ function SwitchRow({
   );
 }
 
+/** Presence pill for credential-style settings ("configured" vs "not set"). */
+function PresenceBadge({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "gap-1",
+        ok
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+          : "bg-muted text-muted-foreground"
+      )}
+    >
+      {ok ? <CheckCircle2 className="size-3" aria-hidden="true" /> : <XCircle className="size-3" aria-hidden="true" />}
+      {label} {ok ? "configured" : "not set"}
+    </Badge>
+  );
+}
+
 /**
  * Password-style field for secret settings. Shows a masked input with a
  * "configured" tick when a value is already saved; the input itself stays
@@ -283,7 +373,7 @@ function SecretField({
     <Field
       id={id}
       label={label}
-      hint={configured ? "Configured — leave blank to keep the saved value." : hint}
+      hint={configured ? "•••• saved — leave blank to keep the saved value." : hint}
     >
       <div className="flex gap-2">
         <div className="relative flex-1">
@@ -353,6 +443,8 @@ export default function SettingsView() {
   const [secretEdits, setSecretEdits] = useState<SettingsMap>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingSection, setSavingSection] = useState<string | null>(null);
+  const [exportingLogs, setExportingLogs] = useState(false);
   const [tests, setTests] = useState<Record<string, TestResult>>({});
 
   const load = useCallback(async () => {
@@ -404,6 +496,18 @@ export default function SettingsView() {
 
   const dirtyCount = Object.keys(dirtyMap).length;
 
+  const keysForSection = useCallback(
+    (section: string): string[] => {
+      const prefixes = SECTION_PREFIXES[section] ?? [];
+      return Object.keys(dirtyMap).filter(
+        (k) => prefixes.some((p) => k === p || k.startsWith(p))
+      );
+    },
+    [dirtyMap]
+  );
+
+  const dirtyInSection = (section: string) => keysForSection(section).length;
+
   useEffect(() => {
     if (dirtyCount === 0) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -426,6 +530,15 @@ export default function SettingsView() {
     const retention = Number(values["logs.retentionDays"]);
     if (values["logs.retentionDays"] && (!Number.isFinite(retention) || retention < 1))
       return "Log retention must be at least 1 day.";
+    const fyMonth = Number(values["finance.fyStartMonth"]);
+    if (values["finance.fyStartMonth"] && (!Number.isInteger(fyMonth) || fyMonth < 1 || fyMonth > 12))
+      return "Fiscal year start must be a month between 1 and 12.";
+    const prefix = values["receipts.prefix"] ?? "";
+    if (prefix && !/^[A-Za-z0-9\-]{2,12}$/.test(prefix))
+      return "Receipt prefix must be 2–12 letters, digits or dashes (e.g. UAR-RCPT).";
+    const qrBase = values["kits.qrBaseUrl"] ?? "";
+    if (qrBase && !/^https?:\/\/\S+$/.test(qrBase))
+      return "QR base URL must start with http:// or https://.";
     const webhookUrl = values["webhooks.url"] ?? "";
     if (webhookUrl && !/^https:\/\/\S+/.test(webhookUrl))
       return "Webhook URL must be a secure https:// address.";
@@ -436,6 +549,18 @@ export default function SettingsView() {
     if (ga4 && !/^G-[A-Z0-9]+$/i.test(ga4))
       return "GA4 measurement ID must look like G-XXXXXXXXXX.";
     return null;
+  };
+
+  /** Merge a fresh settings payload into state after any successful save. */
+  const applySaved = (raw: unknown, keys: string[]) => {
+    const merged = { ...DEFAULTS, ...normalize(raw) };
+    setSaved(merged);
+    setValues(merged);
+    setSecretEdits((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
   };
 
   const save = async () => {
@@ -451,10 +576,7 @@ export default function SettingsView() {
     setSaving(true);
     try {
       const raw = await patch<unknown>("/api/settings", dirtyMap);
-      const merged = { ...DEFAULTS, ...normalize(raw) };
-      setSaved(merged);
-      setValues(merged);
-      setSecretEdits({});
+      applySaved(raw, Object.keys(dirtyMap));
       toast.success(`Saved ${dirtyCount} setting${dirtyCount === 1 ? "" : "s"}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save settings");
@@ -463,10 +585,56 @@ export default function SettingsView() {
     }
   };
 
+  const saveSection = async (section: string) => {
+    const keys = keysForSection(section);
+    if (keys.length === 0) return;
+    const problem = validate();
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    const payload: SettingsMap = {};
+    for (const k of keys) payload[k] = dirtyMap[k];
+    setSavingSection(section);
+    try {
+      const raw = await patch<unknown>("/api/settings", payload);
+      applySaved(raw, keys);
+      toast.success(`Saved ${keys.length} setting${keys.length === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save settings");
+    } finally {
+      setSavingSection(null);
+    }
+  };
+
   const reset = () => {
     setValues(saved);
     setSecretEdits({});
     toast.info("Changes reverted");
+  };
+
+  /** Per-card save button — only rendered when that card has unsaved keys.
+   *  Plain render-function (not a component) so the button never remounts. */
+  const renderSectionSave = (section: string, label: string) => {
+    const dirty = dirtyInSection(section);
+    if (dirty === 0) return null;
+    const isSaving = savingSection === section;
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => saveSection(section)}
+        disabled={isSaving}
+        aria-label={`Save ${label} settings`}
+      >
+        {isSaving ? (
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        ) : (
+          <Save className="size-4" aria-hidden="true" />
+        )}
+        Save{dirty > 1 ? ` (${dirty})` : ""}
+      </Button>
+    );
   };
 
   const runTest = async (channel: TestChannel) => {
@@ -499,6 +667,29 @@ export default function SettingsView() {
     }
   };
 
+  /** Export the audit trail as CSV (respects the admin activity-logs API). */
+  const exportLogs = async () => {
+    setExportingLogs(true);
+    try {
+      const rows = await get<unknown>("/api/activity-logs?limit=2000");
+      const list = Array.isArray(rows) ? (rows as Rec[]) : [];
+      downloadCsv(`uar-activity-logs-${new Date().toISOString().slice(0, 10)}`, [
+        { header: "ID", value: (r) => pickStr(r, ["id"]) },
+        { header: "Timestamp", value: (r) => formatDateTime(pickStr(r, ["createdAt"])) },
+        { header: "Actor", value: (r) => pickStr(r, ["actorName"]) },
+        { header: "Action", value: (r) => pickStr(r, ["action"]) },
+        { header: "Entity", value: (r) => pickStr(r, ["entityType"]) },
+        { header: "Entity ID", value: (r) => pickStr(r, ["entityId"]) },
+        { header: "Details", value: (r) => pickStr(r, ["details"]) },
+      ], list);
+      toast.success(`Exported ${list.length} log ${list.length === 1 ? "entry" : "entries"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to export logs");
+    } finally {
+      setExportingLogs(false);
+    }
+  };
+
   /* webhook event chips state derived from the comma-separated value */
   const selectedEvents = useMemo(
     () =>
@@ -515,6 +706,14 @@ export default function SettingsView() {
       : [...selectedEvents, ev];
     set("webhooks.events", next.join(","));
   };
+
+  /* test-button readiness guards — tests disable gracefully when unconfigured */
+  const emailHostSet = (values["notify.email.host"] ?? "").trim().length > 0;
+  const smsEndpointSet = (values["notify.sms.endpoint"] ?? "").trim().length > 0;
+  const whatsappNumberSet = (values["notify.whatsapp.number"] ?? "").trim().length > 0;
+  const gatewayKeysSet =
+    configured("finance.razorpayKeyId") ||
+    (secretEdits["finance.razorpayKeyId"] ?? "").trim().length > 0;
 
   if (loading) {
     return (
@@ -562,6 +761,7 @@ export default function SettingsView() {
             title="Organisation profile"
             description="Public identity of the trust shown across the site, receipts and certificates."
             icon={<Building2 className="size-4" aria-hidden="true" />}
+            actions={renderSectionSave("org", "organisation")}
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <Field id="s-org-name" label="Organisation name">
@@ -615,6 +815,35 @@ export default function SettingsView() {
                   onChange={(e) => set("org.vision", e.target.value)}
                 />
               </Field>
+              <Field
+                id="s-org-fy"
+                label="Fiscal year start"
+                hint="Used for FY labels, reports and dashboards. Indian trusts run April → March."
+              >
+                <Select
+                  value={values["finance.fyStartMonth"] || "4"}
+                  onValueChange={(v) => set("finance.fyStartMonth", v)}
+                >
+                  <SelectTrigger id="s-org-fy" aria-label="Fiscal year start month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FY_MONTH_OPTIONS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field id="s-org-website" label="Website">
+                <Input
+                  id="s-org-website"
+                  value={values["org.website"] ?? ""}
+                  onChange={(e) => set("org.website", e.target.value)}
+                  placeholder="https://unitedangelreach.org"
+                />
+              </Field>
               <Field id="s-org-pan" label="PAN" hint="Trust PAN printed on 80G receipts.">
                 <Input
                   id="s-org-pan"
@@ -648,15 +877,12 @@ export default function SettingsView() {
                   placeholder="KA/2020/0123456"
                 />
               </Field>
-              <Field id="s-org-website" label="Website">
-                <Input
-                  id="s-org-website"
-                  value={values["org.website"] ?? ""}
-                  onChange={(e) => set("org.website", e.target.value)}
-                  placeholder="https://unitedangelreach.org"
-                />
-              </Field>
             </div>
+            <p className="mt-4 flex items-center gap-2 rounded-lg border border-dashed bg-muted/40 p-3 text-xs text-muted-foreground">
+              <CalendarRange className="size-4 shrink-0" aria-hidden="true" />
+              The fiscal year label (e.g. “FY 2025-26”) appears on the dashboard, reports and receipts
+              and follows the start month chosen above.
+            </p>
           </SectionCard>
         </TabsContent>
 
@@ -664,10 +890,27 @@ export default function SettingsView() {
         <TabsContent value="finance" className="mt-4">
           <SectionCard
             title="Payments &amp; finance"
-            description="UPI collections, payment gateway credentials and currency preferences."
+            description="UPI collections, gateway credentials, receipt prefix and currency preferences."
             icon={<Coins className="size-4" aria-hidden="true" />}
+            actions={renderSectionSave("payments", "payments")}
           >
             <div className="grid gap-4">
+              <div className="flex flex-wrap items-center gap-2" aria-label="Gateway credential status">
+                <PresenceBadge label="Gateway key ID" ok={configured("finance.razorpayKeyId")} />
+                <PresenceBadge label="Stripe key ID" ok={configured("finance.stripeKeyId")} />
+                <PresenceBadge label="Key secret" ok={configured("finance.gatewayKeySecret")} />
+                <PresenceBadge label="Webhook secret" ok={configured("finance.gatewayWebhookSecret")} />
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    bool("finance.gatewayTestMode")
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  )}
+                >
+                  Mode: {bool("finance.gatewayTestMode") ? "test" : "live"}
+                </Badge>
+              </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field
                   id="s-fin-upi"
@@ -692,15 +935,24 @@ export default function SettingsView() {
                     </SelectContent>
                   </Select>
                 </Field>
-                <SecretField
-                  id="s-fin-rzp"
-                  label="Gateway key ID"
-                  hint={`Public identifier for ${values["finance.gatewayProvider"] ?? "the gateway"}.`}
-                  configured={configured("finance.razorpayKeyId")}
-                  placeholder="rzp_live_xxxxxxxx"
-                  value={secretEdits["finance.razorpayKeyId"] ?? ""}
-                  onChange={(v) => setSecret("finance.razorpayKeyId", v)}
-                />
+                <Field id="s-fin-prefix" label="Receipt prefix" hint="Receipt numbers are generated as {prefix}-{year}-{00001}.">
+                  <Input
+                    id="s-fin-prefix"
+                    value={values["receipts.prefix"] ?? ""}
+                    onChange={(e) => set("receipts.prefix", e.target.value.toUpperCase())}
+                    placeholder="UAR-RCPT"
+                    className="font-mono"
+                  />
+                </Field>
+                <Field id="s-fin-gst" label="GSTIN" hint="Optional — printed on invoices only if provided.">
+                  <Input
+                    id="s-fin-gst"
+                    value={values["payments.gst"] ?? ""}
+                    onChange={(e) => set("payments.gst", e.target.value.toUpperCase())}
+                    placeholder="29AABCU9603R1Z…"
+                    className="font-mono"
+                  />
+                </Field>
                 <Field id="s-fin-provider" label="Gateway provider">
                   <Select
                     value={values["finance.gatewayProvider"] || "RAZORPAY"}
@@ -718,6 +970,24 @@ export default function SettingsView() {
                     </SelectContent>
                   </Select>
                 </Field>
+                <SecretField
+                  id="s-fin-rzp"
+                  label="Razorpay key ID"
+                  hint="Public identifier (rzp_test_… / rzp_live_…). Never echoed after saving."
+                  configured={configured("finance.razorpayKeyId")}
+                  placeholder="rzp_live_xxxxxxxx"
+                  value={secretEdits["finance.razorpayKeyId"] ?? ""}
+                  onChange={(v) => setSecret("finance.razorpayKeyId", v)}
+                />
+                <SecretField
+                  id="s-fin-stripe"
+                  label="Stripe key ID"
+                  hint="Publishable key (pk_live_…) used when the Stripe gateway is selected."
+                  configured={configured("finance.stripeKeyId")}
+                  placeholder="pk_live_xxxxxxxx"
+                  value={secretEdits["finance.stripeKeyId"] ?? ""}
+                  onChange={(v) => setSecret("finance.stripeKeyId", v)}
+                />
                 <SecretField
                   id="s-fin-keysecret"
                   label="Gateway key secret"
@@ -746,18 +1016,25 @@ export default function SettingsView() {
               />
               <SwitchRow
                 id="s-fin-testmode"
-                label="Test mode"
-                hint="Use sandbox/test keys while wiring up; turn off before going live."
+                label="Gateway mode: test / live"
+                hint="ON = test (sandbox keys while wiring up). Turn OFF before going live."
                 checked={bool("finance.gatewayTestMode")}
                 onCheckedChange={(v) => set("finance.gatewayTestMode", v ? "true" : "false")}
               />
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                <Button variant="outline" onClick={() => runTest("gateway")} aria-label="Test payment gateway configuration">
+                <Button
+                  variant="outline"
+                  onClick={() => runTest("gateway")}
+                  disabled={!gatewayKeysSet}
+                  aria-label="Test payment gateway configuration"
+                >
                   <Send className="size-4" aria-hidden="true" /> Test gateway
                 </Button>
                 <TestChip result={tests.gateway} />
                 <p className="text-xs text-muted-foreground">
-                  Checks the saved gateway credentials are present — no order or payment is created.
+                  {gatewayKeysSet
+                    ? "Checks the saved gateway credentials are present — no order or payment is created."
+                    : "Save a gateway key ID first to enable this check."}
                 </p>
               </div>
             </div>
@@ -770,7 +1047,12 @@ export default function SettingsView() {
             title="Email (SMTP)"
             description="Outbound transactional email — receipts, welcome and notification mail."
             icon={<Mail className="size-4" aria-hidden="true" />}
-            actions={<TestChip result={tests.email} />}
+            actions={
+              <>
+                <TestChip result={tests.email} />
+                {renderSectionSave("email", "email")}
+              </>
+            }
           >
             <div className="grid gap-4">
               <SwitchRow
@@ -852,13 +1134,26 @@ export default function SettingsView() {
                 onCheckedChange={(v) => set("notify.email.secure", v ? "true" : "false")}
               />
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                <Button variant="outline" onClick={() => runTest("email")} aria-label="Test SMTP connection">
+                <Button
+                  variant="outline"
+                  onClick={() => runTest("email")}
+                  disabled={!emailHostSet}
+                  aria-label="Test SMTP connection"
+                >
                   <Send className="size-4" aria-hidden="true" /> Test connection
                 </Button>
                 <TestChip result={tests.email} />
                 <p className="text-xs text-muted-foreground">
-                  Opens a real TCP connection to the saved host:port (3s timeout) — no mail is sent.
+                  {emailHostSet
+                    ? "Opens a real TCP connection to the saved host:port (3s timeout) — no mail is sent."
+                    : "Save an SMTP host first to enable this check."}
                 </p>
+              </div>
+              <div className="rounded-lg border border-dashed bg-muted/40 p-3 text-xs text-muted-foreground">
+                <strong className="text-foreground">Invitation templates:</strong> volunteer onboarding
+                and donor welcome invitations reuse this SMTP configuration and the organisation
+                identity above. Template copy is managed in code; only credentials and sender details
+                are configurable here.
               </div>
             </div>
           </SectionCard>
@@ -871,6 +1166,7 @@ export default function SettingsView() {
               title="SMS"
               description="Alerts for missions, kit scans and donor acknowledgements."
               icon={<MessageSquare className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("sms", "SMS")}
             >
               <div className="grid gap-4">
                 <SwitchRow
@@ -931,12 +1227,19 @@ export default function SettingsView() {
                   </Field>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                  <Button variant="outline" onClick={() => runTest("sms")} aria-label="Test SMS endpoint">
+                  <Button
+                    variant="outline"
+                    onClick={() => runTest("sms")}
+                    disabled={!smsEndpointSet}
+                    aria-label="Test SMS endpoint"
+                  >
                     <Send className="size-4" aria-hidden="true" /> Test endpoint
                   </Button>
                   <TestChip result={tests.sms} />
                   <p className="text-xs text-muted-foreground">
-                    Pings the saved provider endpoint over HTTP (4s timeout) — no SMS is sent.
+                    {smsEndpointSet
+                      ? "Pings the saved provider endpoint over HTTP (4s timeout) — no SMS is sent."
+                      : "Save the provider API endpoint first to enable this check."}
                   </p>
                 </div>
               </div>
@@ -946,6 +1249,7 @@ export default function SettingsView() {
               title="WhatsApp"
               description="WhatsApp Business API channel for donor and volunteer updates."
               icon={<MessageSquare className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("whatsapp", "WhatsApp")}
             >
               <div className="grid gap-4">
                 <SwitchRow
@@ -967,10 +1271,20 @@ export default function SettingsView() {
                   </Field>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-                  <Button variant="outline" onClick={() => runTest("whatsapp")} aria-label="Test WhatsApp configuration">
+                  <Button
+                    variant="outline"
+                    onClick={() => runTest("whatsapp")}
+                    disabled={!whatsappNumberSet}
+                    aria-label="Test WhatsApp configuration"
+                  >
                     <Send className="size-4" aria-hidden="true" /> Test configuration
                   </Button>
                   <TestChip result={tests.whatsapp} />
+                  <p className="text-xs text-muted-foreground">
+                    {whatsappNumberSet
+                      ? "Verifies the saved business number format and channel settings."
+                      : "Save the WhatsApp business number first to enable this check."}
+                  </p>
                 </div>
               </div>
             </SectionCard>
@@ -984,6 +1298,7 @@ export default function SettingsView() {
               title="Storage"
               description="Object storage for distribution photos, kit labels and exports."
               icon={<HardDrive className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("storage", "storage")}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field id="s-store-provider" label="Provider">
@@ -1041,6 +1356,7 @@ export default function SettingsView() {
               title="Webhooks"
               description="Push payment and receipt events to an external system in real time."
               icon={<Webhook className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("webhooks", "webhooks")}
             >
               <div className="grid gap-4">
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -1104,6 +1420,7 @@ export default function SettingsView() {
               title="Analytics"
               description="Traffic analytics for the public donate flow."
               icon={<BarChart3 className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("analytics", "analytics")}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field id="s-ana-ga4" label="GA4 measurement ID" hint="Format G-XXXXXXXXXX, loaded on public pages.">
@@ -1131,6 +1448,7 @@ export default function SettingsView() {
               title="Security (captcha)"
               description="Bot protection for the donate form and public contact forms."
               icon={<ShieldCheck className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("captcha", "captcha")}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field id="s-cap-provider" label="Provider">
@@ -1173,6 +1491,7 @@ export default function SettingsView() {
               title="Maps"
               description="Geocoding and maps used by missions, distributions and campaigns."
               icon={<MapPin className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("maps", "maps")}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field id="s-maps-provider" label="Provider">
@@ -1192,11 +1511,56 @@ export default function SettingsView() {
                 <SecretField
                   id="s-maps-apikey"
                   label="Maps API key"
+                  hint="Google Maps / MapmyIndia key used by mission tracking widgets."
                   configured={configured("maps.apiKey")}
                   placeholder="Paste maps API key"
                   value={secretEdits["maps.apiKey"] ?? ""}
                   onChange={(v) => setSecret("maps.apiKey", v)}
                 />
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="QR codes &amp; system mode"
+              description="Kit QR label targeting and platform-wide maintenance control."
+              icon={<QrCode className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("system", "system")}
+            >
+              <div className="grid gap-4">
+                <Field
+                  id="s-qr-base"
+                  label="QR code base URL"
+                  hint="Base URL encoded into ration-kit QR labels — scans resolve to {base}/scan/{code}. Leave blank to use the current origin."
+                >
+                  <Input
+                    id="s-qr-base"
+                    type="url"
+                    value={values["kits.qrBaseUrl"] ?? ""}
+                    onChange={(e) => set("kits.qrBaseUrl", e.target.value)}
+                    placeholder="https://unitedangelreach.org"
+                    className="font-mono"
+                  />
+                </Field>
+                <SwitchRow
+                  id="s-maintenance"
+                  label="Maintenance mode"
+                  hint="Shows a maintenance notice on public pages. The admin console stays available."
+                  checked={bool("app.maintenance")}
+                  onCheckedChange={(v) => set("app.maintenance", v ? "true" : "false")}
+                />
+                {bool("app.maintenance") && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300"
+                  >
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      <strong>Maintenance mode is ON.</strong> Donors and volunteers will see a
+                      maintenance notice instead of the public site — remember to turn it off after
+                      your changes are live.
+                    </span>
+                  </div>
+                )}
               </div>
             </SectionCard>
           </div>
@@ -1206,14 +1570,33 @@ export default function SettingsView() {
         <TabsContent value="logs" className="mt-4">
           <SectionCard
             title="Logs &amp; audit"
-            description="Activity trail verbosity and retention for the audit view."
+            description="Activity trail verbosity, retention, per-action toggles and CSV export."
             icon={<ScrollText className="size-4" aria-hidden="true" />}
+            actions={
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportLogs}
+                  disabled={exportingLogs}
+                  aria-label="Export activity logs as CSV"
+                >
+                  {exportingLogs ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Download className="size-4" aria-hidden="true" />
+                  )}
+                  Export logs CSV
+                </Button>
+                {renderSectionSave("logs", "logs")}
+              </>
+            }
           >
             <div className="grid gap-4">
               <SwitchRow
                 id="s-logs-enabled"
                 label="Enable activity logging"
-                hint="Records admin actions, dispatches, settings changes and more."
+                hint="Master switch — records admin actions, dispatches, settings changes and more."
                 checked={bool("logs.enabled")}
                 onCheckedChange={(v) => set("logs.enabled", v ? "true" : "false")}
               />
@@ -1243,6 +1626,39 @@ export default function SettingsView() {
                   />
                 </Field>
               </div>
+              <fieldset className="grid gap-2">
+                <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  What to log
+                </legend>
+                <SwitchRow
+                  id="s-logs-logins"
+                  label="Log logins & sign-outs"
+                  hint="Authentication events for every role."
+                  checked={bool("logs.track.logins")}
+                  onCheckedChange={(v) => set("logs.track.logins", v ? "true" : "false")}
+                />
+                <SwitchRow
+                  id="s-logs-donations"
+                  label="Log donations & receipts"
+                  hint="Gifts recorded, receipt issuance and refunds."
+                  checked={bool("logs.track.donations")}
+                  onCheckedChange={(v) => set("logs.track.donations", v ? "true" : "false")}
+                />
+                <SwitchRow
+                  id="s-logs-distributions"
+                  label="Log distributions & kit scans"
+                  hint="Field distributions, pad drives and ration-kit scans."
+                  checked={bool("logs.track.distributions")}
+                  onCheckedChange={(v) => set("logs.track.distributions", v ? "true" : "false")}
+                />
+                <SwitchRow
+                  id="s-logs-admin"
+                  label="Log admin edits"
+                  hint="Record, campaign and settings changes made by admins."
+                  checked={bool("logs.track.adminEdits")}
+                  onCheckedChange={(v) => set("logs.track.adminEdits", v ? "true" : "false")}
+                />
+              </fieldset>
             </div>
           </SectionCard>
         </TabsContent>
@@ -1253,9 +1669,14 @@ export default function SettingsView() {
             title="Language &amp; region"
             description="Defaults used across public pages and formatted dates."
             icon={<Languages className="size-4" aria-hidden="true" />}
+            actions={renderSectionSave("region", "language & region")}
           >
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field id="s-app-lang" label="Default language" hint="Default language for public pages. Volunteers can still switch.">
+              <Field
+                id="s-app-lang"
+                label="Default language"
+                hint="English is the UI master; public pages show translated fallbacks where available."
+              >
                 <Select value={values["app.language"] || "en"} onValueChange={(v) => set("app.language", v)}>
                   <SelectTrigger id="s-app-lang" aria-label="Default language">
                     <SelectValue />
@@ -1284,6 +1705,12 @@ export default function SettingsView() {
                 </Select>
               </Field>
             </div>
+            <p className="mt-4 rounded-lg border border-dashed bg-muted/40 p-3 text-xs text-muted-foreground">
+              Admin console strings always render from the <strong className="text-foreground">English master</strong>.
+              The selected language is served as the default for public pages, with translated
+              fallbacks (hi / kn / ta / te) applied where translations exist; anything untranslated
+              falls back to English automatically.
+            </p>
           </SectionCard>
         </TabsContent>
 
@@ -1291,8 +1718,9 @@ export default function SettingsView() {
         <TabsContent value="receipts" className="mt-4">
           <SectionCard
             title="Receipts &amp; certificates"
-            description="Signature block printed on 80G receipts and donor certificates."
+            description="Numbering, signature block and footer printed on 80G receipts and donor certificates."
             icon={<ReceiptText className="size-4" aria-hidden="true" />}
+            actions={renderSectionSave("receipts", "receipts")}
           >
             <div className="grid gap-4">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -1310,6 +1738,19 @@ export default function SettingsView() {
                     value={values["receipts.signatoryRole"] ?? ""}
                     onChange={(e) => set("receipts.signatoryRole", e.target.value)}
                     placeholder="Trustee / Secretary"
+                  />
+                </Field>
+                <Field
+                  id="s-rcpt-prefix"
+                  label="Receipt number prefix"
+                  hint="Used when receipts are issued: {prefix}-{year}-{00001}. Default UAR-RCPT."
+                >
+                  <Input
+                    id="s-rcpt-prefix"
+                    value={values["receipts.prefix"] ?? ""}
+                    onChange={(e) => set("receipts.prefix", e.target.value.toUpperCase())}
+                    placeholder="UAR-RCPT"
+                    className="font-mono"
                   />
                 </Field>
               </div>
@@ -1333,20 +1774,30 @@ export default function SettingsView() {
         {/* ============================ AI ASSISTANT ============================ */}
         <TabsContent value="assistant" className="mt-4">
           <SectionCard
-            title="AI assistant"
-            description="Model powering the in-app assistant widget for staff and donors."
+            title="AI assistant — Angel AI"
+            description="Assistant widget availability and model for staff, donors and volunteers."
             icon={<Bot className="size-4" aria-hidden="true" />}
+            actions={renderSectionSave("assistant", "AI assistant")}
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field id="s-ai-model" label="Model" hint="e.g. glm-4.6 — changes apply to new conversations.">
-                <Input
-                  id="s-ai-model"
-                  value={values["assist.model"] ?? ""}
-                  onChange={(e) => set("assist.model", e.target.value)}
-                  placeholder="glm-4.6"
-                  className="font-mono"
-                />
-              </Field>
+            <div className="grid gap-4">
+              <SwitchRow
+                id="s-ai-enabled"
+                label="Enable Angel AI assistant"
+                hint="Turn off to hide the assistant widget across the public site and portals."
+                checked={bool("assist.enabled")}
+                onCheckedChange={(v) => set("assist.enabled", v ? "true" : "false")}
+              />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-ai-model" label="Model" hint="e.g. glm-4.6 — changes apply to new conversations.">
+                  <Input
+                    id="s-ai-model"
+                    value={values["assist.model"] ?? ""}
+                    onChange={(e) => set("assist.model", e.target.value)}
+                    placeholder="glm-4.6"
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
             </div>
           </SectionCard>
         </TabsContent>
@@ -1367,7 +1818,8 @@ export default function SettingsView() {
               {dirtyCount} unsaved change{dirtyCount === 1 ? "" : "s"}
             </Badge>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              Only the changed keys are written. Secrets stay masked.
+              Only the changed keys are written. Secrets stay masked. Use “Save” on any card to persist
+              just that section.
             </p>
             <div className="ml-auto flex gap-2">
               <Button variant="outline" onClick={reset} aria-label="Reset changes">
@@ -1375,7 +1827,7 @@ export default function SettingsView() {
               </Button>
               <Button onClick={save} disabled={saving} aria-label="Save settings">
                 {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
-                {saving ? "Saving…" : "Save changes"}
+                {saving ? "Saving…" : "Save all changes"}
               </Button>
             </div>
           </div>

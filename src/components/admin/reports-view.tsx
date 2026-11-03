@@ -1,31 +1,51 @@
 "use client";
 
+/**
+ * Reports — trust reporting module (admin).
+ *
+ * Sections (tabs):
+ *  1. Donations & receipts register — filterable DataTable + totals + CSV
+ *  2. Fund utilisation — giving-by-category donut, monthly inflow bar,
+ *     campaign utilisation progress table
+ *  3. Programme impact — kits, pads, adopt-a-medicine, animals, green corridor
+ *  4. Donor & volunteer insights — new vs repeat, top donors, volunteer
+ *     funnel, beneficiaries, distribution type mix
+ *  5. Compliance snapshot — 80G receipts issued, monthly receipt bar,
+ *     trust registration block (80G / 12A / PAN / Darpan)
+ *
+ * Every number is a live aggregate from GET /api/reports?from&to&compare=1.
+ * Period controls: FY selector (FY 2024-25 → current), custom date range,
+ * and a compare toggle that surfaces Δ% chips on the KPI strip.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
+  BarChart,
   CartesianGrid,
-  ComposedChart,
   Cell,
-  Line,
   Pie,
   PieChart,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import {
-  Activity,
+  AlertCircle,
+  BadgeCheck,
+  ClipboardList,
   Coins,
-  Download,
   FileBarChart,
   HandCoins,
   HandHeart,
   Landmark,
   Package,
+  PawPrint,
+  Pill,
   Printer,
   RefreshCw,
+  ShieldCheck,
   Siren,
+  TrendingDown,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -33,22 +53,34 @@ import { toast } from "sonner";
 import { get } from "@/lib/api-client";
 import {
   formatDate,
+  formatDateLong,
   formatDuration,
   formatINR,
   formatINRCompact,
   titleCase,
 } from "@/lib/format";
-import { StatusBadge } from "@/components/shared/status-badge";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { EmptyState } from "@/components/shared/empty-state";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { DataField } from "@/components/shared/data-field";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import {
   Select,
   SelectContent,
@@ -56,79 +88,154 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
-/* ---------------------------------- types ---------------------------------- */
+/* ═══════════════════════════════ types ═══════════════════════════════ */
 
-type ReportTab = "impact" | "donations" | "distributions" | "finance";
-
-interface ReportPayload {
-  fy?: number;
-  kpis?: {
-    totalDonations?: number;
-    donationCount?: number;
-    avgDonation?: number;
-    donorCount?: number;
-    newDonorsThisFy?: number;
-  };
-  monthly?: { month: string; amount: number; count: number }[];
-  categories?: { category: string; amount: number }[];
-  topDonors?: { name: string; amount: number; count: number }[];
-  programmes?: {
-    kits?: { totalUnits?: number; scannedUnits?: number };
-    pads?: { sessions?: number; pads?: number; girls?: number; schools?: number };
-    corridor?: { missions?: number; events?: number; vehiclesAlerted?: number; timeSavedMin?: number };
-    animals?: { available?: number; adopted?: number; activePledges?: number };
-    medicine?: { total?: number; seeking?: number; adopted?: number; monthlyPledged?: number };
-  };
-  fyTotals?: { amount?: number; count?: number };
+interface Kpis {
+  fundsRaised: number;
+  donationCount: number;
+  avgDonation: number;
+  receiptsIssued: number;
+  receiptedSum: number;
+  fundsDisbursed: number;
+  distributionCount: number;
+  distributionQuantity: number;
+  beneficiariesServed: number;
+  servedViaDistributions: number;
+  padGirls: number;
+  panCoveragePct: number;
+  panReceipts: number;
+  donorCount: number;
 }
 
-interface DonationRow {
-  id: string;
-  donorName: string;
-  donorEmail?: string | null;
+interface MonthBucket {
+  key: string;
+  label: string;
   amount: number;
-  fees?: number | null;
-  netAmount?: number | null;
-  settlementDate?: string | null;
-  refundAmount?: number | null;
+  count: number;
+  receipts: number;
+}
+
+interface CategorySlice {
+  category: string;
+  amount: number;
+  count: number;
+}
+
+interface RegisterRow {
+  id: string;
+  createdAt: string;
+  receiptNumber: string;
+  donorName: string;
+  donorEmail: string;
+  donorPhone: string | null;
+  isAnonymous: boolean;
+  pan: string | null;
+  amount: number;
+  fees: number;
+  type: string;
+  category: string;
   paymentMethod: string;
   paymentStatus: string;
-  paymentProvider?: string | null;
-  receiptNumber?: string | null;
-  createdAt: string;
+  receiptStatus: string;
+  campaignId: string | null;
+  campaignTitle: string | null;
+  eligible80g: boolean;
 }
 
-interface DistributionRow {
+interface CampaignRow {
   id: string;
+  title: string;
+  category: string;
+  status: string;
+  raised: number;
+  target: number;
+  pct: number;
+  raisedInRange: number;
+  beneficiaries: number;
+}
+
+interface TopDonorRow {
+  name: string;
+  amount: number;
+  count: number;
+}
+
+interface TypeMixRow {
   type: string;
+  count: number;
   quantity: number;
-  value?: number | null;
-  location?: string | null;
-  distributedAt: string;
-  volunteer?: { user?: { name?: string } | null } | null;
+  value: number;
 }
 
-interface PadRow {
-  id: string;
-  schoolName?: string | null;
-  area: string;
-  girlsCount: number;
-  padsDistributed: number;
-  awarenessSession: boolean;
-  sessionAttendees?: number | null;
-  distributionDate: string;
+interface MonthlyReceiptRow {
+  label: string;
+  count: number;
+  sum: number;
 }
 
-/* ----------------------------- chart palette ------------------------------- */
+interface Aggregates {
+  kpis: Kpis;
+  monthly: MonthBucket[];
+  categories: CategorySlice[];
+  register: RegisterRow[];
+  campaigns: CampaignRow[];
+  utilization: {
+    disbursedValue: number;
+    disbursedQuantity: number;
+    disbursedCount: number;
+    byType: TypeMixRow[];
+  };
+  programmes: {
+    kits: { totalUnits: number; scannedUnits: number; scannedInRange: number };
+    pads: { drives: number; pads: number; girls: number; sessions: number; schools: number; avgPerGirl: number };
+    medicine: { total: number; seeking: number; partial: number; adopted: number; paused: number; activePledges: number; monthlyPledged: number };
+    animals: { total: number; available: number; fostered: number; adopted: number; critical: number; activePledges: number };
+    corridor: { missions: number; missionsCompleted: number; events: number; vehiclesAlerted: number; timeSavedSec: number; avgTimeSavedSec: number };
+  };
+  people: {
+    donors: { total: number; new: number; repeat: number };
+    topDonors: TopDonorRow[];
+    volunteerApplications: { total: number; pending: number; approved: number; rejected: number };
+    beneficiaries: {
+      total: number;
+      onboardedInRange: number;
+      byCategory: { category: string; count: number }[];
+      byUrgency: { urgency: string; count: number }[];
+    };
+  };
+  compliance: {
+    receiptCount: number;
+    receiptSum: number;
+    monthlyReceipts: MonthlyReceiptRow[];
+    ineligible80g: { count: number; sum: number };
+    panReceipts: { count: number; sum: number };
+  };
+}
+
+interface ReportsPayload {
+  range: { from: string; to: string };
+  compare: boolean;
+  previousRange: { from: string | null; to: string | null } | null;
+  current: Aggregates;
+  previous: Aggregates | null;
+}
+
+interface OrgSettings {
+  orgName: string;
+  orgHq: string;
+  orgAddress: string;
+  orgEmail: string;
+  orgPhone: string;
+  org80g: string;
+  orgPan: string;
+  orgReg12a: string;
+  orgDarpan: string;
+  signatoryName: string;
+  signatoryRole: string;
+}
+
+/* ═══════════════════════════ constants ═══════════════════════════ */
 
 const PIE_COLORS = [
   "#10b981", // emerald
@@ -142,7 +249,14 @@ const PIE_COLORS = [
   "#ef4444", // red
 ];
 
-/* --------------------------------- helpers --------------------------------- */
+const BAR_COLORS = ["bg-emerald-500", "bg-teal-500", "bg-amber-500", "bg-orange-500", "bg-pink-500", "bg-lime-500"];
+
+const DONATION_STATUSES = ["COMPLETED", "PENDING", "FAILED", "REFUNDED", "CANCELLED"];
+
+const inflowConfig: ChartConfig = { amount: { label: "Raised", color: "#10b981" } };
+const receiptsConfig: ChartConfig = { receipts: { label: "Receipts issued", color: "#10b981" } };
+
+/* ═══════════════════════════ helpers ═══════════════════════════ */
 
 function currentFyStart(): number {
   const now = new Date();
@@ -153,502 +267,476 @@ function fyLabel(start: number): string {
   return `FY ${start}-${String((start + 1) % 100).padStart(2, "0")}`;
 }
 
-function csvEscape(v: string | number): string {
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+function fyBounds(start: number): { from: string; to: string } {
+  return { from: `${start}-04-01`, to: `${start + 1}-03-31` };
 }
 
-interface CsvSection {
-  title: string;
-  header: string[];
-  rows: Array<Array<string | number>>;
+function periodFilename(from: string, to: string): string {
+  return `${from}_${to}`;
 }
 
-function downloadSectionedCsv(filename: string, reportTitle: string, sections: CsvSection[]) {
-  const lines: string[] = [csvEscape(reportTitle), ""];
-  for (const s of sections) {
-    lines.push(csvEscape(s.title));
-    lines.push(s.header.map(csvEscape).join(","));
-    for (const r of s.rows) lines.push(r.map(csvEscape).join(","));
-    lines.push("");
+function pctOf(part: number, whole: number): number {
+  return whole > 0 ? Math.min(100, Math.round((part / whole) * 100)) : 0;
+}
+
+/** Δ between current and previous KPI → chip state. */
+function deltaOf(current: number, previous: number) {
+  if (previous === 0) {
+    return current === 0 ? { dir: "flat" as const, label: "0%" } : { dir: "up" as const, label: "NEW" };
   }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  toast.success("Report exported as CSV");
+  const change = current - previous;
+  const pct = (change / previous) * 100;
+  if (Math.abs(pct) < 0.05) return { dir: "flat" as const, label: "0%" };
+  const magnitude = Math.abs(pct) >= 99.5 ? String(Math.round(Math.abs(pct))) : Math.abs(pct).toFixed(1);
+  return {
+    dir: change > 0 ? ("up" as const) : ("down" as const),
+    label: `${change > 0 ? "+" : "−"}${magnitude}%`,
+  };
 }
 
-/** 12 month buckets of the FY (Apr → Mar). */
-const FY_MONTHS = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
-
-function fyMonthBuckets(fyStart: number) {
-  return FY_MONTHS.map((month, i) => {
-    const y = i < 9 ? fyStart : fyStart + 1;
-    return { month: `${month} ${String(y).slice(2)}`, amount: 0, count: 0 };
-  });
+function DeltaChip({
+  current,
+  previous,
+  pp = false,
+}: {
+  current: number;
+  previous: number | null | undefined;
+  pp?: boolean;
+}) {
+  if (previous === null || previous === undefined) return null;
+  const d = deltaOf(current, previous);
+  const cls =
+    d.dir === "up"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+      : d.dir === "down"
+        ? "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400"
+        : "border-border bg-muted text-muted-foreground";
+  const Icon = d.dir === "up" ? TrendingUp : d.dir === "down" ? TrendingDown : null;
+  const ppChange = current - previous;
+  const label = pp
+    ? d.dir === "flat"
+      ? d.label
+      : `${ppChange > 0 ? "+" : "−"}${Math.abs(ppChange).toFixed(1)} pp`
+    : d.label;
+  return (
+    <Badge variant="outline" className={cn("gap-1 px-1.5 py-0 text-[11px] font-semibold tabular-nums", cls)}>
+      {Icon && <Icon className="size-3" aria-hidden="true" />}
+      <span>{label}</span>
+      <span className="sr-only">
+        {d.dir === "up" ? "increase" : d.dir === "down" ? "decrease" : "no change"} vs previous period
+      </span>
+    </Badge>
+  );
 }
 
-function fyBucketIndex(dateStr: string | Date, fyStart: number): number {
-  const d = typeof dateStr === "string" ? new Date(dateStr) : dateStr;
-  if (Number.isNaN(d.getTime())) return -1;
-  const monthsSinceApr = (d.getFullYear() - fyStart) * 12 + (d.getMonth() + 1 - 4);
-  return monthsSinceApr >= 0 && monthsSinceApr <= 11 ? monthsSinceApr : -1;
-}
-
-function inFy(dateStr: string | Date | null | undefined, fyStart: number): boolean {
-  if (!dateStr) return false;
-  return fyBucketIndex(dateStr, fyStart) >= 0;
-}
-
-function netOf(d: DonationRow): number {
-  if (d.netAmount !== null && d.netAmount !== undefined) return Number(d.netAmount);
-  return Number(d.amount) - Number(d.fees ?? 0);
-}
-
-function MiniStat({ label, value }: { label: string; value: React.ReactNode }) {
+function MiniStat({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
     <div className="rounded-lg border bg-muted/40 px-3 py-2">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-0.5 text-sm font-semibold">{value}</p>
+      <p className={cn("mt-0.5 text-sm font-semibold", mono && "font-mono text-[13px] tabular-nums")}>{value}</p>
+    </div>
+  );
+}
+
+/** Horizontal share bar (donor mix, beneficiary categories, type mix). */
+function ShareBar({
+  label,
+  value,
+  max,
+  colorClass,
+  trailing,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  colorClass: string;
+  trailing?: string;
+}) {
+  const w = max > 0 ? Math.max(3, Math.round((value / max) * 100)) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="truncate font-medium">{label}</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">
+          {trailing ?? value.toLocaleString("en-IN")}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", colorClass)} style={{ width: `${w}%` }} />
+      </div>
     </div>
   );
 }
 
 function TabSkeleton() {
   return (
-    <div className="space-y-4" aria-busy="true">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
-          <StatCard key={i} label="Loading" value="" loading accent="emerald" />
-        ))}
-      </div>
+    <div className="space-y-4" aria-busy="true" aria-live="polite">
       <div className="grid gap-4 lg:grid-cols-2">
-        <Skeleton className="h-80 rounded-xl" />
-        <Skeleton className="h-80 rounded-xl" />
+        <Skeleton className="h-72 rounded-xl" />
+        <Skeleton className="h-72 rounded-xl" />
       </div>
       <Skeleton className="h-64 rounded-xl" />
     </div>
   );
 }
 
-/* ---------------------------------- view ----------------------------------- */
+function TableSkeleton({ rows = 9 }: { rows?: number }) {
+  return (
+    <div className="space-y-2" aria-busy="true" aria-live="polite">
+      <Skeleton className="h-10 w-full rounded-lg" />
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="h-12 w-full rounded-lg" style={{ opacity: 1 - i * 0.07 }} />
+      ))}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════ view ═══════════════════════════════ */
+
+type ReportTab = "register" | "utilization" | "programmes" | "people" | "compliance";
 
 export default function ReportsView() {
   const thisFy = currentFyStart();
-  const fyOptions = useMemo(
-    () => [0, 1, 2, 3, 4].map((i) => thisFy - i),
-    [thisFy]
-  );
-  const [fy, setFy] = useState<number>(thisFy);
-  const [activeTab, setActiveTab] = useState<ReportTab>("impact");
+  const fyOptions = useMemo(() => [0, 1, 2].map((i) => thisFy - i), [thisFy]);
 
-  /* impact (consolidated report) */
-  const [data, setData] = useState<ReportPayload | null>(null);
+  /* ---------------- period state ---------------- */
+  const [fy, setFy] = useState<number | "custom">(thisFy);
+  const [from, setFrom] = useState<string>(fyBounds(thisFy).from);
+  const [to, setTo] = useState<string>(fyBounds(thisFy).to);
+  const [compare, setCompare] = useState(true);
+  const [activeTab, setActiveTab] = useState<ReportTab>("register");
+
+  /* ---------------- data state ---------------- */
+  const [data, setData] = useState<ReportsPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [org, setOrg] = useState<OrgSettings | null>(null);
 
-  /* raw donation rows — shared by the Donations and Finance tabs */
-  const [donations, setDonations] = useState<DonationRow[]>([]);
-  const [donationsLoading, setDonationsLoading] = useState(false);
+  /* register filters */
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
-  /* distributions + pad drives */
-  const [distributions, setDistributions] = useState<DistributionRow[]>([]);
-  const [pads, setPads] = useState<PadRow[]>([]);
-  const [distLoading, setDistLoading] = useState(false);
+  const rangeInvalid = Boolean(from && to && new Date(from).getTime() > new Date(to).getTime());
 
-  const load = useCallback(
-    async (year: number) => {
-      setLoading(true);
-      try {
-        const res = await get<ReportPayload>(`/api/reports?fy=${year}`);
-        setData(res ?? {});
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Failed to load report");
-        setData(null);
-      } finally {
-        setLoading(false);
-      }
-    },
+  const pickFy = (value: string) => {
+    if (value === "custom") {
+      setFy("custom");
+      return;
+    }
+    const start = Number(value);
+    setFy(start);
+    const b = fyBounds(start);
+    setFrom(b.from);
+    setTo(b.to);
+  };
+
+  /* ---------------- loaders ---------------- */
+  const load = useCallback(async () => {
+    if (!from || !to || rangeInvalid) {
+      if (rangeInvalid) setError("The start date must be on or before the end date.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await get<ReportsPayload>(
+        `/api/reports?from=${from}&to=${to}${compare ? "&compare=1" : ""}`
+      );
+      setData(res);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load report";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [from, to, compare, rangeInvalid]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    get<OrgSettings>("/api/settings/public")
+      .then((res) => {
+        if (!cancelled) setOrg(res);
+      })
+      .catch(() => {
+        /* compliance block falls back to placeholders */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ---------------- derived ---------------- */
+  const cur = data?.current ?? null;
+  const prev = data?.previous ?? null;
+  const k = cur?.kpis;
+  const p = cur?.programmes;
+  const people = cur?.people;
+  const compliance = cur?.compliance;
+  const utilization = cur?.utilization;
+  const showDelta = Boolean(compare && prev);
+  const firstLoad = loading && !cur;
+
+  const periodLabel = useMemo(() => {
+    if (!from || !to) return "";
+    const fyTxt = fy !== "custom" ? `${fyLabel(fy)} · ` : "";
+    return `${fyTxt}${formatDateLong(from)} – ${formatDateLong(to)}`;
+  }, [from, to, fy]);
+
+  const prevPeriodLabel = useMemo(() => {
+    const r = data?.previousRange;
+    if (!showDelta || !r?.from || !r?.to) return "";
+    return `Compared with ${formatDateLong(r.from)} – ${formatDateLong(r.to)}`;
+  }, [data, showDelta]);
+
+  /* register filtering */
+  const filteredRegister = useMemo(() => {
+    const rows = cur?.register ?? [];
+    const needle = q.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (statusFilter !== "ALL" && r.paymentStatus !== statusFilter) return false;
+      if (categoryFilter !== "ALL" && r.category !== categoryFilter) return false;
+      if (!needle) return true;
+      return [r.donorName, r.donorEmail, r.receiptNumber, r.campaignTitle ?? "", r.pan ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [cur, q, statusFilter, categoryFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [q, statusFilter, categoryFilter]);
+
+  const registerTotals = useMemo(() => {
+    const completed = filteredRegister.filter((r) => r.paymentStatus === "COMPLETED");
+    const eligible = completed.filter((r) => r.eligible80g);
+    const refunds = filteredRegister
+      .filter((r) => r.paymentStatus === "REFUNDED")
+      .reduce((s, r) => s + r.amount, 0);
+    return {
+      gifts: filteredRegister.length,
+      completedCount: completed.length,
+      completedSum: completed.reduce((s, r) => s + r.amount, 0),
+      eligibleSum: eligible.reduce((s, r) => s + r.amount, 0),
+      ineligibleSum: completed.filter((r) => !r.eligible80g).reduce((s, r) => s + r.amount, 0),
+      refunds,
+    };
+  }, [filteredRegister]);
+
+  const registerPages = Math.max(1, Math.ceil(filteredRegister.length / pageSize));
+  const pagedRegister = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredRegister.slice(start, start + pageSize);
+  }, [filteredRegister, page, pageSize]);
+
+  const resetFilters = () => {
+    setQ("");
+    setStatusFilter("ALL");
+    setCategoryFilter("ALL");
+  };
+
+  /* ═══════════════════════ CSV column sets ═══════════════════════ */
+
+  const registerCsv: CsvColumn<RegisterRow>[] = useMemo(
+    () => [
+      { header: "Date", value: (r) => formatDate(r.createdAt) },
+      { header: "Receipt No", value: (r) => r.receiptNumber },
+      { header: "Donor", value: (r) => (r.isAnonymous ? "Anonymous" : r.donorName) },
+      { header: "Email", value: (r) => r.donorEmail },
+      { header: "Amount (INR)", value: (r) => r.amount },
+      { header: "80G Eligible", value: (r) => (r.eligible80g ? "Yes" : "No") },
+      { header: "Category", value: (r) => r.category },
+      { header: "Campaign", value: (r) => r.campaignTitle ?? "" },
+      { header: "Method", value: (r) => r.paymentMethod },
+      { header: "Status", value: (r) => r.paymentStatus },
+      { header: "PAN", value: (r) => r.pan ?? "" },
+    ],
     []
   );
 
-  useEffect(() => {
-    load(fy);
-  }, [fy, load]);
+  const categoryCsv: CsvColumn<CategorySlice>[] = useMemo(
+    () => [
+      { header: "Category", value: (c) => c.category },
+      { header: "Amount (INR)", value: (c) => c.amount },
+      { header: "Gifts", value: (c) => c.count },
+    ],
+    []
+  );
 
-  const loadDonations = useCallback(async () => {
-    setDonationsLoading(true);
-    try {
-      const from = `${fy}-04-01`;
-      const to = `${fy + 1}-03-31`;
-      const res = await get<{ items?: DonationRow[] } | DonationRow[]>(
-        `/api/donations?from=${from}&to=${to}&limit=500`
-      );
-      const items = Array.isArray(res) ? res : (res.items ?? []);
-      setDonations(items);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load donations");
-      setDonations([]);
-    } finally {
-      setDonationsLoading(false);
-    }
-  }, [fy]);
+  const campaignCsv: CsvColumn<CampaignRow>[] = useMemo(
+    () => [
+      { header: "Campaign", value: (c) => c.title },
+      { header: "Category", value: (c) => c.category },
+      { header: "Status", value: (c) => c.status },
+      { header: "Raised (INR)", value: (c) => c.raised },
+      { header: "Target (INR)", value: (c) => c.target },
+      { header: "Utilisation %", value: (c) => c.pct },
+      { header: "Raised in period (INR)", value: (c) => c.raisedInRange },
+    ],
+    []
+  );
 
-  const loadDistributions = useCallback(async () => {
-    setDistLoading(true);
-    try {
-      const [distRaw, padRaw] = await Promise.all([
-        get<DistributionRow[] | { items?: DistributionRow[] }>("/api/distributions?limit=200"),
-        get<PadRow[] | { items?: PadRow[] }>("/api/pad-distributions"),
-      ]);
-      const dist = Array.isArray(distRaw) ? distRaw : (distRaw.items ?? []);
-      const pad = Array.isArray(padRaw) ? padRaw : (padRaw.items ?? []);
-      // server endpoints don't take FY filters — narrow client-side
-      setDistributions(dist.filter((d) => inFy(d.distributedAt, fy)));
-      setPads(pad.filter((p) => inFy(p.distributionDate, fy)));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load distributions");
-      setDistributions([]);
-      setPads([]);
-    } finally {
-      setDistLoading(false);
-    }
-  }, [fy]);
+  const programmeCsv: CsvColumn<{ programme: string; metric: string; value: string | number }>[] = useMemo(
+    () => [
+      { header: "Programme", value: (r) => r.programme },
+      { header: "Metric", value: (r) => r.metric },
+      { header: "Value", value: (r) => r.value },
+    ],
+    []
+  );
 
-  // lazy-load per tab; refetch when the FY changes
-  useEffect(() => {
-    if (activeTab === "donations" || activeTab === "finance") void loadDonations();
-    if (activeTab === "distributions") void loadDistributions();
-  }, [activeTab, fy, loadDonations, loadDistributions]);
+  const programmeRows: { programme: string; metric: string; value: string | number }[] = useMemo(() => {
+    if (!p) return [];
+    return [
+      { programme: "Ration kits", metric: "Units assembled", value: p.kits.totalUnits },
+      { programme: "Ration kits", metric: "Units scanned", value: p.kits.scannedUnits },
+      { programme: "Ration kits", metric: "Scanned in period", value: p.kits.scannedInRange },
+      { programme: "Sanitary pads", metric: "Drives", value: p.pads.drives },
+      { programme: "Sanitary pads", metric: "Awareness sessions", value: p.pads.sessions },
+      { programme: "Sanitary pads", metric: "Pads distributed", value: p.pads.pads },
+      { programme: "Sanitary pads", metric: "Girls reached", value: p.pads.girls },
+      { programme: "Sanitary pads", metric: "Pads per girl (avg)", value: p.pads.avgPerGirl },
+      { programme: "Sanitary pads", metric: "Schools covered", value: p.pads.schools },
+      { programme: "Adopt-a-Medicine", metric: "Causes total", value: p.medicine.total },
+      { programme: "Adopt-a-Medicine", metric: "Seeking", value: p.medicine.seeking },
+      { programme: "Adopt-a-Medicine", metric: "Partially adopted", value: p.medicine.partial },
+      { programme: "Adopt-a-Medicine", metric: "Adopted", value: p.medicine.adopted },
+      { programme: "Adopt-a-Medicine", metric: "Paused", value: p.medicine.paused },
+      { programme: "Adopt-a-Medicine", metric: "Active pledges", value: p.medicine.activePledges },
+      { programme: "Adopt-a-Medicine", metric: "Monthly commitment (INR)", value: p.medicine.monthlyPledged },
+      { programme: "Animal welfare", metric: "Animals total", value: p.animals.total },
+      { programme: "Animal welfare", metric: "Available", value: p.animals.available },
+      { programme: "Animal welfare", metric: "Fostered", value: p.animals.fostered },
+      { programme: "Animal welfare", metric: "Adopted", value: p.animals.adopted },
+      { programme: "Animal welfare", metric: "Critical", value: p.animals.critical },
+      { programme: "Animal welfare", metric: "Active pledges", value: p.animals.activePledges },
+      { programme: "Green corridor", metric: "Missions", value: p.corridor.missions },
+      { programme: "Green corridor", metric: "Missions completed", value: p.corridor.missionsCompleted },
+      { programme: "Green corridor", metric: "Corridor events", value: p.corridor.events },
+      { programme: "Green corridor", metric: "Vehicles alerted", value: p.corridor.vehiclesAlerted },
+      { programme: "Green corridor", metric: "Time saved (sec)", value: p.corridor.timeSavedSec },
+      { programme: "Green corridor", metric: "Avg time saved / mission (sec)", value: p.corridor.avgTimeSavedSec },
+    ];
+  }, [p]);
 
-  /* ------------------------------ impact data ------------------------------ */
+  const topDonorCsv: CsvColumn<TopDonorRow>[] = useMemo(
+    () => [
+      { header: "Donor", value: (d) => d.name },
+      { header: "Gifts", value: (d) => d.count },
+      { header: "Amount (INR)", value: (d) => d.amount },
+    ],
+    []
+  );
 
-  const k = data?.kpis ?? {};
-  const p = data?.programmes ?? {};
-  const kits = p.kits ?? {};
-  const padsP = p.pads ?? {};
-  const corridor = p.corridor ?? {};
-  const animals = p.animals ?? {};
-  const medicine = p.medicine ?? {};
+  const typeMixCsv: CsvColumn<TypeMixRow>[] = useMemo(
+    () => [
+      { header: "Distribution type", value: (t) => t.type },
+      { header: "Drives", value: (t) => t.count },
+      { header: "Units", value: (t) => t.quantity },
+      { header: "Value (INR)", value: (t) => t.value },
+    ],
+    []
+  );
 
-  const monthly = data?.monthly ?? [];
-  const categories = data?.categories ?? [];
-  const topDonors = data?.topDonors ?? [];
+  const receiptsCsv: CsvColumn<MonthlyReceiptRow>[] = useMemo(
+    () => [
+      { header: "Month", value: (m) => m.label },
+      { header: "80G receipts issued", value: (m) => m.count },
+      { header: "Receipted amount (INR)", value: (m) => m.sum },
+    ],
+    []
+  );
 
-  const kitPct =
-    kits.totalUnits && kits.totalUnits > 0
-      ? Math.min(100, Math.round(((kits.scannedUnits ?? 0) / kits.totalUnits) * 100))
-      : 0;
+  /* ═══════════════════════ table columns ═══════════════════════ */
 
-  /* ----------------------------- donations data ---------------------------- */
+  const registerColumns: DataTableColumn<RegisterRow>[] = useMemo(
+    () => [
+      { key: "date", header: "Date", className: "w-28" },
+      { key: "receipt", header: "Receipt no", mono: true, hideBelow: "sm", className: "w-44" },
+      { key: "donor", header: "Donor", className: "max-w-52" },
+      { key: "amount", header: "Amount", align: "right", mono: true },
+      { key: "g80", header: "80G", hideBelow: "md" },
+      { key: "category", header: "Category", hideBelow: "md" },
+      { key: "campaign", header: "Campaign", hideBelow: "lg", className: "max-w-56" },
+      { key: "status", header: "Status", hideBelow: "sm" },
+    ],
+    []
+  );
 
-  const donationAgg = useMemo(() => {
-    const completed = donations.filter((d) => d.paymentStatus === "COMPLETED");
-    const issues = donations.filter(
-      (d) =>
-        d.paymentStatus === "FAILED" ||
-        d.paymentStatus === "REFUNDED" ||
-        d.paymentStatus === "CANCELLED" ||
-        (Number(d.refundAmount ?? 0) > 0 && d.paymentStatus !== "COMPLETED")
-    );
-    const refunds = donations.filter((d) => Number(d.refundAmount ?? 0) > 0);
+  const campaignColumns: DataTableColumn<CampaignRow>[] = useMemo(
+    () => [
+      { key: "title", header: "Campaign", className: "max-w-72" },
+      { key: "category", header: "Category", hideBelow: "md" },
+      { key: "raised", header: "Raised", align: "right", mono: true },
+      { key: "target", header: "Target", align: "right", mono: true, hideBelow: "sm" },
+      { key: "progress", header: "Utilisation" },
+      { key: "inRange", header: "In period", align: "right", mono: true, hideBelow: "lg" },
+    ],
+    []
+  );
 
-    const byMethodMap = new Map<string, { method: string; count: number; amount: number }>();
-    for (const d of donations) {
-      const key = d.paymentMethod || "UNKNOWN";
-      const row = byMethodMap.get(key) ?? { method: key, count: 0, amount: 0 };
-      row.count += 1;
-      if (d.paymentStatus === "COMPLETED") row.amount += Number(d.amount);
-      byMethodMap.set(key, row);
-    }
+  const topDonorColumns: DataTableColumn<TopDonorRow>[] = useMemo(
+    () => [
+      { key: "rank", header: "#", className: "w-12" },
+      { key: "name", header: "Donor" },
+      { key: "count", header: "Gifts", align: "right", hideBelow: "sm" },
+      { key: "amount", header: "Amount", align: "right", mono: true },
+    ],
+    []
+  );
 
-    const byStatusMap = new Map<string, { status: string; count: number; amount: number }>();
-    for (const d of donations) {
-      const key = d.paymentStatus || "UNKNOWN";
-      const row = byStatusMap.get(key) ?? { status: key, count: 0, amount: 0 };
-      row.count += 1;
-      row.amount += Number(d.amount);
-      byStatusMap.set(key, row);
-    }
-
-    const buckets = fyMonthBuckets(fy);
-    for (const d of donations) {
-      const idx = fyBucketIndex(d.createdAt, fy);
-      if (idx < 0) continue;
-      buckets[idx].count += 1;
-      if (d.paymentStatus === "COMPLETED") buckets[idx].amount += Number(d.amount);
-    }
-
-    return {
-      completed,
-      issues,
-      refunds,
-      raised: completed.reduce((s, d) => s + Number(d.amount), 0),
-      byMethod: Array.from(byMethodMap.values()).sort((a, b) => b.amount - a.amount || b.count - a.count),
-      byStatus: Array.from(byStatusMap.values()).sort((a, b) => b.count - a.count),
-      trend: buckets,
-    };
-  }, [donations, fy]);
-
-  /* --------------------------- distributions data --------------------------- */
-
-  const distAgg = useMemo(() => {
-    const byTypeMap = new Map<string, { type: string; count: number; quantity: number; value: number }>();
-    const byLocMap = new Map<string, { location: string; count: number; quantity: number; value: number }>();
-    for (const d of distributions) {
-      const t = byTypeMap.get(d.type) ?? { type: d.type, count: 0, quantity: 0, value: 0 };
-      t.count += 1;
-      t.quantity += Number(d.quantity ?? 0);
-      t.value += Number(d.value ?? 0);
-      byTypeMap.set(d.type, t);
-
-      const loc = (d.location ?? "").trim() || "Unspecified";
-      const l = byLocMap.get(loc) ?? { location: loc, count: 0, quantity: 0, value: 0 };
-      l.count += 1;
-      l.quantity += Number(d.quantity ?? 0);
-      l.value += Number(d.value ?? 0);
-      byLocMap.set(loc, l);
-    }
-
-    const byAreaMap = new Map<string, { area: string; sessions: number; pads: number; girls: number }>();
-    for (const pd of pads) {
-      const a = byAreaMap.get(pd.area) ?? { area: pd.area, sessions: 0, pads: 0, girls: 0 };
-      a.sessions += 1;
-      a.pads += Number(pd.padsDistributed ?? 0);
-      a.girls += Number(pd.girlsCount ?? 0);
-      byAreaMap.set(pd.area, a);
-    }
-
-    const totalValue = distributions.reduce((s, d) => s + Number(d.value ?? 0), 0);
-    const totalQty = distributions.reduce((s, d) => s + Number(d.quantity ?? 0), 0);
-    const totalPads = pads.reduce((s, x) => s + Number(x.padsDistributed ?? 0), 0);
-    const totalGirls = pads.reduce((s, x) => s + Number(x.girlsCount ?? 0), 0);
-    const sessions = pads.filter((x) => x.awarenessSession).length;
-
-    return {
-      byType: Array.from(byTypeMap.values()).sort((a, b) => b.quantity - a.quantity),
-      byLocation: Array.from(byLocMap.values()).sort((a, b) => b.count - a.count || b.quantity - a.quantity).slice(0, 10),
-      byArea: Array.from(byAreaMap.values()).sort((a, b) => b.pads - a.pads).slice(0, 10),
-      totalValue,
-      totalQty,
-      totalPads,
-      totalGirls,
-      sessions,
-    };
-  }, [distributions, pads]);
-
-  /* ------------------------------- finance data ----------------------------- */
-
-  const financeAgg = useMemo(() => {
-    const completed = donations.filter((d) => d.paymentStatus === "COMPLETED");
-    const gross = completed.reduce((s, d) => s + Number(d.amount), 0);
-    const fees = completed.reduce((s, d) => s + Number(d.fees ?? 0), 0);
-    const netRecorded = completed.reduce(
-      (s, d) => s + (d.netAmount !== null && d.netAmount !== undefined ? Number(d.netAmount) : 0),
-      0
-    );
-    const expectedNet = gross - fees;
-    const variance = expectedNet - netRecorded;
-    const refundTotal = donations.reduce((s, d) => s + Number(d.refundAmount ?? 0), 0);
-    const settled = completed.filter((d) => Boolean(d.settlementDate));
-    const coverage = completed.length > 0 ? Math.round((settled.length / completed.length) * 100) : 0;
-
-    const byProviderMap = new Map<string, { provider: string; count: number; gross: number; fees: number; net: number; settled: number }>();
-    for (const d of completed) {
-      const key = (d.paymentProvider || d.paymentMethod || "UNKNOWN").toUpperCase();
-      const row = byProviderMap.get(key) ?? { provider: key, count: 0, gross: 0, fees: 0, net: 0, settled: 0 };
-      row.count += 1;
-      row.gross += Number(d.amount);
-      row.fees += Number(d.fees ?? 0);
-      row.net += netOf(d);
-      if (d.settlementDate) row.settled += 1;
-      byProviderMap.set(key, row);
-    }
-
-    return {
-      completedCount: completed.length,
-      gross,
-      fees,
-      netRecorded,
-      expectedNet,
-      variance,
-      refundTotal,
-      settledCount: settled.length,
-      coverage,
-      unsettled: completed.length - settled.length,
-      byProvider: Array.from(byProviderMap.values()).sort((a, b) => b.gross - a.gross),
-    };
-  }, [donations]);
-
-  /* -------------------------------- exports --------------------------------- */
-
-  const exportImpact = () => {
-    const rows: string[] = [];
-    rows.push(`United Angel Reach — Impact Report,${fyLabel(fy)}`);
-    rows.push("");
-    rows.push("Section,Metric,Value");
-    rows.push(`KPIs,Total raised,${k.totalDonations ?? 0}`);
-    rows.push(`KPIs,Donations,${k.donationCount ?? 0}`);
-    rows.push(`KPIs,Average gift,${k.avgDonation ?? 0}`);
-    rows.push(`KPIs,Active donors,${k.donorCount ?? 0}`);
-    rows.push(`KPIs,New donors this FY,${k.newDonorsThisFy ?? 0}`);
-    rows.push("");
-    rows.push("Month,Amount (INR),Donations");
-    for (const m of monthly) rows.push([csvEscape(m.month), m.amount, m.count].join(","));
-    rows.push("");
-    rows.push("Category,Amount (INR)");
-    for (const c of categories) rows.push([csvEscape(c.category), c.amount].join(","));
-    rows.push("");
-    rows.push("Top donor,Amount (INR),Gifts");
-    for (const d of topDonors) rows.push([csvEscape(d.name), d.amount, d.count].join(","));
-    rows.push("");
-    rows.push("Programme,Metric,Value");
-    rows.push(`Ration kits,Total units,${kits.totalUnits ?? 0}`);
-    rows.push(`Ration kits,Scanned units,${kits.scannedUnits ?? 0}`);
-    rows.push(`Sanitary pads,Sessions,${padsP.sessions ?? 0}`);
-    rows.push(`Sanitary pads,Pads,${padsP.pads ?? 0}`);
-    rows.push(`Sanitary pads,Girls,${padsP.girls ?? 0}`);
-    rows.push(`Sanitary pads,Schools,${padsP.schools ?? 0}`);
-    rows.push(`Green corridor,Missions,${corridor.missions ?? 0}`);
-    rows.push(`Green corridor,Events,${corridor.events ?? 0}`);
-    rows.push(`Green corridor,Vehicles alerted,${corridor.vehiclesAlerted ?? 0}`);
-    rows.push(`Green corridor,Time saved (min),${corridor.timeSavedMin ?? 0}`);
-    rows.push(`Animals,Available,${animals.available ?? 0}`);
-    rows.push(`Animals,Adopted,${animals.adopted ?? 0}`);
-    rows.push(`Animals,Active pledges,${animals.activePledges ?? 0}`);
-    rows.push(`Adopt-a-Medicine,Total causes,${medicine.total ?? 0}`);
-    rows.push(`Adopt-a-Medicine,Seeking,${medicine.seeking ?? 0}`);
-    rows.push(`Adopt-a-Medicine,Adopted,${medicine.adopted ?? 0}`);
-    rows.push(`Adopt-a-Medicine,Monthly pledged (INR),${medicine.monthlyPledged ?? 0}`);
-
-    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `uar-impact-${fyLabel(fy).replace(/\s/g, "")}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    toast.success("Report exported as CSV");
-  };
-
-  const exportDonations = () => {
-    downloadSectionedCsv(`uar-donations-${fyLabel(fy).replace(/\s/g, "")}`, `United Angel Reach — Donations Report ${fyLabel(fy)}`, [
-      {
-        title: "By payment method",
-        header: ["Method", "Gifts", "Amount completed (INR)"],
-        rows: donationAgg.byMethod.map((m) => [titleCase(m.method), m.count, m.amount]),
-      },
-      {
-        title: "By status",
-        header: ["Status", "Gifts", "Amount (INR)"],
-        rows: donationAgg.byStatus.map((s) => [titleCase(s.status), s.count, s.amount]),
-      },
-      {
-        title: "Monthly trend",
-        header: ["Month", "Amount completed (INR)", "Gifts"],
-        rows: donationAgg.trend.map((t) => [t.month, t.amount, t.count]),
-      },
-      {
-        title: "Failed / refunded donations",
-        header: ["Date", "Donor", "Amount (INR)", "Status", "Method", "Receipt"],
-        rows: donationAgg.issues.map((d) => [
-          formatDate(d.createdAt),
-          d.donorName,
-          Number(d.amount),
-          d.paymentStatus,
-          titleCase(d.paymentMethod),
-          d.receiptNumber ?? "",
-        ]),
-      },
-    ]);
-  };
-
-  const exportDistributions = () => {
-    downloadSectionedCsv(`uar-distributions-${fyLabel(fy).replace(/\s/g, "")}`, `United Angel Reach — Distributions Report ${fyLabel(fy)}`, [
-      {
-        title: "Totals by type",
-        header: ["Type", "Drives", "Units", "Value (INR)"],
-        rows: distAgg.byType.map((t) => [titleCase(t.type), t.count, t.quantity, t.value]),
-      },
-      {
-        title: "Top locations",
-        header: ["Location", "Drives", "Units", "Value (INR)"],
-        rows: distAgg.byLocation.map((l) => [l.location, l.count, l.quantity, l.value]),
-      },
-      {
-        title: "Pad drives by area",
-        header: ["Area", "Sessions", "Pads", "Girls"],
-        rows: distAgg.byArea.map((a) => [a.area, a.sessions, a.pads, a.girls]),
-      },
-    ]);
-  };
-
-  const exportFinance = () => {
-    downloadSectionedCsv(`uar-finance-${fyLabel(fy).replace(/\s/g, "")}`, `United Angel Reach — Finance Reconciliation ${fyLabel(fy)}`, [
-      {
-        title: "Reconciliation summary",
-        header: ["Metric", "Value"],
-        rows: [
-          ["Completed donations", financeAgg.completedCount],
-          ["Gross collected (INR)", financeAgg.gross],
-          ["Gateway fees (INR)", financeAgg.fees],
-          ["Expected net = gross − fees (INR)", financeAgg.expectedNet],
-          ["Recorded net (INR)", financeAgg.netRecorded],
-          ["Unreconciled variance (INR)", financeAgg.variance],
-          ["Refund total (INR)", financeAgg.refundTotal],
-          ["Settled donations", financeAgg.settledCount],
-          ["Unsettled donations", financeAgg.unsettled],
-          ["Settlement coverage (%)", financeAgg.coverage],
-        ],
-      },
-      {
-        title: "By provider / method",
-        header: ["Provider", "Gifts", "Gross (INR)", "Fees (INR)", "Net (INR)", "Settled"],
-        rows: financeAgg.byProvider.map((r) => [titleCase(r.provider), r.count, r.gross, r.fees, r.net, r.settled]),
-      },
-    ]);
-  };
-
-  const exportActive = () => {
-    switch (activeTab) {
-      case "donations":
-        if (donations.length === 0) return toast.info("No donations to export for this FY yet");
-        return exportDonations();
-      case "distributions":
-        if (distributions.length === 0 && pads.length === 0) return toast.info("No distributions to export for this FY yet");
-        return exportDistributions();
-      case "finance":
-        if (donations.length === 0) return toast.info("No donations to reconcile for this FY yet");
-        return exportFinance();
-      default:
-        return exportImpact();
-    }
-  };
-
-  const impactEmpty =
-    !loading && (!data || ((data.fyTotals?.count ?? 0) === 0 && monthly.every((m) => !m.amount)));
+  /* ═══════════════════════════ render ═══════════════════════════ */
 
   return (
-    <div className="space-y-6">
+    <div className="print-sheet space-y-6">
       <PageHeader
         title="Reports"
-        description="Consolidated fundraising, programme and finance reporting for the financial year (April → March)."
+        description={
+          periodLabel
+            ? `Trust reporting for boards & regulators — ${periodLabel}${prevPeriodLabel ? ` · ${prevPeriodLabel}` : ""}`
+            : "Fundraising, utilisation, programme impact and 80G compliance reporting."
+        }
         icon={<FileBarChart className="size-5" aria-hidden="true" />}
         actions={
-          <>
-            <Select
-              value={String(fy)}
-              onValueChange={(v) => setFy(Number(v))}
+          <div className="no-print flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void load()}
               disabled={loading}
+              aria-label="Refresh report"
             >
-              <SelectTrigger className="w-36" aria-label="Financial year">
+              <RefreshCw className={cn("size-4", loading && "animate-spin")} aria-hidden="true" />
+              Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => window.print()} aria-label="Print report">
+              <Printer className="size-4" aria-hidden="true" />
+              Print report
+            </Button>
+          </div>
+        }
+      />
+
+      {/* ───────────────── period controls ───────────────── */}
+      <SectionCard
+        title="Reporting period"
+        description="Financial year (April → March) or any custom range. Toggle comparison to see Δ vs the previous period of equal length."
+        icon={<ClipboardList className="size-4" aria-hidden="true" />}
+        className="no-print"
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">Financial year</p>
+            <Select value={fy === "custom" ? "custom" : String(fy)} onValueChange={pickFy}>
+              <SelectTrigger className="w-40" aria-label="Financial year">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -657,153 +745,374 @@ export default function ReportsView() {
                     {fyLabel(y)}
                   </SelectItem>
                 ))}
+                <SelectItem value="custom">Custom range</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" onClick={exportActive} aria-label={`Export ${activeTab} report as CSV`}>
-              <Download className="size-4" aria-hidden="true" /> Export CSV
-            </Button>
-            <Button variant="outline" onClick={() => window.print()} aria-label="Print report">
-              <Printer className="size-4" aria-hidden="true" /> Print
-            </Button>
-          </>
-        }
-      />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">From</p>
+            <Input
+              type="date"
+              value={from}
+              onChange={(e) => {
+                setFy("custom");
+                setFrom(e.target.value);
+              }}
+              className="w-40"
+              aria-label="Period start date"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground">To</p>
+            <Input
+              type="date"
+              value={to}
+              onChange={(e) => {
+                setFy("custom");
+                setTo(e.target.value);
+              }}
+              className="w-40"
+              aria-label="Period end date"
+            />
+          </div>
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm">
+            <Switch checked={compare} onCheckedChange={setCompare} aria-label="Compare with previous period" />
+            <span className="font-medium">Compare vs previous period</span>
+          </label>
+        </div>
+        {rangeInvalid && (
+          <p className="mt-3 text-xs font-medium text-rose-600 dark:text-rose-400" role="alert">
+            The start date must be on or before the end date.
+          </p>
+        )}
+      </SectionCard>
 
+      {/* ───────────────── error state ───────────────── */}
+      {error && (
+        <SectionCard
+          title="Could not load the report"
+          description={error}
+          icon={<AlertCircle className="size-4" aria-hidden="true" />}
+          className="border-rose-500/30"
+        >
+          <Button variant="outline" onClick={() => void load()} aria-label="Retry loading report">
+            <RefreshCw className="size-4" aria-hidden="true" /> Retry
+          </Button>
+        </SectionCard>
+      )}
+
+      {/* ───────────────── KPI strip ───────────────── */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          label="Funds raised"
+          value={formatINRCompact(k?.fundsRaised ?? 0)}
+          icon={<Coins className="size-5" aria-hidden="true" />}
+          accent="emerald"
+          loading={firstLoad}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <DeltaChip
+                current={k?.fundsRaised ?? 0}
+                previous={showDelta ? (prev?.kpis.fundsRaised ?? null) : undefined}
+              />
+              <span>{k?.donationCount ?? 0} completed gifts</span>
+            </span>
+          }
+        />
+        <StatCard
+          label="80G receipts issued"
+          value={(k?.receiptsIssued ?? 0).toLocaleString("en-IN")}
+          icon={<BadgeCheck className="size-5" aria-hidden="true" />}
+          accent="teal"
+          loading={firstLoad}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <DeltaChip
+                current={k?.receiptsIssued ?? 0}
+                previous={showDelta ? (prev?.kpis.receiptsIssued ?? null) : undefined}
+              />
+              <span>{formatINRCompact(k?.receiptedSum ?? 0)} receipted</span>
+            </span>
+          }
+        />
+        <StatCard
+          label="Funds disbursed"
+          value={formatINRCompact(k?.fundsDisbursed ?? 0)}
+          icon={<HandCoins className="size-5" aria-hidden="true" />}
+          accent="amber"
+          loading={firstLoad}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <DeltaChip
+                current={k?.fundsDisbursed ?? 0}
+                previous={showDelta ? (prev?.kpis.fundsDisbursed ?? null) : undefined}
+              />
+              <span>
+                {k?.distributionCount ?? 0} distributions ·{" "}
+                {(k?.distributionQuantity ?? 0).toLocaleString("en-IN")} units
+              </span>
+            </span>
+          }
+        />
+        <StatCard
+          label="Beneficiaries served"
+          value={(k?.beneficiariesServed ?? 0).toLocaleString("en-IN")}
+          icon={<HandHeart className="size-5" aria-hidden="true" />}
+          accent="pink"
+          loading={firstLoad}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <DeltaChip
+                current={k?.beneficiariesServed ?? 0}
+                previous={showDelta ? (prev?.kpis.beneficiariesServed ?? null) : undefined}
+              />
+              <span>
+                {k?.servedViaDistributions ?? 0} via distributions · {k?.padGirls ?? 0} girls (pads)
+              </span>
+            </span>
+          }
+        />
+        <StatCard
+          label="PAN coverage"
+          value={`${k?.panCoveragePct ?? 0}%`}
+          icon={<ShieldCheck className="size-5" aria-hidden="true" />}
+          accent="lime"
+          loading={firstLoad}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <DeltaChip
+                current={k?.panCoveragePct ?? 0}
+                previous={showDelta ? (prev?.kpis.panCoveragePct ?? null) : undefined}
+                pp
+              />
+              <span>of receipted amount carries donor PAN</span>
+            </span>
+          }
+        />
+      </div>
+
+      {/* ───────────────── section tabs ───────────────── */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ReportTab)}>
-        <TabsList className="h-auto flex-wrap justify-start gap-1">
-          <TabsTrigger value="impact">Impact</TabsTrigger>
-          <TabsTrigger value="donations">Donations</TabsTrigger>
-          <TabsTrigger value="distributions">Distributions</TabsTrigger>
-          <TabsTrigger value="finance">Finance</TabsTrigger>
+        <TabsList className="no-print h-auto flex-wrap justify-start gap-1">
+          <TabsTrigger value="register">Donations register</TabsTrigger>
+          <TabsTrigger value="utilization">Fund utilisation</TabsTrigger>
+          <TabsTrigger value="programmes">Programme impact</TabsTrigger>
+          <TabsTrigger value="people">Donors &amp; volunteers</TabsTrigger>
+          <TabsTrigger value="compliance">Compliance</TabsTrigger>
         </TabsList>
 
-        {/* ============================== IMPACT ============================== */}
-        <TabsContent value="impact" className="mt-4">
-          {loading ? (
-            <TabSkeleton />
-          ) : impactEmpty ? (
-            <EmptyState
-              icon={<FileBarChart className="size-8" aria-hidden="true" />}
-              title={`No activity recorded in ${fyLabel(fy)}`}
-              hint="Donations, distributions and programme data for this financial year will appear here."
-            />
-          ) : (
-            <div className="print-sheet space-y-6">
-              {/* ============================ KPI ROW ============================ */}
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  label="Total raised"
-                  value={formatINRCompact(k.totalDonations ?? 0)}
-                  icon={<Coins className="size-5" aria-hidden="true" />}
-                  accent="emerald"
-                  hint={formatINR(k.totalDonations ?? 0)}
+        {/* ════════════════ 1 · DONATIONS REGISTER ════════════════ */}
+        <TabsContent value="register" className="mt-4">
+          <SectionCard
+            title="Donation & receipts register"
+            description="Every gift recorded in the period with its 80G receipt number. Cash gifts above ₹2,000 are not eligible for 80G deduction."
+            icon={<HandCoins className="size-4" aria-hidden="true" />}
+            actions={
+              <div className="no-print flex flex-wrap items-center gap-2">
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Search donor, receipt, PAN…"
+                  className="h-9 w-44 sm:w-56"
+                  aria-label="Search donations"
                 />
-                <StatCard
-                  label="Donations"
-                  value={(k.donationCount ?? 0).toLocaleString("en-IN")}
-                  icon={<Activity className="size-5" aria-hidden="true" />}
-                  accent="teal"
-                  hint={`${data?.fyTotals?.count ?? k.donationCount ?? 0} completed gifts`}
-                />
-                <StatCard
-                  label="Average gift"
-                  value={formatINR(k.avgDonation ?? 0)}
-                  icon={<TrendingUp className="size-5" aria-hidden="true" />}
-                  accent="amber"
-                  hint={fyLabel(fy)}
-                />
-                <StatCard
-                  label="Active donors"
-                  value={(k.donorCount ?? 0).toLocaleString("en-IN")}
-                  icon={<Users className="size-5" aria-hidden="true" />}
-                  accent="pink"
-                  hint={`+${k.newDonorsThisFy ?? 0} new this FY`}
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 w-32" aria-label="Filter by payment status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All statuses</SelectItem>
+                    {DONATION_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {titleCase(s)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="h-9 w-40" aria-label="Filter by category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All categories</SelectItem>
+                    {(cur?.categories ?? []).map((c) => (
+                      <SelectItem key={c.category} value={c.category}>
+                        {titleCase(c.category)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <ExportMenu
+                  columns={registerCsv}
+                  rows={filteredRegister}
+                  filename={`uar-donations-register-${periodFilename(from, to)}`}
+                  disabled={filteredRegister.length === 0}
                 />
               </div>
+            }
+          >
+            {firstLoad ? (
+              <TableSkeleton rows={9} />
+            ) : (cur?.register ?? []).length === 0 ? (
+              <EmptyState
+                icon={<HandCoins className="size-6" aria-hidden="true" />}
+                title="No donations recorded in this period"
+                hint="Gifts made between the selected dates will appear here as they are received."
+              />
+            ) : filteredRegister.length === 0 ? (
+              <EmptyState
+                icon={<HandCoins className="size-6" aria-hidden="true" />}
+                title="No donations match these filters"
+                hint="Try clearing the search box or choosing a different status or category."
+              >
+                <Button variant="outline" size="sm" onClick={resetFilters}>
+                  Reset filters
+                </Button>
+              </EmptyState>
+            ) : (
+              <div className="space-y-3">
+                <DataTable
+                  columns={registerColumns}
+                  rows={pagedRegister}
+                  rowKey={(r) => r.id}
+                  height="fill"
+                  fillOffset={560}
+                  page={page}
+                  pages={registerPages}
+                  total={filteredRegister.length}
+                  pageSize={pageSize}
+                  onPage={setPage}
+                  onPageSize={(n) => {
+                    setPageSize(n);
+                    setPage(1);
+                  }}
+                  itemLabel="donations"
+                >
+                  {(row, col) => {
+                    switch (col.key) {
+                      case "date":
+                        return formatDate(row.createdAt);
+                      case "receipt":
+                        return <span className="font-mono text-xs">{row.receiptNumber}</span>;
+                      case "donor":
+                        return (
+                          <span className="flex flex-col">
+                            <span className="truncate font-medium">
+                              {row.isAnonymous ? "Anonymous" : row.donorName}
+                            </span>
+                            <span className="truncate text-xs text-muted-foreground">{row.donorEmail}</span>
+                          </span>
+                        );
+                      case "amount":
+                        return formatINR(row.amount);
+                      case "g80":
+                        return row.eligible80g ? (
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-500/30 bg-emerald-500/10 text-[11px] text-emerald-700 dark:text-emerald-400"
+                          >
+                            80G eligible
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-400"
+                          >
+                            Not eligible
+                          </Badge>
+                        );
+                      case "category":
+                        return titleCase(row.category);
+                      case "campaign":
+                        return (
+                          <span className="block truncate text-muted-foreground">
+                            {row.campaignTitle ?? "— General fund"}
+                          </span>
+                        );
+                      case "status":
+                        return <StatusBadge status={row.paymentStatus} />;
+                      default:
+                        return "";
+                    }
+                  }}
+                </DataTable>
+                {/* totals row */}
+                <div className="grid grid-cols-2 gap-3 rounded-xl border bg-muted/40 p-3 sm:grid-cols-4" data-testid="register-totals">
+                  <MiniStat label="Gifts (filtered)" value={registerTotals.gifts.toLocaleString("en-IN")} mono />
+                  <MiniStat label="Completed amount" mono value={formatINR(registerTotals.completedSum)} />
+                  <MiniStat label="80G-eligible amount" mono value={formatINR(registerTotals.eligibleSum)} />
+                  <MiniStat
+                    label="Not 80G-eligible (cash > ₹2k)"
+                    mono
+                    value={formatINR(registerTotals.ineligibleSum)}
+                  />
+                </div>
+              </div>
+            )}
+          </SectionCard>
+        </TabsContent>
 
-              {/* ============================== CHARTS ============================= */}
+        {/* ════════════════ 2 · FUND UTILISATION ════════════════ */}
+        <TabsContent value="utilization" className="mt-4">
+          {firstLoad ? (
+            <TabSkeleton />
+          ) : (
+            <div className="space-y-4">
               <div className="grid gap-4 lg:grid-cols-2">
                 <SectionCard
-                  title="Monthly giving"
-                  description={`Donation inflow across ${fyLabel(fy)}`}
-                  icon={<TrendingUp className="size-4" aria-hidden="true" />}
-                >
-                  <div className="h-72 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={monthly} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.15} vertical={false} />
-                        <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                        <YAxis
-                          yAxisId="amt"
-                          tick={{ fontSize: 11 }}
-                          tickLine={false}
-                          axisLine={false}
-                          tickFormatter={(v: number) => formatINRCompact(v)}
-                          width={56}
-                        />
-                        <YAxis yAxisId="cnt" orientation="right" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={32} />
-                        <Tooltip
-                          formatter={(value, name) =>
-                            name === "amount"
-                              ? [formatINR(Number(value)), "Amount"]
-                              : [String(value), "Gifts"]
-                          }
-                          contentStyle={{ borderRadius: 12, fontSize: 12 }}
-                        />
-                        <Bar yAxisId="amt" dataKey="amount" name="amount" fill="#10b981" radius={[6, 6, 0, 0]} maxBarSize={38} />
-                        <Line
-                          yAxisId="cnt"
-                          type="monotone"
-                          dataKey="count"
-                          name="count"
-                          stroke="#f59e0b"
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Bars: amount raised · Line: number of donations
-                  </p>
-                </SectionCard>
-
-                <SectionCard
                   title="Giving by category"
-                  description="Where the money went, by donation category"
+                  description="Where donated funds were directed, by purpose"
                   icon={<HandHeart className="size-4" aria-hidden="true" />}
+                  actions={
+                    <ExportMenu
+                      columns={categoryCsv}
+                      rows={cur?.categories ?? []}
+                      filename={`uar-giving-by-category-${periodFilename(from, to)}`}
+                      disabled={(cur?.categories ?? []).length === 0}
+                    />
+                  }
                 >
-                  {categories.length === 0 ? (
-                    <div className="grid h-72 place-items-center text-sm text-muted-foreground">
-                      No categorised donations this FY.
-                    </div>
+                  {(cur?.categories ?? []).length === 0 ? (
+                    <EmptyState
+                      icon={<HandHeart className="size-6" aria-hidden="true" />}
+                      title="No categorised donations yet"
+                      hint="Completed gifts in this period will be grouped by purpose here."
+                    />
                   ) : (
                     <>
-                      <div className="h-56 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={categories}
-                              dataKey="amount"
-                              nameKey="category"
-                              innerRadius={52}
-                              outerRadius={86}
-                              paddingAngle={2}
-                              strokeWidth={0}
-                            >
-                              {categories.map((_, i) => (
-                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                              ))}
-                            </Pie>
-                            <Tooltip
-                              formatter={(value, name) => [formatINR(Number(value)), titleCase(String(name))]}
-                              contentStyle={{ borderRadius: 12, fontSize: 12 }}
-                            />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <ul className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                        {categories.map((c, i) => (
+                      <ChartContainer config={{}} className="aspect-auto h-44 w-full sm:h-56">
+                        <PieChart>
+                          <Pie
+                            data={cur?.categories ?? []}
+                            dataKey="amount"
+                            nameKey="category"
+                            innerRadius="55%"
+                            outerRadius="85%"
+                            paddingAngle={2}
+                            strokeWidth={0}
+                          >
+                            {(cur?.categories ?? []).map((_, i) => (
+                              <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <ChartTooltip
+                            content={
+                              <ChartTooltipContent
+                                formatter={(value, name) => (
+                                  <span className="flex w-full items-center justify-between gap-4">
+                                    <span className="text-muted-foreground">{titleCase(String(name))}</span>
+                                    <span className="font-mono font-medium tabular-nums">
+                                      {formatINR(Number(value))}
+                                    </span>
+                                  </span>
+                                )}
+                              />
+                            }
+                          />
+                        </PieChart>
+                      </ChartContainer>
+                      <ul className="scrollbar-thin mt-2 grid max-h-36 grid-cols-1 gap-x-4 gap-y-1.5 overflow-y-auto text-xs sm:grid-cols-2">
+                        {(cur?.categories ?? []).map((c, i) => (
                           <li key={c.category} className="flex items-center gap-2">
                             <span
                               aria-hidden="true"
@@ -811,732 +1120,710 @@ export default function ReportsView() {
                               style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
                             />
                             <span className="truncate">{titleCase(c.category)}</span>
-                            <span className="ml-auto font-medium">{formatINRCompact(c.amount)}</span>
+                            <span className="ml-auto font-medium tabular-nums">{formatINRCompact(c.amount)}</span>
                           </li>
                         ))}
                       </ul>
                     </>
                   )}
                 </SectionCard>
-              </div>
 
-              {/* =========================== PROGRAMME IMPACT ========================== */}
-              <SectionCard
-                title="Programme impact"
-                description="Operations delivered across the flagship UAR programmes"
-                icon={<HandCoins className="size-4" aria-hidden="true" />}
-              >
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {/* Ration kits */}
-                  <div className="rounded-xl border p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                        <Package className="size-4" aria-hidden="true" />
-                      </span>
-                      <p className="text-sm font-semibold">Ration kits</p>
-                      <Badge variant="outline" className="ml-auto">{kitPct}% scanned</Badge>
-                    </div>
-                    <Progress
-                      value={kitPct}
-                      className="mt-3 h-2 [&>div]:bg-emerald-600"
-                      aria-label={`${kitPct}% of ration kits scanned`}
-                    />
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {kits.scannedUnits ?? 0} of {kits.totalUnits ?? 0} units assembled vs scanned
-                    </p>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <MiniStat label="Assembled" value={(kits.totalUnits ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Scanned" value={(kits.scannedUnits ?? 0).toLocaleString("en-IN")} />
-                    </div>
-                  </div>
-
-                  {/* Sanitary pads */}
-                  <div className="rounded-xl border p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-lg bg-pink-500/10 text-pink-600 dark:text-pink-400">
-                        <HandHeart className="size-4" aria-hidden="true" />
-                      </span>
-                      <p className="text-sm font-semibold">Sanitary pads</p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <MiniStat label="Sessions" value={(padsP.sessions ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Pads" value={(padsP.pads ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Girls reached" value={(padsP.girls ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Schools" value={(padsP.schools ?? 0).toLocaleString("en-IN")} />
-                    </div>
-                  </div>
-
-                  {/* Green corridor */}
-                  <div className="rounded-xl border p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-lg bg-red-500/10 text-red-600 dark:text-red-400">
-                        <Siren className="size-4" aria-hidden="true" />
-                      </span>
-                      <p className="text-sm font-semibold">Green corridor</p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <MiniStat label="Missions" value={(corridor.missions ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Corridor events" value={(corridor.events ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Vehicles alerted" value={(corridor.vehiclesAlerted ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat
-                        label="Time saved"
-                        value={formatDuration((corridor.timeSavedMin ?? 0) * 60)}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Animals */}
-                  <div className="rounded-xl border p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
-                        <HandHeart className="size-4" aria-hidden="true" />
-                      </span>
-                      <p className="text-sm font-semibold">Animal welfare</p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <MiniStat label="Available" value={(animals.available ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Adopted" value={(animals.adopted ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Active pledges" value={(animals.activePledges ?? 0).toLocaleString("en-IN")} />
-                    </div>
-                  </div>
-
-                  {/* Adopt-a-Medicine */}
-                  <div className="rounded-xl border p-4">
-                    <div className="flex items-center gap-2">
-                      <span className="flex size-8 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
-                        <HandCoins className="size-4" aria-hidden="true" />
-                      </span>
-                      <p className="text-sm font-semibold">Adopt-a-Medicine</p>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <MiniStat label="Total causes" value={(medicine.total ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Seeking" value={(medicine.seeking ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Adopted" value={(medicine.adopted ?? 0).toLocaleString("en-IN")} />
-                      <MiniStat label="Monthly pledged" value={formatINR(medicine.monthlyPledged ?? 0)} />
-                    </div>
-                  </div>
-                </div>
-              </SectionCard>
-
-              {/* ============================= TOP DONORS ============================= */}
-              <SectionCard
-                title="Top donors"
-                description={`Highest contributing donors in ${fyLabel(fy)} (admin view)`}
-                icon={<Users className="size-4" aria-hidden="true" />}
-              >
-                {topDonors.length === 0 ? (
-                  <EmptyState
-                    icon={<Users className="size-6" aria-hidden="true" />}
-                    title="No donors this FY"
-                    hint="Donor contributions will be ranked here once received."
-                  />
-                ) : (
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-12">#</TableHead>
-                          <TableHead>Donor</TableHead>
-                          <TableHead className="text-right">Gifts</TableHead>
-                          <TableHead className="text-right">Amount</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {topDonors.map((d, i) => (
-                          <TableRow key={`${d.name}-${i}`}>
-                            <TableCell>
-                              <span
-                                className={cn(
-                                  "grid size-6 place-items-center rounded-full text-xs font-semibold",
-                                  i < 3
-                                    ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                                    : "bg-muted text-muted-foreground"
-                                )}
-                              >
-                                {i + 1}
-                              </span>
-                            </TableCell>
-                            <TableCell className="font-medium">{d.name}</TableCell>
-                            <TableCell className="text-right">{d.count}</TableCell>
-                            <TableCell className="text-right font-semibold">{formatINR(d.amount)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </SectionCard>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ============================= DONATIONS ============================= */}
-        <TabsContent value="donations" className="mt-4">
-          {donationsLoading ? (
-            <TabSkeleton />
-          ) : donations.length === 0 ? (
-            <EmptyState
-              icon={<HandCoins className="size-8" aria-hidden="true" />}
-              title={`No donations recorded in ${fyLabel(fy)}`}
-              hint="Gifts made during this financial year (any status) will be grouped here."
-            />
-          ) : (
-            <div className="print-sheet space-y-6">
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  label="Gifts recorded"
-                  value={donations.length.toLocaleString("en-IN")}
-                  icon={<HandCoins className="size-5" aria-hidden="true" />}
-                  accent="emerald"
-                  hint={`${donationAgg.completed.length} completed`}
-                />
-                <StatCard
-                  label="Raised (completed)"
-                  value={formatINRCompact(donationAgg.raised)}
-                  icon={<Coins className="size-5" aria-hidden="true" />}
-                  accent="teal"
-                  hint={formatINR(donationAgg.raised)}
-                />
-                <StatCard
-                  label="Failed / cancelled"
-                  value={donationAgg.byStatus
-                    .filter((s) => s.status === "FAILED" || s.status === "CANCELLED")
-                    .reduce((sum, s) => sum + s.count, 0)
-                    .toLocaleString("en-IN")}
-                  icon={<Activity className="size-5" aria-hidden="true" />}
-                  accent="red"
-                  hint="Excluded from raised totals"
-                />
-                <StatCard
-                  label="Refunded"
-                  value={formatINRCompact(donationAgg.refunds.reduce((s, d) => s + Number(d.refundAmount ?? 0), 0))}
-                  icon={<RefreshCw className="size-5" aria-hidden="true" />}
-                  accent="amber"
-                  hint={`${donationAgg.refunds.length} refund${donationAgg.refunds.length === 1 ? "" : "s"}`}
-                />
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
                 <SectionCard
-                  title="Monthly trend"
-                  description={`Donations across ${fyLabel(fy)}`}
+                  title="Monthly inflow"
+                  description="Completed donation amounts across the period"
                   icon={<TrendingUp className="size-4" aria-hidden="true" />}
                 >
-                  <div className="h-72 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={donationAgg.trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.15} vertical={false} />
-                        <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={0} angle={-35} textAnchor="end" height={44} />
-                        <YAxis
-                          yAxisId="amt"
+                  {(cur?.monthly ?? []).every((m) => m.amount === 0) ? (
+                    <EmptyState
+                      icon={<TrendingUp className="size-6" aria-hidden="true" />}
+                      title="No inflow this period"
+                      hint="Monthly giving will chart here as donations complete."
+                    />
+                  ) : (
+                    <ChartContainer config={inflowConfig} className="aspect-auto h-48 w-full sm:h-64">
+                      <BarChart data={cur?.monthly ?? []} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis
+                          dataKey="label"
                           tick={{ fontSize: 11 }}
                           tickLine={false}
                           axisLine={false}
+                          interval="preserveStartEnd"
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11 }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={54}
                           tickFormatter={(v: number) => formatINRCompact(v)}
-                          width={56}
                         />
-                        <YAxis yAxisId="cnt" orientation="right" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={32} />
-                        <Tooltip
-                          formatter={(value, name) =>
-                            name === "amount"
-                              ? [formatINR(Number(value)), "Amount (completed)"]
-                              : [String(value), "Gifts"]
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, name, item) => (
+                                <span className="flex w-full items-center justify-between gap-4">
+                                  <span className="text-muted-foreground">
+                                    Raised
+                                    {item?.payload?.count ? ` · ${item.payload.count} gifts` : ""}
+                                  </span>
+                                  <span className="font-mono font-medium tabular-nums">
+                                    {name === "amount" ? formatINR(Number(value)) : String(value)}
+                                  </span>
+                                </span>
+                              )}
+                            />
                           }
-                          contentStyle={{ borderRadius: 12, fontSize: 12 }}
                         />
-                        <Bar yAxisId="amt" dataKey="amount" name="amount" fill="#10b981" radius={[6, 6, 0, 0]} maxBarSize={38} />
-                        <Line
-                          yAxisId="cnt"
-                          type="monotone"
-                          dataKey="count"
-                          name="count"
-                          stroke="#f59e0b"
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Bars: completed amount · Line: gifts recorded
-                  </p>
-                </SectionCard>
-
-                <SectionCard
-                  title="By payment method"
-                  description="Gift count and completed amount per channel"
-                  icon={<Coins className="size-4" aria-hidden="true" />}
-                >
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Method</TableHead>
-                          <TableHead className="text-right">Gifts</TableHead>
-                          <TableHead className="text-right">Amount (completed)</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {donationAgg.byMethod.map((m) => (
-                          <TableRow key={m.method}>
-                            <TableCell className="font-medium">{titleCase(m.method)}</TableCell>
-                            <TableCell className="text-right">{m.count}</TableCell>
-                            <TableCell className="text-right font-semibold">{formatINR(m.amount)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </SectionCard>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SectionCard
-                  title="By status"
-                  description="Lifecycle of every gift recorded this FY"
-                  icon={<Activity className="size-4" aria-hidden="true" />}
-                >
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Status</TableHead>
-                          <TableHead className="text-right">Gifts</TableHead>
-                          <TableHead className="text-right">Amount</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {donationAgg.byStatus.map((s) => (
-                          <TableRow key={s.status}>
-                            <TableCell>
-                              <StatusBadge status={s.status} />
-                            </TableCell>
-                            <TableCell className="text-right">{s.count}</TableCell>
-                            <TableCell className="text-right font-semibold">{formatINR(s.amount)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </SectionCard>
-
-                <SectionCard
-                  title="Failed &amp; refunded"
-                  description="Gifts that need follow-up or were returned"
-                  icon={<RefreshCw className="size-4" aria-hidden="true" />}
-                >
-                  {donationAgg.issues.length === 0 ? (
-                    <EmptyState
-                      icon={<HandCoins className="size-6" aria-hidden="true" />}
-                      title="Nothing to chase"
-                      hint="No failed, cancelled or refunded donations this FY."
-                    />
-                  ) : (
-                    <div className="max-h-80 overflow-auto rounded-lg border scrollbar-thin">
-                      <Table>
-                        <TableHeader className="sticky top-0 bg-background">
-                          <TableRow>
-                            <TableHead>Donor</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Amount</TableHead>
-                            <TableHead className="hidden sm:table-cell">Date</TableHead>
-                            <TableHead className="hidden md:table-cell">Receipt</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {donationAgg.issues.map((d) => (
-                            <TableRow key={d.id}>
-                              <TableCell className="max-w-40 truncate font-medium">{d.donorName}</TableCell>
-                              <TableCell>
-                                <StatusBadge status={d.paymentStatus} />
-                              </TableCell>
-                              <TableCell className="text-right font-semibold">{formatINR(Number(d.refundAmount ?? d.amount))}</TableCell>
-                              <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell">
-                                {formatDate(d.createdAt)}
-                              </TableCell>
-                              <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
-                                {d.receiptNumber ?? "—"}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                        <Bar dataKey="amount" fill="var(--color-amount)" radius={[6, 6, 0, 0]} maxBarSize={40} />
+                      </BarChart>
+                    </ChartContainer>
                   )}
                 </SectionCard>
               </div>
+
+              <SectionCard
+                title="Campaign utilisation"
+                description="Cumulative raised vs target per campaign, plus what landed inside the reporting period"
+                icon={<Landmark className="size-4" aria-hidden="true" />}
+                actions={
+                  <ExportMenu
+                    columns={campaignCsv}
+                    rows={cur?.campaigns ?? []}
+                    filename={`uar-campaign-utilisation-${periodFilename(from, to)}`}
+                    disabled={(cur?.campaigns ?? []).length === 0}
+                  />
+                }
+              >
+                {(cur?.campaigns ?? []).length === 0 ? (
+                  <EmptyState
+                    icon={<Landmark className="size-6" aria-hidden="true" />}
+                    title="No campaigns yet"
+                    hint="Campaign progress will be tracked here once fundraising begins."
+                  />
+                ) : (
+                  <DataTable
+                    columns={campaignColumns}
+                    rows={cur?.campaigns ?? []}
+                    rowKey={(c) => c.id}
+                    height="max-h-[26rem]"
+                    skeletonRows={6}
+                  >
+                    {(row, col) => {
+                      switch (col.key) {
+                        case "title":
+                          return <span className="block truncate font-medium">{row.title}</span>;
+                        case "category":
+                          return <span className="text-muted-foreground">{titleCase(row.category)}</span>;
+                        case "raised":
+                          return formatINR(row.raised);
+                        case "target":
+                          return formatINR(row.target);
+                        case "progress":
+                          return (
+                            <span className="flex min-w-32 items-center gap-2">
+                              <Progress
+                                value={Math.min(100, row.pct)}
+                                className="h-2 flex-1"
+                                aria-label={`${row.pct}% of target raised`}
+                              />
+                              <span className="w-10 text-right text-xs font-semibold tabular-nums">{row.pct}%</span>
+                            </span>
+                          );
+                        case "inRange":
+                          return formatINR(row.raisedInRange);
+                        default:
+                          return "";
+                      }
+                    }}
+                  </DataTable>
+                )}
+                <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border bg-muted/40 p-3 sm:grid-cols-4">
+                  <MiniStat label="Raised in period" mono value={formatINR(k?.fundsRaised ?? 0)} />
+                  <MiniStat label="Disbursed in period" mono value={formatINR(utilization?.disbursedValue ?? 0)} />
+                  <MiniStat
+                    label="Disbursement rate"
+                    value={`${pctOf(utilization?.disbursedValue ?? 0, k?.fundsRaised ?? 0)}% of raised`}
+                  />
+                  <MiniStat
+                    label="Distribution drives"
+                    value={`${utilization?.disbursedCount ?? 0} · ${(utilization?.disbursedQuantity ?? 0).toLocaleString("en-IN")} units`}
+                  />
+                </div>
+              </SectionCard>
             </div>
           )}
         </TabsContent>
 
-        {/* =========================== DISTRIBUTIONS =========================== */}
-        <TabsContent value="distributions" className="mt-4">
-          {distLoading ? (
+        {/* ════════════════ 3 · PROGRAMME IMPACT ════════════════ */}
+        <TabsContent value="programmes" className="mt-4">
+          {firstLoad ? (
             <TabSkeleton />
-          ) : distributions.length === 0 && pads.length === 0 ? (
+          ) : !p ? (
             <EmptyState
-              icon={<Package className="size-8" aria-hidden="true" />}
-              title={`No distributions recorded in ${fyLabel(fy)}`}
-              hint="Field distributions and pad drives for this financial year will be summarised here."
+              icon={<Package className="size-6" aria-hidden="true" />}
+              title="No programme data"
+              hint="Programme metrics will appear once operations begin."
             />
           ) : (
-            <div className="print-sheet space-y-6">
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  label="Distribution drives"
-                  value={distributions.length.toLocaleString("en-IN")}
-                  icon={<Package className="size-5" aria-hidden="true" />}
-                  accent="emerald"
-                  hint="Field records this FY"
+            <SectionCard
+              title="Programme impact"
+              description="Operations delivered across the flagship UAR programmes"
+              icon={<HandCoins className="size-4" aria-hidden="true" />}
+              actions={
+                <ExportMenu
+                  columns={programmeCsv}
+                  rows={programmeRows}
+                  filename={`uar-programme-impact-${periodFilename(from, to)}`}
+                  disabled={programmeRows.length === 0}
                 />
-                <StatCard
-                  label="Units distributed"
-                  value={distAgg.totalQty.toLocaleString("en-IN")}
-                  icon={<HandHeart className="size-5" aria-hidden="true" />}
-                  accent="teal"
-                  hint={`${distAgg.byType.length} type${distAgg.byType.length === 1 ? "" : "s"}`}
-                />
-                <StatCard
-                  label="Pads distributed"
-                  value={distAgg.totalPads.toLocaleString("en-IN")}
-                  icon={<HandCoins className="size-5" aria-hidden="true" />}
-                  accent="pink"
-                  hint={`${pads.length} pad drive${pads.length === 1 ? "" : "s"}`}
-                />
-                <StatCard
-                  label="Girls reached"
-                  value={distAgg.totalGirls.toLocaleString("en-IN")}
-                  icon={<Users className="size-5" aria-hidden="true" />}
-                  accent="amber"
-                  hint={`${distAgg.sessions} awareness session${distAgg.sessions === 1 ? "" : "s"}`}
-                />
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SectionCard
-                  title="Share by type"
-                  description="Units distributed per programme type"
-                  icon={<Package className="size-4" aria-hidden="true" />}
-                >
-                  {distAgg.byType.length === 0 ? (
-                    <div className="grid h-56 place-items-center text-sm text-muted-foreground">
-                      No distribution data this FY.
-                    </div>
-                  ) : (
-                    <>
-                      <div className="h-56 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={distAgg.byType}
-                              dataKey="quantity"
-                              nameKey="type"
-                              innerRadius={52}
-                              outerRadius={86}
-                              paddingAngle={2}
-                              strokeWidth={0}
-                            >
-                              {distAgg.byType.map((_, i) => (
-                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                              ))}
-                            </Pie>
-                            <Tooltip
-                              formatter={(value, name) => [`${value} units`, titleCase(String(name))]}
-                              contentStyle={{ borderRadius: 12, fontSize: 12 }}
-                            />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <ul className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                        {distAgg.byType.map((t, i) => (
-                          <li key={t.type} className="flex items-center gap-2">
-                            <span
-                              aria-hidden="true"
-                              className="size-2.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
-                            />
-                            <span className="truncate">{titleCase(t.type)}</span>
-                            <span className="ml-auto font-medium">{t.quantity.toLocaleString("en-IN")}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                </SectionCard>
-
-                <SectionCard
-                  title="Totals by type"
-                  description="Drives, units and estimated value per type"
-                  icon={<HandHeart className="size-4" aria-hidden="true" />}
-                >
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Type</TableHead>
-                          <TableHead className="text-right">Drives</TableHead>
-                          <TableHead className="text-right">Units</TableHead>
-                          <TableHead className="text-right">Value</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {distAgg.byType.map((t) => (
-                          <TableRow key={t.type}>
-                            <TableCell className="font-medium">{titleCase(t.type)}</TableCell>
-                            <TableCell className="text-right">{t.count}</TableCell>
-                            <TableCell className="text-right">{t.quantity.toLocaleString("en-IN")}</TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {t.value > 0 ? formatINR(t.value) : "—"}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </SectionCard>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SectionCard
-                  title="Top locations"
-                  description="Where the field work happened (top 10 by drives)"
-                  icon={<Landmark className="size-4" aria-hidden="true" />}
-                >
-                  {distAgg.byLocation.length === 0 ? (
-                    <EmptyState
-                      icon={<Landmark className="size-6" aria-hidden="true" />}
-                      title="No locations yet"
-                      hint="Distribution records with a location will be ranked here."
-                    />
-                  ) : (
-                    <div className="overflow-x-auto rounded-lg border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-12">#</TableHead>
-                            <TableHead>Location</TableHead>
-                            <TableHead className="text-right">Drives</TableHead>
-                            <TableHead className="text-right">Units</TableHead>
-                            <TableHead className="text-right">Value</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {distAgg.byLocation.map((l, i) => (
-                            <TableRow key={l.location}>
-                              <TableCell className="text-muted-foreground">{i + 1}</TableCell>
-                              <TableCell className="max-w-48 truncate font-medium">{l.location}</TableCell>
-                              <TableCell className="text-right">{l.count}</TableCell>
-                              <TableCell className="text-right">{l.quantity.toLocaleString("en-IN")}</TableCell>
-                              <TableCell className="text-right font-semibold">
-                                {l.value > 0 ? formatINR(l.value) : "—"}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </SectionCard>
-
-                <SectionCard
-                  title="Pad drives by area"
-                  description="School pads programme — top areas this FY"
-                  icon={<HandCoins className="size-4" aria-hidden="true" />}
-                >
-                  {distAgg.byArea.length === 0 ? (
-                    <EmptyState
-                      icon={<HandCoins className="size-6" aria-hidden="true" />}
-                      title="No pad drives this FY"
-                      hint="Pad distribution records will be grouped by area here."
-                    />
-                  ) : (
-                    <div className="overflow-x-auto rounded-lg border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Area</TableHead>
-                            <TableHead className="text-right">Sessions</TableHead>
-                            <TableHead className="text-right">Pads</TableHead>
-                            <TableHead className="text-right">Girls</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {distAgg.byArea.map((a) => (
-                            <TableRow key={a.area}>
-                              <TableCell className="max-w-48 truncate font-medium">{a.area}</TableCell>
-                              <TableCell className="text-right">{a.sessions}</TableCell>
-                              <TableCell className="text-right">{a.pads.toLocaleString("en-IN")}</TableCell>
-                              <TableCell className="text-right font-semibold">{a.girls.toLocaleString("en-IN")}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </SectionCard>
-              </div>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* =============================== FINANCE ============================== */}
-        <TabsContent value="finance" className="mt-4">
-          {donationsLoading ? (
-            <TabSkeleton />
-          ) : donations.length === 0 ? (
-            <EmptyState
-              icon={<Landmark className="size-8" aria-hidden="true" />}
-              title={`Nothing to reconcile for ${fyLabel(fy)}`}
-              hint="Gateway fees, settlements and refunds appear once donations exist for this FY."
-            />
-          ) : (
-            <div className="print-sheet space-y-6">
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  label="Gross collected"
-                  value={formatINRCompact(financeAgg.gross)}
-                  icon={<Coins className="size-5" aria-hidden="true" />}
-                  accent="emerald"
-                  hint={`${financeAgg.completedCount} completed gifts`}
-                />
-                <StatCard
-                  label="Gateway fees"
-                  value={formatINR(financeAgg.fees)}
-                  icon={<Activity className="size-5" aria-hidden="true" />}
-                  accent="amber"
-                  hint={`Net expected ${formatINR(financeAgg.expectedNet)}`}
-                />
-                <StatCard
-                  label="Refund total"
-                  value={formatINRCompact(financeAgg.refundTotal)}
-                  icon={<RefreshCw className="size-5" aria-hidden="true" />}
-                  accent="red"
-                  hint="Across all donations this FY"
-                />
-                <StatCard
-                  label="Settlement coverage"
-                  value={`${financeAgg.coverage}%`}
-                  icon={<Landmark className="size-5" aria-hidden="true" />}
-                  accent="teal"
-                  hint={`${financeAgg.settledCount} of ${financeAgg.completedCount} settled`}
-                />
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SectionCard
-                  title="Reconciliation summary"
-                  description={`Gross → fees → net for ${fyLabel(fy)}`}
-                  icon={<Landmark className="size-4" aria-hidden="true" />}
-                >
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Metric</TableHead>
-                          <TableHead className="text-right">Value</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        <TableRow>
-                          <TableCell>Gross collected (completed)</TableCell>
-                          <TableCell className="text-right font-semibold">{formatINR(financeAgg.gross)}</TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Gateway fees</TableCell>
-                          <TableCell className="text-right font-semibold text-amber-700 dark:text-amber-400">
-                            − {formatINR(financeAgg.fees)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Expected net (gross − fees)</TableCell>
-                          <TableCell className="text-right font-semibold">{formatINR(financeAgg.expectedNet)}</TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Recorded net amount</TableCell>
-                          <TableCell className="text-right font-semibold">{formatINR(financeAgg.netRecorded)}</TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Unreconciled variance</TableCell>
-                          <TableCell
-                            className={cn(
-                              "text-right font-semibold",
-                              Math.abs(financeAgg.variance) < 0.01
-                                ? "text-emerald-700 dark:text-emerald-400"
-                                : "text-red-700 dark:text-red-400"
-                            )}
-                          >
-                            {formatINR(financeAgg.variance)}
-                          </TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Refund total</TableCell>
-                          <TableCell className="text-right font-semibold">{formatINR(financeAgg.refundTotal)}</TableCell>
-                        </TableRow>
-                        <TableRow>
-                          <TableCell>Settled vs unsettled</TableCell>
-                          <TableCell className="text-right font-semibold">
-                            {financeAgg.settledCount} / {financeAgg.unsettled} unsettled
-                          </TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
+              }
+            >
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {/* Ration kits */}
+                <div className="rounded-xl border p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                      <Package className="size-4" aria-hidden="true" />
+                    </span>
+                    <p className="text-sm font-semibold">Ration kits</p>
+                    <Badge
+                      variant="outline"
+                      className="ml-auto border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                    >
+                      {pctOf(p.kits.scannedUnits, p.kits.totalUnits)}% scanned
+                    </Badge>
                   </div>
                   <Progress
-                    value={financeAgg.coverage}
-                    className="mt-4 h-2 [&>div]:bg-teal-600"
-                    aria-label={`${financeAgg.coverage}% of completed donations settled`}
+                    value={pctOf(p.kits.scannedUnits, p.kits.totalUnits)}
+                    className="mt-3 h-2"
+                    aria-label={`${pctOf(p.kits.scannedUnits, p.kits.totalUnits)}% of kits scanned`}
                   />
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {financeAgg.coverage}% of completed donations have a settlement date recorded.
+                    {p.kits.scannedUnits.toLocaleString("en-IN")} of {p.kits.totalUnits.toLocaleString("en-IN")} units
+                    scanned · {p.kits.scannedInRange} in period
                   </p>
-                </SectionCard>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MiniStat label="Assembled" value={p.kits.totalUnits.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Scanned" value={p.kits.scannedUnits.toLocaleString("en-IN")} mono />
+                  </div>
+                </div>
 
-                <SectionCard
-                  title="By provider / method"
-                  description="Where the money moved, per gateway or channel"
-                  icon={<Coins className="size-4" aria-hidden="true" />}
-                >
-                  {financeAgg.byProvider.length === 0 ? (
-                    <EmptyState
-                      icon={<Coins className="size-6" aria-hidden="true" />}
-                      title="No completed donations"
-                      hint="Provider-level reconciliation appears once gifts complete."
+                {/* Sanitary pads */}
+                <div className="rounded-xl border p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-pink-500/10 text-pink-600 dark:text-pink-400">
+                      <HandHeart className="size-4" aria-hidden="true" />
+                    </span>
+                    <p className="text-sm font-semibold">Sanitary pads</p>
+                    <Badge variant="outline" className="ml-auto">
+                      {p.pads.drives} drive{p.pads.drives === 1 ? "" : "s"}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MiniStat label="Awareness sessions" value={p.pads.sessions.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Pads distributed" value={p.pads.pads.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Girls reached" value={p.pads.girls.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Avg pads / girl" value={p.pads.avgPerGirl.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Schools covered" value={p.pads.schools.toLocaleString("en-IN")} mono />
+                  </div>
+                </div>
+
+                {/* Adopt-a-Medicine */}
+                <div className="rounded-xl border p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                      <Pill className="size-4" aria-hidden="true" />
+                    </span>
+                    <p className="text-sm font-semibold">Adopt-a-Medicine</p>
+                    <Badge
+                      variant="outline"
+                      className="ml-auto border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+                    >
+                      {formatINR(p.medicine.monthlyPledged)}/mo
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MiniStat label="Seeking" value={p.medicine.seeking.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Partially adopted" value={p.medicine.partial.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Adopted" value={p.medicine.adopted.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Paused" value={p.medicine.paused.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Active pledges" value={p.medicine.activePledges.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Monthly commitment" mono value={formatINR(p.medicine.monthlyPledged)} />
+                  </div>
+                </div>
+
+                {/* Animal welfare */}
+                <div className="rounded-xl border p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-lime-500/10 text-lime-600 dark:text-lime-400">
+                      <PawPrint className="size-4" aria-hidden="true" />
+                    </span>
+                    <p className="text-sm font-semibold">Animal welfare</p>
+                    <Badge variant="outline" className="ml-auto">
+                      {p.animals.total} resident{p.animals.total === 1 ? "" : "s"}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MiniStat label="Available" value={p.animals.available.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Fostered" value={p.animals.fostered.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Adopted" value={p.animals.adopted.toLocaleString("en-IN")} mono />
+                    <MiniStat
+                      label="Critical"
+                      mono
+                      value={
+                        <span className={p.animals.critical > 0 ? "text-rose-600 dark:text-rose-400" : undefined}>
+                          {p.animals.critical.toLocaleString("en-IN")}
+                        </span>
+                      }
                     />
+                    <MiniStat label="Active pledges" value={p.animals.activePledges.toLocaleString("en-IN")} mono />
+                  </div>
+                </div>
+
+                {/* Green corridor */}
+                <div className="rounded-xl border p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-red-500/10 text-red-600 dark:text-red-400">
+                      <Siren className="size-4" aria-hidden="true" />
+                    </span>
+                    <p className="text-sm font-semibold">AI green corridor</p>
+                    <Badge
+                      variant="outline"
+                      className="ml-auto border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+                    >
+                      {p.corridor.missionsCompleted}/{p.corridor.missions} completed
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MiniStat label="Corridor events" value={p.corridor.events.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Vehicles alerted" value={p.corridor.vehiclesAlerted.toLocaleString("en-IN")} mono />
+                    <MiniStat label="Time saved (total)" mono value={formatDuration(p.corridor.timeSavedSec)} />
+                    <MiniStat
+                      label="Avg time saved / mission"
+                      mono
+                      value={formatDuration(p.corridor.avgTimeSavedSec)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </SectionCard>
+          )}
+        </TabsContent>
+
+        {/* ════════════════ 4 · DONORS & VOLUNTEERS ════════════════ */}
+        <TabsContent value="people" className="mt-4">
+          {firstLoad || !people ? (
+            <TabSkeleton />
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Donor loyalty */}
+              <SectionCard
+                title="Donor loyalty"
+                description="First-time vs returning supporters in this period"
+                icon={<Users className="size-4" aria-hidden="true" />}
+              >
+                {people.donors.total === 0 ? (
+                  <EmptyState
+                    icon={<Users className="size-6" aria-hidden="true" />}
+                    title="No donors in this period"
+                    hint="Completed gifts will build the donor mix here."
+                  />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <MiniStat label="Total donors" value={people.donors.total.toLocaleString("en-IN")} mono />
+                      <MiniStat label="New" value={people.donors.new.toLocaleString("en-IN")} mono />
+                      <MiniStat label="Repeat" value={people.donors.repeat.toLocaleString("en-IN")} mono />
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      <ShareBar
+                        label="New donors"
+                        value={people.donors.new}
+                        max={Math.max(1, people.donors.total)}
+                        colorClass="bg-emerald-500"
+                        trailing={`${pctOf(people.donors.new, people.donors.total)}%`}
+                      />
+                      <ShareBar
+                        label="Repeat donors"
+                        value={people.donors.repeat}
+                        max={Math.max(1, people.donors.total)}
+                        colorClass="bg-teal-500"
+                        trailing={`${pctOf(people.donors.repeat, people.donors.total)}%`}
+                      />
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Repeat rate {pctOf(people.donors.repeat, people.donors.total)}% · average gift{" "}
+                      {formatINR(k?.avgDonation ?? 0)} · {k?.donorCount ?? 0} distinct donors
+                    </p>
+                  </>
+                )}
+              </SectionCard>
+
+              {/* Top donors */}
+              <SectionCard
+                title="Top donors"
+                description="Ranked by completed giving in the period · anonymous gifts stay masked"
+                icon={<HandCoins className="size-4" aria-hidden="true" />}
+                actions={
+                  <ExportMenu
+                    columns={topDonorCsv}
+                    rows={people.topDonors}
+                    filename={`uar-top-donors-${periodFilename(from, to)}`}
+                    disabled={people.topDonors.length === 0}
+                  />
+                }
+              >
+                {people.topDonors.length === 0 ? (
+                  <EmptyState
+                    icon={<HandCoins className="size-6" aria-hidden="true" />}
+                    title="No completed gifts yet"
+                    hint="Donors will be ranked once gifts complete in this period."
+                  />
+                ) : (
+                  <DataTable
+                    columns={topDonorColumns}
+                    rows={people.topDonors}
+                    rowKey={(d) => `${d.name}-${d.amount}`}
+                    height="max-h-96"
+                    skeletonRows={5}
+                  >
+                    {(row, col) => {
+                      switch (col.key) {
+                        case "rank":
+                          return (
+                            <span
+                              className={cn(
+                                "grid size-6 place-items-center rounded-full text-xs font-semibold",
+                                people.topDonors.indexOf(row) < 3
+                                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                                  : "bg-muted text-muted-foreground"
+                              )}
+                            >
+                              {people.topDonors.indexOf(row) + 1}
+                            </span>
+                          );
+                        case "name":
+                          return <span className="block truncate font-medium">{row.name}</span>;
+                        case "count":
+                          return row.count;
+                        case "amount":
+                          return formatINR(row.amount);
+                        default:
+                          return "";
+                      }
+                    }}
+                  </DataTable>
+                )}
+              </SectionCard>
+
+              {/* Volunteer funnel */}
+              <SectionCard
+                title="Volunteer applications"
+                description="All-time onboarding funnel (applications are not period-bound)"
+                icon={<ClipboardList className="size-4" aria-hidden="true" />}
+              >
+                {people.volunteerApplications.total === 0 ? (
+                  <EmptyState
+                    icon={<ClipboardList className="size-6" aria-hidden="true" />}
+                    title="No applications yet"
+                    hint="Volunteer sign-ups will flow through this funnel."
+                  />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <MiniStat
+                        label="Total"
+                        value={people.volunteerApplications.total.toLocaleString("en-IN")}
+                        mono
+                      />
+                      <MiniStat
+                        label="Pending"
+                        value={people.volunteerApplications.pending.toLocaleString("en-IN")}
+                        mono
+                      />
+                      <MiniStat
+                        label="Approved"
+                        value={people.volunteerApplications.approved.toLocaleString("en-IN")}
+                        mono
+                      />
+                      <MiniStat
+                        label="Rejected"
+                        value={people.volunteerApplications.rejected.toLocaleString("en-IN")}
+                        mono
+                      />
+                    </div>
+                    <div
+                      className="mt-3 flex h-3 overflow-hidden rounded-full bg-muted"
+                      role="img"
+                      aria-label={`Funnel: ${people.volunteerApplications.approved} approved, ${people.volunteerApplications.pending} pending, ${people.volunteerApplications.rejected} rejected`}
+                    >
+                      <div
+                        className="bg-emerald-500"
+                        style={{
+                          width: `${pctOf(people.volunteerApplications.approved, people.volunteerApplications.total)}%`,
+                        }}
+                      />
+                      <div
+                        className="bg-amber-500"
+                        style={{
+                          width: `${pctOf(people.volunteerApplications.pending, people.volunteerApplications.total)}%`,
+                        }}
+                      />
+                      <div
+                        className="bg-rose-500"
+                        style={{
+                          width: `${pctOf(people.volunteerApplications.rejected, people.volunteerApplications.total)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden="true" className="size-2 rounded-full bg-emerald-500" /> Approved
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden="true" className="size-2 rounded-full bg-amber-500" /> Pending
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden="true" className="size-2 rounded-full bg-rose-500" /> Rejected
+                      </span>
+                    </div>
+                  </>
+                )}
+              </SectionCard>
+
+              {/* Beneficiaries + distribution mix */}
+              <SectionCard
+                title="Beneficiaries & ground delivery"
+                description="Onboarded cases by category and urgency, plus what reached the ground"
+                icon={<Landmark className="size-4" aria-hidden="true" />}
+                actions={
+                  <ExportMenu
+                    columns={typeMixCsv}
+                    rows={utilization?.byType ?? []}
+                    filename={`uar-distribution-mix-${periodFilename(from, to)}`}
+                    disabled={(utilization?.byType ?? []).length === 0}
+                  />
+                }
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <MiniStat
+                    label="Beneficiaries onboarded"
+                    value={people.beneficiaries.total.toLocaleString("en-IN")}
+                    mono
+                  />
+                  <MiniStat
+                    label="Onboarded in period"
+                    value={people.beneficiaries.onboardedInRange.toLocaleString("en-IN")}
+                    mono
+                  />
+                </div>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      By category
+                    </p>
+                    {people.beneficiaries.byCategory.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No beneficiaries onboarded yet.</p>
+                    ) : (
+                      people.beneficiaries.byCategory.slice(0, 6).map((b, i) => (
+                        <ShareBar
+                          key={b.category}
+                          label={titleCase(b.category)}
+                          value={b.count}
+                          max={Math.max(1, ...people.beneficiaries.byCategory.map((x) => x.count))}
+                          colorClass={BAR_COLORS[i % BAR_COLORS.length]}
+                        />
+                      ))
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      By urgency
+                    </p>
+                    {people.beneficiaries.byUrgency.every((u) => u.count === 0) ? (
+                      <p className="text-xs text-muted-foreground">No urgency data yet.</p>
+                    ) : (
+                      people.beneficiaries.byUrgency.map((u) => (
+                        <div key={u.urgency} className="flex items-center justify-between gap-2">
+                          <StatusBadge
+                            status={u.urgency}
+                            tone={
+                              u.urgency === "CRITICAL"
+                                ? "danger"
+                                : u.urgency === "HIGH"
+                                  ? "warning"
+                                  : u.urgency === "MEDIUM"
+                                    ? "info"
+                                    : "neutral"
+                            }
+                          />
+                          <span className="text-sm font-semibold tabular-nums">{u.count}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2 border-t pt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Distribution type mix (period)
+                  </p>
+                  {(utilization?.byType ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No distributions recorded in this period.</p>
                   ) : (
-                    <div className="overflow-x-auto rounded-lg border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Provider</TableHead>
-                            <TableHead className="text-right">Gifts</TableHead>
-                            <TableHead className="text-right">Gross</TableHead>
-                            <TableHead className="text-right">Fees</TableHead>
-                            <TableHead className="text-right">Net</TableHead>
-                            <TableHead className="text-right">Settled</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {financeAgg.byProvider.map((r) => (
-                            <TableRow key={r.provider}>
-                              <TableCell className="font-medium">{titleCase(r.provider)}</TableCell>
-                              <TableCell className="text-right">{r.count}</TableCell>
-                              <TableCell className="text-right">{formatINR(r.gross)}</TableCell>
-                              <TableCell className="text-right text-muted-foreground">{formatINR(r.fees)}</TableCell>
-                              <TableCell className="text-right font-semibold">{formatINR(r.net)}</TableCell>
-                              <TableCell className="text-right">
-                                {r.settled}/{r.count}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                    <div className="space-y-2">
+                      {(utilization?.byType ?? []).slice(0, 6).map((t, i) => (
+                        <ShareBar
+                          key={t.type}
+                          label={`${titleCase(t.type)} · ${t.count} drive${t.count === 1 ? "" : "s"}`}
+                          value={t.quantity}
+                          max={Math.max(1, ...(utilization?.byType ?? []).map((x) => x.quantity))}
+                          colorClass={BAR_COLORS[i % BAR_COLORS.length]}
+                          trailing={`${t.quantity.toLocaleString("en-IN")} units · ${formatINRCompact(t.value)}`}
+                        />
+                      ))}
                     </div>
                   )}
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Net falls back to gross − fees when a donation has no recorded netAmount.
+                </div>
+              </SectionCard>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ════════════════ 5 · COMPLIANCE ════════════════ */}
+        <TabsContent value="compliance" className="mt-4">
+          {firstLoad || !compliance ? (
+            <TabSkeleton />
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <SectionCard
+                title="80G receipts issued"
+                description={`Receipts raised for completed gifts between ${formatDate(from)} and ${formatDate(to)}`}
+                icon={<BadgeCheck className="size-4" aria-hidden="true" />}
+                actions={
+                  <ExportMenu
+                    columns={receiptsCsv}
+                    rows={compliance.monthlyReceipts}
+                    filename={`uar-80g-receipts-${periodFilename(from, to)}`}
+                  />
+                }
+              >
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <MiniStat label="Receipts issued" value={compliance.receiptCount.toLocaleString("en-IN")} mono />
+                  <MiniStat label="Receipted amount" mono value={formatINR(compliance.receiptSum)} />
+                  <MiniStat
+                    label="80G-ineligible cash"
+                    mono
+                    value={
+                      <span
+                        className={
+                          compliance.ineligible80g.count > 0
+                            ? "text-amber-700 dark:text-amber-400"
+                            : undefined
+                        }
+                      >
+                        {formatINR(compliance.ineligible80g.sum)}
+                      </span>
+                    }
+                  />
+                  <MiniStat
+                    label="Receipts with PAN"
+                    mono
+                    value={`${compliance.panReceipts.count.toLocaleString("en-IN")} · ${formatINRCompact(
+                      compliance.panReceipts.sum
+                    )}`}
+                  />
+                </div>
+                {compliance.ineligible80g.count > 0 && (
+                  <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                    {compliance.ineligible80g.count} cash gift
+                    {compliance.ineligible80g.count === 1 ? "" : "s"} above ₹2,000 (
+                    {formatINR(compliance.ineligible80g.sum)}) cannot carry an 80G deduction — exclude from deduction
+                    claims.
                   </p>
-                </SectionCard>
-              </div>
+                )}
+                <div className="mt-4">
+                  {compliance.receiptCount === 0 ? (
+                    <EmptyState
+                      icon={<BadgeCheck className="size-6" aria-hidden="true" />}
+                      title="No receipts issued in this period"
+                      hint="80G receipts are generated automatically when gifts complete."
+                    />
+                  ) : (
+                    <ChartContainer config={receiptsConfig} className="aspect-auto h-40 w-full sm:h-48">
+                      <BarChart data={compliance.monthlyReceipts} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 10 }}
+                          tickLine={false}
+                          axisLine={false}
+                          interval="preserveStartEnd"
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tick={{ fontSize: 11 }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={30}
+                        />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value, name, item) => (
+                                <span className="flex w-full items-center justify-between gap-4">
+                                  <span className="text-muted-foreground">
+                                    Receipts
+                                    {item?.payload?.sum
+                                      ? ` · ${formatINRCompact(Number(item.payload.sum))}`
+                                      : ""}
+                                  </span>
+                                  <span className="font-mono font-medium tabular-nums">
+                                    {name === "receipts" ? Number(value).toLocaleString("en-IN") : String(value)}
+                                  </span>
+                                </span>
+                              )}
+                            />
+                          }
+                        />
+                        <Bar dataKey="receipts" fill="var(--color-receipts)" radius={[6, 6, 0, 0]} maxBarSize={28} />
+                      </BarChart>
+                    </ChartContainer>
+                  )}
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Trust registration & tax credentials"
+                description="Numbers quoted on every 80G receipt and board report"
+                icon={<Landmark className="size-4" aria-hidden="true" />}
+              >
+                {!org ? (
+                  <div className="grid gap-3 sm:grid-cols-2" aria-busy="true">
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <div key={i} className="space-y-1.5">
+                        <Skeleton className="h-3 w-24" />
+                        <Skeleton className="h-4 w-40" />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                    <DataField label="Trust name" value={org.orgName} />
+                    <DataField label="Headquarters" value={org.orgHq} />
+                    <DataField label="80G registration" value={org.org80g} mono copy />
+                    <DataField label="12A reference" value={org.orgReg12a} mono copy />
+                    <DataField label="Trust PAN" value={org.orgPan} mono copy />
+                    <DataField label="NGO Darpan ID" value={org.orgDarpan} mono copy />
+                    <DataField label="Signatory" value={`${org.signatoryName} · ${org.signatoryRole}`} />
+                    <DataField label="Contact" value={`${org.orgEmail} · ${org.orgPhone}`} />
+                  </div>
+                )}
+                <div className="mt-4 rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+                  Donations to the trust are eligible for deduction under section 80G of the Income-tax Act, 1961.
+                  Cash contributions above ₹2,000 do not qualify. Receipts are system-generated with a unique number
+                  and remain available for download from the receipts register.
+                </div>
+              </SectionCard>
             </div>
           )}
         </TabsContent>

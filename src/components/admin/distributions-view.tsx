@@ -1,25 +1,68 @@
 "use client";
 
 /**
- * Distributions — admin module.
- * Tab 1: general field distributions (type filter, search, CSV, record drawer).
- * Tab 2: sanitary-pad drives with a school-coverage registry mini-panel.
+ * Distributions — the trust's welfare-delivery module.
+ *
+ * Tab 1 "General distributions": every aid type (food kits, medical, cash…)
+ *   with beneficiary urgency, item-level tracking, volunteer assignment,
+ *   campaign linkage, value estimation and impact math.
+ * Tab 2 "Sanitary pads drives": the pads programme (schools, girls count,
+ *   pads per girl, awareness sessions) — always lives inside Distributions.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Package, Plus, RefreshCw, School, Sparkles, Trash2 } from "lucide-react";
+import {
+  Banknote,
+  Calculator,
+  CalendarDays,
+  GraduationCap,
+  Info,
+  MapPin,
+  Megaphone,
+  MoreHorizontal,
+  Package,
+  Pencil,
+  PawPrint,
+  Plus,
+  RefreshCw,
+  School,
+  Search,
+  Shirt,
+  Sparkles,
+  Stethoscope,
+  Trash2,
+  TriangleAlert,
+  Users,
+  UtensilsCrossed,
+  Wallet,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
-import { del, get, post } from "@/lib/api-client";
-import { formatDate, formatDateTime, formatINR, titleCase } from "@/lib/format";
-import { amountRule, dateRule } from "@/lib/validators";
+import { del, get, patch, post } from "@/lib/api-client";
+import {
+  financialYear,
+  formatDate,
+  formatDateTime,
+  formatINR,
+  formatINRCompact,
+  titleCase,
+} from "@/lib/format";
+import { dateRule } from "@/lib/validators";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
+import { StatusBadge, type Tone } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
 import {
   Field,
   FieldGrid,
@@ -31,32 +74,23 @@ import {
 } from "@/components/shared/form-fields";
 import { CsvColumn, ExportMenu } from "@/components/shared/csv";
 import {
-  DataViewMode,
-  PaginationBar,
-  PageSizeSelect,
-  useViewPref,
-  ViewSwitcher,
-} from "@/components/shared/view-switcher";
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
+import { useViewPref, ViewSwitcher } from "@/components/shared/view-switcher";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -64,39 +98,43 @@ interface DistributionRow {
   id: string;
   type: string;
   beneficiaryId?: string | null;
+  volunteerId?: string | null;
   campaignId?: string | null;
   items?: string | null;
   quantity: number;
   value?: number | null;
   location?: string | null;
+  photos?: string | null;
   notes?: string | null;
   distributedAt: string;
-  beneficiary?: { name: string } | null;
-  volunteer?: { user?: { name: string } | null } | null;
-  campaign?: { title: string } | null;
+  createdAt?: string;
+  beneficiary?: {
+    id: string;
+    name: string;
+    category: string;
+    urgencyLevel: string;
+    city?: string | null;
+    familyMembers: number;
+  } | null;
+  volunteer?: { id: string; user?: { name: string } | null } | null;
+  campaign?: {
+    id: string;
+    title: string;
+    accent?: string;
+    status?: string;
+    targetAmount?: number;
+    raisedAmount?: number;
+  } | null;
 }
 
-interface BeneficiaryLite {
-  id: string;
-  name: string;
-  city?: string | null;
-}
-
-interface CampaignLite {
-  id: string;
-  title: string;
-}
-
-interface InventoryLite {
-  id: string;
-  name: string;
-  unit: string;
-  pricePerUnit?: number | null;
-}
-
-interface ItemRow {
-  name: string;
-  qty: string;
+interface DistEnvelope {
+  items: DistributionRow[];
+  total: number;
+  count: number;
+  sumValue: number;
+  sumQuantity: number;
+  beneficiariesServed: number;
+  avgItemsPerDrive: number;
 }
 
 interface PadDrive {
@@ -107,9 +145,53 @@ interface PadDrive {
   padsDistributed: number;
   awarenessSession: boolean;
   sessionAttendees?: number | null;
+  volunteerId?: string | null;
+  volunteerName?: string | null;
   notes?: string | null;
   distributionDate: string;
-  volunteer?: { name: string } | null;
+  volunteer?: { id: string; name: string } | null;
+}
+
+interface PadEnvelope {
+  items: PadDrive[];
+  total: number;
+  count: number;
+  sumPads: number;
+  sumGirls: number;
+  sumAttendees: number;
+  sessions: number;
+  schools: number;
+}
+
+interface BeneficiaryLite {
+  id: string;
+  name: string;
+  city?: string | null;
+  category: string;
+  urgencyLevel: string;
+  familyMembers: number;
+}
+
+interface CampaignLite {
+  id: string;
+  title: string;
+  status: string;
+  targetAmount: number;
+  raisedAmount: number;
+}
+
+interface VolunteerLite {
+  id: string;
+  status: string;
+  assignedArea?: string | null;
+  user: { name: string };
+}
+
+interface InventoryLite {
+  id: string;
+  name: string;
+  unit: string;
+  pricePerUnit?: number | null;
 }
 
 interface SchoolRow {
@@ -122,9 +204,16 @@ interface SchoolRow {
   lastVisited?: string | null;
 }
 
+interface ItemRow {
+  name: string;
+  qty: string;
+  unit: string;
+}
+
 interface DistForm {
   type: string;
   beneficiaryId: string;
+  volunteerId: string;
   campaignId: string;
   quantity: string;
   value: string;
@@ -135,12 +224,13 @@ interface DistForm {
 }
 
 interface PadForm {
-  area: string;
   schoolName: string;
+  area: string;
   girlsCount: string;
   padsDistributed: string;
   awarenessSession: boolean;
   sessionAttendees: string;
+  volunteerId: string;
   volunteerName: string;
   distributionDate: string;
   notes: string;
@@ -154,49 +244,121 @@ interface SchoolForm {
   totalGirls: string;
 }
 
-/* ------------------------------- chip styles ------------------------------- */
+type Errors = Record<string, string | null>;
+type DateRange = "30" | "90" | "fy" | "all";
 
-const TYPE_CLS: Record<string, string> = {
-  FOOD: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  SANITARY_PADS: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400",
-  MEDICAL: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-  ANIMAL_FEED: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
-  CLOTHING: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
-  EDUCATION_MATERIAL: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  CASH: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
-  OTHER: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+/* ------------------------------ chip styles ------------------------------- */
+
+const TYPE_META: Record<
+  string,
+  { label: string; cls: string; icon: React.ElementType }
+> = {
+  FOOD: {
+    label: "Food",
+    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+    icon: UtensilsCrossed,
+  },
+  SANITARY_PADS: {
+    label: "Sanitary Pads",
+    cls: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400",
+    icon: Sparkles,
+  },
+  MEDICAL: {
+    label: "Medical",
+    cls: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+    icon: Stethoscope,
+  },
+  ANIMAL_FEED: {
+    label: "Animal Feed",
+    cls: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+    icon: PawPrint,
+  },
+  CLOTHING: {
+    label: "Clothing",
+    cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+    icon: Shirt,
+  },
+  EDUCATION_MATERIAL: {
+    label: "Education",
+    cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    icon: GraduationCap,
+  },
+  CASH: {
+    label: "Cash Support",
+    cls: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+    icon: Banknote,
+  },
+  OTHER: {
+    label: "Other",
+    cls: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+    icon: Package,
+  },
 };
 
-const DISTRIBUTION_TYPES = [
-  "FOOD",
-  "SANITARY_PADS",
-  "MEDICAL",
-  "ANIMAL_FEED",
-  "CLOTHING",
-  "EDUCATION_MATERIAL",
-  "CASH",
-  "OTHER",
+const DISTRIBUTION_TYPES = Object.keys(TYPE_META);
+
+const URGENCY_TONE: Record<string, Tone> = {
+  CRITICAL: "danger",
+  HIGH: "warning",
+  MEDIUM: "progress",
+  LOW: "success",
+};
+
+/** Rough field estimates so numbers feel human — clearly labelled as approximations. */
+const IMPACT_PER_TYPE: Record<string, (qty: number) => string> = {
+  FOOD: (q) =>
+    `≈ ${q} ration kit${q === 1 ? "" : "s"} — a family of 4 eats for ~${q * 15} days on this`,
+  SANITARY_PADS: (q) => {
+    const months = Math.floor(q / 18);
+    return `≈ ${q} pad${q === 1 ? "" : "s"} — ${months} girl-month${months === 1 ? "" : "s"} of protection (18 pads ≈ 1 month)`;
+  },
+  MEDICAL: (q) =>
+    `≈ ${q} patient-month${q === 1 ? "" : "s"} of medicine support (₹1,000 covers a month of BP/diabetes meds)`,
+  EDUCATION_MATERIAL: (q) =>
+    `≈ ${q} student${q === 1 ? "" : "s"} equipped with supplies for a term`,
+  CLOTHING: (q) => `≈ ${q} garment${q === 1 ? "" : "s"} to someone who needed them today`,
+  ANIMAL_FEED: (q) =>
+    `≈ ${q} street dog${q === 1 ? "" : "s"} fed for a month (₹600 ≈ 1 dog-month of feed)`,
+  CASH: () => "Direct cash assistance handed to the family",
+  OTHER: (q) => `${q} unit${q === 1 ? "" : "s"} delivered to the field`,
+};
+
+const RATION_KIT_COST = 650;
+const PADS_PER_GIRL_MONTH = 18;
+
+const NATIVE_SELECT_CLS =
+  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+
+const RANGE_OPTIONS: Array<{ value: DateRange; label: string }> = [
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "fy", label: "This financial year" },
+  { value: "all", label: "All time" },
 ];
+
+const EMPTY_ITEM: ItemRow = { name: "", qty: "1", unit: "" };
 
 const EMPTY_DIST_FORM: DistForm = {
   type: "FOOD",
   beneficiaryId: "",
+  volunteerId: "",
   campaignId: "",
   quantity: "1",
   value: "",
   location: "",
   distributedAt: "",
-  items: [{ name: "", qty: "1" }],
+  items: [{ ...EMPTY_ITEM }],
   notes: "",
 };
 
 const EMPTY_PAD_FORM: PadForm = {
-  area: "",
   schoolName: "",
+  area: "",
   girlsCount: "",
   padsDistributed: "",
   awarenessSession: false,
   sessionAttendees: "",
+  volunteerId: "",
   volunteerName: "",
   distributionDate: "",
   notes: "",
@@ -210,82 +372,229 @@ const EMPTY_SCHOOL_FORM: SchoolForm = {
   totalGirls: "",
 };
 
-const NATIVE_SELECT_CLS =
-  "flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+/* -------------------------------- utilities -------------------------------- */
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
 }
 
-function parseItems(json: string | null | undefined): { name: string; qty: number | string }[] {
+/** Local-time value for <input type="datetime-local"> */
+function nowLocalInput(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** Financial-year window (Apr → Mar) as ISO strings for API filters. */
+function fyRange(): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  return { from: `${y}-04-01T00:00:00`, to: `${y + 1}-03-31T23:59:59.999` };
+}
+
+function rangeToParams(range: DateRange): { from?: string; to?: string } {
+  if (range === "all") return {};
+  if (range === "fy") return fyRange();
+  const days = range === "30" ? 30 : 90;
+  const from = new Date(Date.now() - days * 86_400_000);
+  return {
+    from: `${from.getFullYear()}-${pad2(from.getMonth() + 1)}-${pad2(from.getDate())}T00:00:00`,
+  };
+}
+
+interface ParsedItem {
+  name?: string;
+  qty?: number | string;
+  unit?: string;
+}
+
+function parseItems(json: string | null | undefined): ParsedItem[] {
   if (!json) return [];
   try {
     const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? (parsed as ParsedItem[]) : [];
   } catch {
     return [];
   }
 }
 
+function itemsSummary(json: string | null | undefined): string {
+  const items = parseItems(json);
+  if (!items.length) return "—";
+  return items
+    .map((i) => {
+      const name = String(i?.name ?? i ?? "").trim();
+      const qty = i?.qty;
+      const unit = i?.unit ? ` ${i.unit}` : "";
+      return `${name} ×${qty ?? 1}${unit}`;
+    })
+    .join(", ");
+}
+
 /* ---------------------------------- view ----------------------------------- */
 
 export default function DistributionsView() {
-  const [distributions, setDistributions] = useState<DistributionRow[]>([]);
-  const [padDrives, setPadDrives] = useState<PadDrive[]>([]);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+
+  /* ------------------------------- list state ------------------------------ */
+  const [loading, setLoading] = useState(true);
+  const [distRows, setDistRows] = useState<DistributionRow[]>([]);
+  const [distTotals, setDistTotals] = useState<DistEnvelope | null>(null);
+  const [padRows, setPadRows] = useState<PadDrive[]>([]);
+  const [padTotals, setPadTotals] = useState<PadEnvelope | null>(null);
+
+  /* FY aggregates for the KPI strip */
+  const [kpi, setKpi] = useState<{
+    count: number;
+    sumValue: number;
+    beneficiaries: number;
+    avgItems: number;
+    pads: number;
+    girls: number;
+    sessions: number;
+  } | null>(null);
+  const [kpiLoading, setKpiLoading] = useState(true);
+
+  /* supporting data for forms/detail */
   const [beneficiaries, setBeneficiaries] = useState<BeneficiaryLite[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignLite[]>([]);
+  const [volunteers, setVolunteers] = useState<VolunteerLite[]>([]);
   const [invItems, setInvItems] = useState<InventoryLite[]>([]);
   const [schools, setSchools] = useState<SchoolRow[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  /* general tab toolbar */
-  const [typeFilter, setTypeFilter] = useState("ALL");
-  const [distQuery, setDistQuery] = useState("");
-  const [appliedDistQuery, setAppliedDistQuery] = useState("");
+  /* --------------------------------- tab ---------------------------------- */
+  const [tab, setTab] = useState<"general" | "pads">("general");
+
+  /* --------------------------- general tab filters ------------------------- */
+  const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string[]>([]);
+  const [range, setRange] = useState<DateRange>("all");
+  const [volunteerFilter, setVolunteerFilter] = useState("");
   const [viewDist, setViewDist] = useViewPref("distributions");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  /* pads tab */
+  /* ------------------------------ pads filters ----------------------------- */
+  const [padQuery, setPadQuery] = useState("");
+  const [appliedPadQuery, setAppliedPadQuery] = useState("");
+  const [padSession, setPadSession] = useState<"all" | "yes" | "no">("all");
+  const [padRange, setPadRange] = useState<DateRange>("all");
+  const [padVolunteer, setPadVolunteer] = useState("");
   const [viewPad, setViewPad] = useViewPref("pad-drives");
+  const [padPage, setPadPage] = useState(1);
+  const [padPageSize, setPadPageSize] = useState(25);
 
-  /* general forms / sheets */
+  /* --------------------------- general forms/sheets ------------------------ */
+  const [detail, setDetail] = useState<DistributionRow | null>(null);
   const [distOpen, setDistOpen] = useState(false);
+  const [editingDist, setEditingDist] = useState<DistributionRow | null>(null);
   const [distForm, setDistForm] = useState<DistForm>(EMPTY_DIST_FORM);
-  const [distTouched, setDistTouched] = useState(false);
+  const [distSnapshot, setDistSnapshot] = useState<DistForm>(EMPTY_DIST_FORM);
+  const [distErrors, setDistErrors] = useState<Errors>({});
   const [benQuery, setBenQuery] = useState("");
   const [savingDist, setSavingDist] = useState(false);
-  const [sheet, setSheet] = useState<DistributionRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DistributionRow | null>(null);
+  const [deletingDist, setDeletingDist] = useState(false);
 
-  /* pad forms / sheets */
+  /* ----------------------------- pad forms/sheets -------------------------- */
+  const [padDetail, setPadDetail] = useState<PadDrive | null>(null);
   const [padOpen, setPadOpen] = useState(false);
+  const [editingPad, setEditingPad] = useState<PadDrive | null>(null);
   const [padForm, setPadForm] = useState<PadForm>(EMPTY_PAD_FORM);
-  const [padTouched, setPadTouched] = useState(false);
+  const [padSnapshot, setPadSnapshot] = useState<PadForm>(EMPTY_PAD_FORM);
+  const [padErrors, setPadErrors] = useState<Errors>({});
   const [schoolDdOpen, setSchoolDdOpen] = useState(false);
   const [savingPad, setSavingPad] = useState(false);
-  const [padSheet, setPadSheet] = useState<PadDrive | null>(null);
   const [deletePad, setDeletePad] = useState<PadDrive | null>(null);
+  const [deletingPad, setDeletingPad] = useState(false);
 
-  /* school registry */
+  /* ----------------------------- school registry --------------------------- */
   const [schoolFormOpen, setSchoolFormOpen] = useState(false);
   const [schoolForm, setSchoolForm] = useState<SchoolForm>(EMPTY_SCHOOL_FORM);
   const [savingSchool, setSavingSchool] = useState(false);
 
-  const load = useCallback(async () => {
+  /* ================================ loading ================================ */
+
+  const loadDist = useCallback(async () => {
+    const sp = new URLSearchParams();
+    if (appliedQuery.trim()) sp.set("q", appliedQuery.trim());
+    if (typeFilter.length) sp.set("type", typeFilter.join(","));
+    const r = rangeToParams(range);
+    if (r.from) sp.set("from", r.from);
+    if (r.to) sp.set("to", r.to);
+    if (volunteerFilter) sp.set("volunteerId", volunteerFilter);
+    sp.set("limit", "500");
+    sp.set("withTotals", "1");
     try {
-      const [dist, pads] = await Promise.all([
-        get<DistributionRow[]>("/api/distributions?limit=200"),
-        get<PadDrive[]>("/api/pad-distributions"),
-      ]);
-      setDistributions(Array.isArray(dist) ? dist : []);
-      setPadDrives(Array.isArray(pads) ? pads : []);
+      const data = await get<DistEnvelope>(`/api/distributions?${sp.toString()}`);
+      setDistRows(Array.isArray(data?.items) ? data.items : []);
+      setDistTotals(data ?? null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load distributions");
     } finally {
       setLoading(false);
     }
-    // best-effort supporting data — each failure degrades gracefully
+  }, [appliedQuery, typeFilter, range, volunteerFilter]);
+
+  const loadPads = useCallback(async () => {
+    const sp = new URLSearchParams();
+    if (appliedPadQuery.trim()) sp.set("q", appliedPadQuery.trim());
+    if (padSession !== "all") sp.set("session", padSession === "yes" ? "1" : "0");
+    const r = rangeToParams(padRange);
+    if (r.from) sp.set("from", r.from);
+    if (r.to) sp.set("to", r.to);
+    if (padVolunteer) sp.set("volunteerId", padVolunteer);
+    sp.set("limit", "500");
+    sp.set("withTotals", "1");
+    try {
+      const data = await get<PadEnvelope>(`/api/pad-distributions?${sp.toString()}`);
+      setPadRows(Array.isArray(data?.items) ? data.items : []);
+      setPadTotals(data ?? null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load pad drives");
+    } finally {
+      setLoading(false);
+    }
+  }, [appliedPadQuery, padSession, padRange, padVolunteer]);
+
+  const loadKpis = useCallback(async () => {
+    const { from, to } = fyRange();
+    const results = await Promise.allSettled([
+      get<DistEnvelope>(
+        `/api/distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
+      get<PadEnvelope>(
+        `/api/pad-distributions?withTotals=1&limit=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
+    ]);
+    const d = results[0].status === "fulfilled" ? results[0].value : null;
+    const p = results[1].status === "fulfilled" ? results[1].value : null;
+    setKpi({
+      count: d?.count ?? 0,
+      sumValue: d?.sumValue ?? 0,
+      beneficiaries: d?.beneficiariesServed ?? 0,
+      avgItems: d?.avgItemsPerDrive ?? 0,
+      pads: p?.sumPads ?? 0,
+      girls: p?.sumGirls ?? 0,
+      sessions: p?.sessions ?? 0,
+    });
+    setKpiLoading(false);
+  }, []);
+
+  const loadSupport = useCallback(async () => {
     get<BeneficiaryLite[]>("/api/beneficiaries")
       .then((rows) => setBeneficiaries(Array.isArray(rows) ? rows : []))
       .catch(() => setBeneficiaries([]));
@@ -298,59 +607,77 @@ export default function DistributionsView() {
     get<SchoolRow[]>("/api/school-coverages")
       .then((rows) => setSchools(Array.isArray(rows) ? rows : []))
       .catch(() => setSchools([]));
-  }, []);
+    if (isAdmin) {
+      get<VolunteerLite[]>("/api/volunteers")
+        .then((rows) => setVolunteers(Array.isArray(rows) ? rows : []))
+        .catch(() => setVolunteers([]));
+    }
+  }, [isAdmin]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    void loadSupport();
+  }, [loadSupport]);
 
-  /* debounce search */
+  useEffect(() => {
+    void loadDist();
+    void loadKpis();
+  }, [loadDist, loadKpis]);
+
+  useEffect(() => {
+    void loadPads();
+  }, [loadPads]);
+
+  /* debounce searches */
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setAppliedDistQuery(distQuery);
+      setAppliedQuery(query);
       setPage(1);
     }, 300);
     return () => window.clearTimeout(t);
-  }, [distQuery]);
+  }, [query]);
 
-  const filteredDist = useMemo(() => {
-    const q = appliedDistQuery.trim().toLowerCase();
-    return distributions.filter((d) => {
-      if (typeFilter !== "ALL" && d.type !== typeFilter) return false;
-      if (!q) return true;
-      return (
-        (d.beneficiary?.name ?? "").toLowerCase().includes(q) ||
-        (d.location ?? "").toLowerCase().includes(q) ||
-        (d.notes ?? "").toLowerCase().includes(q) ||
-        (d.campaign?.title ?? "").toLowerCase().includes(q) ||
-        titleCase(d.type).toLowerCase().includes(q)
-      );
-    });
-  }, [distributions, typeFilter, appliedDistQuery]);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setAppliedPadQuery(padQuery);
+      setPadPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [padQuery]);
 
-  const pages = Math.max(1, Math.ceil(filteredDist.length / pageSize));
+  const refreshAll = useCallback(() => {
+    void loadDist();
+    void loadPads();
+    void loadKpis();
+  }, [loadDist, loadPads, loadKpis]);
+
+  /* ============================== derived data ============================= */
+
+  const pages = Math.max(1, Math.ceil(distRows.length / pageSize));
   const pageSafe = Math.min(page, pages);
-  const pagedDist = filteredDist.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
+  const pagedDist = distRows.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
 
-  const padStats = useMemo(() => {
-    const pads = padDrives.reduce((s, p) => s + (p.padsDistributed ?? 0), 0);
-    const girls = padDrives.reduce((s, p) => s + (p.girlsCount ?? 0), 0);
-    const sessions = padDrives.filter((p) => p.awarenessSession).length;
-    const driveSchools = new Set(padDrives.map((p) => p.schoolName).filter(Boolean)).size;
-    return { pads, girls, sessions, driveSchools };
-  }, [padDrives]);
-
-  /* ------------------------------ helper lookups ---------------------------- */
+  const padPages = Math.max(1, Math.ceil(padRows.length / padPageSize));
+  const padPageSafe = Math.min(padPage, padPages);
+  const pagedPads = padRows.slice(
+    (padPageSafe - 1) * padPageSize,
+    padPageSafe * padPageSize
+  );
 
   const benFiltered = useMemo(() => {
     const q = benQuery.trim().toLowerCase();
     if (!q) return beneficiaries.slice(0, 300);
     return beneficiaries
       .filter(
-        (b) => b.name.toLowerCase().includes(q) || (b.city ?? "").toLowerCase().includes(q)
+        (b) =>
+          b.name.toLowerCase().includes(q) || (b.city ?? "").toLowerCase().includes(q)
       )
       .slice(0, 300);
   }, [beneficiaries, benQuery]);
+
+  const selectedBeneficiary = useMemo(
+    () => beneficiaries.find((b) => b.id === distForm.beneficiaryId) ?? null,
+    [beneficiaries, distForm.beneficiaryId]
+  );
 
   const matchInventory = useCallback(
     (name: string): InventoryLite | null => {
@@ -365,13 +692,42 @@ export default function DistributionsView() {
     [invItems]
   );
 
+  const itemTotals = useMemo(() => {
+    let lines = 0;
+    let units = 0;
+    let estValue = 0;
+    let priced = true;
+    for (const it of distForm.items) {
+      if (!it.name.trim()) continue;
+      lines += 1;
+      const q = Number(it.qty);
+      if (Number.isFinite(q) && q > 0) units += q;
+      const inv = matchInventory(it.name);
+      if (inv?.pricePerUnit != null && Number.isFinite(q) && q > 0) {
+        estValue += inv.pricePerUnit * q;
+      } else if (it.name.trim()) {
+        priced = false;
+      }
+    }
+    return { lines, units, estValue, priced };
+  }, [distForm.items, matchInventory]);
+
+  const distValNum = Number(distForm.value);
+  const distQtyNum = Math.trunc(Number(distForm.quantity)) || 0;
+  const perUnitHint =
+    distForm.value.trim() !== "" && Number.isFinite(distValNum) && distQtyNum > 0
+      ? `≈ ${formatINR(distValNum / distQtyNum)} per unit`
+      : "Estimated market value — feeds exports, reports and impact stats.";
+
   const schoolMatches = useMemo(() => {
     const active = schools.filter((s) => s.isActive);
     const q = padForm.schoolName.trim().toLowerCase();
     if (!q) return active.slice(0, 50);
     const starts = active.filter((s) => s.schoolName.toLowerCase().startsWith(q));
     const rest = active.filter(
-      (s) => !s.schoolName.toLowerCase().startsWith(q) && s.schoolName.toLowerCase().includes(q)
+      (s) =>
+        !s.schoolName.toLowerCase().startsWith(q) &&
+        s.schoolName.toLowerCase().includes(q)
     );
     return [...starts, ...rest].slice(0, 50);
   }, [schools, padForm.schoolName]);
@@ -384,67 +740,127 @@ export default function DistributionsView() {
     [schools, padForm.schoolName]
   );
 
-  const distValNum = Number(distForm.value);
-  const distQtyNum = Math.trunc(Number(distForm.quantity)) || 0;
-  const perUnitHint =
-    distForm.value.trim() !== "" && Number.isFinite(distValNum) && distQtyNum > 0
-      ? `≈ ${formatINR(distValNum / distQtyNum)} per unit`
-      : "Estimated value in ₹ — persists now and shows in exports & impact stats.";
+  const distDirty = useMemo(
+    () => JSON.stringify(distForm) !== JSON.stringify(distSnapshot),
+    [distForm, distSnapshot]
+  );
+  const padDirty = useMemo(
+    () => JSON.stringify(padForm) !== JSON.stringify(padSnapshot),
+    [padForm, padSnapshot]
+  );
 
-  /* --------------------------- general distributions ------------------------ */
+  const distFiltersActive =
+    appliedQuery.trim() !== "" ||
+    typeFilter.length > 0 ||
+    range !== "all" ||
+    volunteerFilter !== "";
+  const padFiltersActive =
+    appliedPadQuery.trim() !== "" || padSession !== "all" || padRange !== "all" || padVolunteer !== "";
 
-  const openDistDialog = () => {
-    setDistForm({ ...EMPTY_DIST_FORM, distributedAt: todayIso() });
+  /* ============================== mutations ================================ */
+
+  const openDistCreate = () => {
+    const form = { ...EMPTY_DIST_FORM, distributedAt: nowLocalInput() };
+    setDistForm(form);
+    setDistSnapshot(form);
+    setDistErrors({});
+    setEditingDist(null);
     setBenQuery("");
-    setDistTouched(false);
     setDistOpen(true);
   };
 
-  const saveDist = async () => {
-    if (!DISTRIBUTION_TYPES.includes(distForm.type)) {
-      toast.error("Pick a distribution type");
-      return;
-    }
-    if (!distForm.location.trim()) {
-      toast.error("Location is required");
-      return;
-    }
+  const openDistEdit = (row: DistributionRow) => {
+    const items = parseItems(row.items);
+    const form: DistForm = {
+      type: DISTRIBUTION_TYPES.includes(row.type) ? row.type : "OTHER",
+      beneficiaryId: row.beneficiaryId ?? "",
+      volunteerId: row.volunteerId ?? "",
+      campaignId: row.campaignId ?? "",
+      quantity: String(row.quantity ?? 1),
+      value: row.value != null ? String(row.value) : "",
+      location: row.location ?? "",
+      distributedAt: toLocalInput(row.distributedAt) || nowLocalInput(),
+      items: items.length
+        ? items.map((i) => ({
+            name: String(i?.name ?? ""),
+            qty: String(i?.qty ?? 1),
+            unit: String(i?.unit ?? ""),
+          }))
+        : [{ ...EMPTY_ITEM }],
+      notes: row.notes ?? "",
+    };
+    setDistForm(form);
+    setDistSnapshot(form);
+    setDistErrors({});
+    setEditingDist(row);
+    setDetail(null);
+    setBenQuery("");
+    setDistOpen(true);
+  };
+
+  const validateDist = (): boolean => {
+    const errs: Errors = {};
+    if (!distForm.location.trim()) errs.location = "Location is required";
     const qty = Math.trunc(Number(distForm.quantity));
-    if (!Number.isFinite(qty) || qty < 1) {
-      toast.error("Quantity must be at least 1");
-      return;
-    }
-    const valErr = amountRule({ optional: true, label: "Value" })(distForm.value);
-    if (valErr) {
-      toast.error(valErr);
-      return;
+    if (!Number.isFinite(qty) || qty < 1)
+      errs.quantity = "Quantity must be a whole number of at least 1";
+    if (distForm.value.trim() !== "") {
+      const v = Number(distForm.value);
+      if (!Number.isFinite(v) || v < 0) errs.value = "Enter a valid amount (≥ 0)";
     }
     const dateErr = dateRule(true)(distForm.distributedAt);
-    if (dateErr) {
-      toast.error(dateErr);
+    if (dateErr) errs.distributedAt = dateErr;
+    distForm.items.forEach((it, i) => {
+      if (!it.name.trim() && it.qty.trim() === "") return;
+      if (!it.name.trim()) {
+        errs[`item-${i}`] = "Item name is required";
+        return;
+      }
+      const q = Number(it.qty);
+      if (!Number.isFinite(q) || q <= 0)
+        errs[`item-${i}`] = "Quantity must be a positive number";
+    });
+    setDistErrors(errs);
+    return Object.values(errs).every((v) => !v);
+  };
+
+  const saveDist = async () => {
+    if (!validateDist()) {
+      toast.error("Please fix the highlighted fields");
       return;
     }
     setSavingDist(true);
     try {
-      const items = distForm.items.filter((i) => i.name.trim());
-      await post("/api/distributions", {
+      const items = distForm.items
+        .filter((i) => i.name.trim())
+        .map((i) => ({
+          name: i.name.trim(),
+          qty: Number(i.qty) || 1,
+          ...(i.unit.trim() ? { unit: i.unit.trim() } : {}),
+        }));
+      const payload = {
         type: distForm.type,
         beneficiaryId: distForm.beneficiaryId || undefined,
+        volunteerId: distForm.volunteerId || undefined,
         campaignId: distForm.campaignId || undefined,
-        quantity: qty,
-        items: items.length
-          ? items.map((i) => ({ name: i.name.trim(), qty: Number(i.qty) || 1 }))
-          : undefined,
+        quantity: Math.trunc(Number(distForm.quantity)),
+        items,
         value: distForm.value === "" ? undefined : Number(distForm.value),
         location: distForm.location.trim(),
         distributedAt: distForm.distributedAt || undefined,
         notes: distForm.notes.trim() || undefined,
-      });
-      toast.success("Distribution recorded");
+      };
+      if (editingDist) {
+        await patch(`/api/distributions/${editingDist.id}`, payload);
+        toast.success("Distribution updated");
+      } else {
+        await post("/api/distributions", payload);
+        toast.success("Distribution recorded");
+      }
       setDistOpen(false);
-      load();
+      refreshAll();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Record failed");
+      toast.error(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSavingDist(false);
     }
@@ -452,73 +868,117 @@ export default function DistributionsView() {
 
   const removeDist = async () => {
     if (!deleteTarget) return;
+    setDeletingDist(true);
+    const id = deleteTarget.id;
+    // optimistic removal
+    setDistRows((rows) => rows.filter((r) => r.id !== id));
+    setDetail(null);
     try {
-      await del(`/api/distributions/${deleteTarget.id}`);
+      await del(`/api/distributions/${id}`);
       toast.success("Distribution deleted");
       setDeleteTarget(null);
-      setSheet(null);
-      load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingDist(false);
+      refreshAll();
     }
   };
 
-  /* ------------------------------ pad drives -------------------------------- */
-
-  const openPadDialog = () => {
-    setPadForm({ ...EMPTY_PAD_FORM, distributionDate: todayIso() });
-    setPadTouched(false);
+  const openPadCreate = () => {
+    const form = { ...EMPTY_PAD_FORM, distributionDate: todayIso() };
+    setPadForm(form);
+    setPadSnapshot(form);
+    setPadErrors({});
+    setEditingPad(null);
     setSchoolDdOpen(false);
     setPadOpen(true);
   };
 
-  const savePad = async () => {
-    if (!padForm.area.trim()) {
-      toast.error("Area is required");
-      return;
-    }
-    const girls = Math.trunc(Number(padForm.girlsCount));
-    if (!Number.isFinite(girls) || girls < 0) {
-      toast.error("Girls count must be 0 or more");
-      return;
-    }
-    const pads = Math.trunc(Number(padForm.padsDistributed));
-    if (!Number.isFinite(pads) || pads < 0) {
-      toast.error("Pads distributed must be 0 or more");
-      return;
-    }
+  const openPadEdit = (row: PadDrive) => {
+    const form: PadForm = {
+      schoolName: row.schoolName ?? "",
+      area: row.area ?? "",
+      girlsCount: String(row.girlsCount ?? 0),
+      padsDistributed: String(row.padsDistributed ?? 0),
+      awarenessSession: Boolean(row.awarenessSession),
+      sessionAttendees: row.sessionAttendees != null ? String(row.sessionAttendees) : "",
+      volunteerId: row.volunteerId ?? "",
+      volunteerName: row.volunteerName ?? "",
+      distributionDate: toLocalInput(row.distributionDate).slice(0, 10) || todayIso(),
+      notes: row.notes ?? "",
+    };
+    setPadForm(form);
+    setPadSnapshot(form);
+    setPadErrors({});
+    setEditingPad(row);
+    setPadDetail(null);
+    setSchoolDdOpen(false);
+    setPadOpen(true);
+  };
+
+  const padGirlsNum = Math.trunc(Number(padForm.girlsCount)) || 0;
+  const padPadsNum = Math.trunc(Number(padForm.padsDistributed)) || 0;
+  const padPerGirl =
+    padGirlsNum > 0 && padPadsNum > 0
+      ? Math.round((padPadsNum / padGirlsNum) * 10) / 10
+      : null;
+
+  const validatePad = (): boolean => {
+    const padErrs: Errors = {};
+    if (!padForm.area.trim()) padErrs.area = "Area is required";
+    if (padForm.girlsCount.trim() === "")
+      padErrs.girlsCount = "Girls reached is required (0 if none)";
+    else if (!Number.isFinite(Number(padForm.girlsCount)) || padGirlsNum < 0)
+      padErrs.girlsCount = "Girls count must be 0 or more";
+    if (padForm.padsDistributed.trim() === "")
+      padErrs.padsDistributed = "Pads distributed is required (0 if none)";
+    else if (!Number.isFinite(Number(padForm.padsDistributed)) || padPadsNum < 0)
+      padErrs.padsDistributed = "Pads distributed must be 0 or more";
     if (padForm.sessionAttendees !== "") {
       const att = Math.trunc(Number(padForm.sessionAttendees));
-      if (!Number.isFinite(att) || att < 0) {
-        toast.error("Session attendees must be 0 or more");
-        return;
-      }
+      if (!Number.isFinite(att) || att < 0)
+        padErrs.sessionAttendees = "Attendees must be 0 or more";
     }
     const dateErr = dateRule(true)(padForm.distributionDate);
-    if (dateErr) {
-      toast.error(dateErr);
+    if (dateErr) padErrs.distributionDate = dateErr;
+    setPadErrors(padErrs);
+    return Object.values(padErrs).every((v) => !v);
+  };
+
+  const savePad = async () => {
+    if (!validatePad()) {
+      toast.error("Please fix the highlighted fields");
       return;
     }
     setSavingPad(true);
     try {
-      await post("/api/pad-distributions", {
+      const payload = {
         area: padForm.area.trim(),
         schoolName: padForm.schoolName.trim() || undefined,
-        girlsCount: girls,
-        padsDistributed: pads,
+        girlsCount: padGirlsNum,
+        padsDistributed: padPadsNum,
         awarenessSession: padForm.awarenessSession,
         sessionAttendees:
           padForm.sessionAttendees === ""
             ? undefined
             : Math.trunc(Number(padForm.sessionAttendees)),
+        volunteerId: padForm.volunteerId || undefined,
         volunteerName: padForm.volunteerName.trim() || undefined,
         distributionDate: padForm.distributionDate || undefined,
         notes: padForm.notes.trim() || undefined,
-      });
+      };
+      if (editingPad) {
+        await patch(`/api/pad-distributions/${editingPad.id}`, payload);
+        toast.success("Pad drive updated");
+      } else {
+        await post("/api/pad-distributions", payload);
+        toast.success("Pad drive recorded");
+      }
 
       // register brand-new schools in the coverage registry (best-effort)
       const school = padForm.schoolName.trim();
-      if (school && !schoolKnown) {
+      if (!editingPad && school && !schoolKnown) {
         try {
           await post("/api/school-coverages", {
             schoolName: school,
@@ -530,11 +990,10 @@ export default function DistributionsView() {
         }
       }
 
-      toast.success("Pad drive recorded");
       setPadOpen(false);
-      load();
+      refreshAll();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Record failed");
+      toast.error(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSavingPad(false);
     }
@@ -542,18 +1001,21 @@ export default function DistributionsView() {
 
   const removePad = async () => {
     if (!deletePad) return;
+    setDeletingPad(true);
+    const id = deletePad.id;
+    setPadRows((rows) => rows.filter((r) => r.id !== id));
+    setPadDetail(null);
     try {
-      await del(`/api/pad-distributions/${deletePad.id}`);
+      await del(`/api/pad-distributions/${id}`);
       toast.success("Pad drive deleted");
       setDeletePad(null);
-      setPadSheet(null);
-      load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingPad(false);
+      refreshAll();
     }
   };
-
-  /* ---------------------------- school registry ----------------------------- */
 
   const openSchoolCreate = () => {
     setSchoolForm(EMPTY_SCHOOL_FORM);
@@ -579,12 +1041,15 @@ export default function DistributionsView() {
         city: schoolForm.city.trim() || undefined,
         contactPerson: schoolForm.contactPerson.trim() || undefined,
         contactPhone: schoolForm.contactPhone.trim() || undefined,
-        totalGirls: schoolForm.totalGirls === "" ? 0 : Math.trunc(Number(schoolForm.totalGirls)),
+        totalGirls:
+          schoolForm.totalGirls === ""
+            ? 0
+            : Math.trunc(Number(schoolForm.totalGirls)),
         lastVisited: todayIso(),
       });
       toast.success(`School "${schoolForm.schoolName.trim()}" registered`);
       setSchoolFormOpen(false);
-      load();
+      loadSupport();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Register failed");
     } finally {
@@ -592,13 +1057,16 @@ export default function DistributionsView() {
     }
   };
 
-  /* --------------------------------- CSV ----------------------------------- */
+  /* ================================== CSV ================================== */
 
   const distCsv: CsvColumn<DistributionRow>[] = useMemo(
     () => [
       { header: "Date", value: (d) => formatDate(d.distributedAt) },
       { header: "Type", value: (d) => titleCase(d.type) },
       { header: "Beneficiary", value: (d) => d.beneficiary?.name ?? "Community" },
+      { header: "Category", value: (d) => titleCase(d.beneficiary?.category ?? "") },
+      { header: "Urgency", value: (d) => titleCase(d.beneficiary?.urgencyLevel ?? "") },
+      { header: "Items", value: (d) => itemsSummary(d.items) },
       { header: "Quantity", value: (d) => d.quantity },
       { header: "Value (INR)", value: (d) => d.value ?? "" },
       { header: "Location", value: (d) => d.location ?? "" },
@@ -609,271 +1077,985 @@ export default function DistributionsView() {
     []
   );
 
-  /* ------------------------------ small pieces ----------------------------- */
+  const padCsv: CsvColumn<PadDrive>[] = useMemo(
+    () => [
+      { header: "Date", value: (p) => formatDate(p.distributionDate) },
+      { header: "Area", value: (p) => p.area },
+      { header: "School", value: (p) => p.schoolName ?? "Community visit" },
+      { header: "Girls Reached", value: (p) => p.girlsCount },
+      { header: "Pads Distributed", value: (p) => p.padsDistributed },
+      {
+        header: "Pads per Girl",
+        value: (p) =>
+          p.girlsCount > 0
+            ? Math.round((p.padsDistributed / p.girlsCount) * 10) / 10
+            : "",
+      },
+      { header: "Awareness Session", value: (p) => (p.awarenessSession ? "Yes" : "No") },
+      { header: "Attendees", value: (p) => p.sessionAttendees ?? "" },
+      { header: "Volunteer", value: (p) => p.volunteer?.name ?? p.volunteerName ?? "" },
+      { header: "Notes", value: (p) => p.notes ?? "" },
+    ],
+    []
+  );
 
-  const distActions = (d: DistributionRow) => (
-    <div className="flex justify-end gap-1.5">
-      <Button variant="outline" size="sm" onClick={() => setSheet(d)} aria-label="View distribution">
-        View
-      </Button>
-      <Button
+  /* ============================== small pieces ============================= */
+
+  const typeChip = (t: string, className?: string) => {
+    const meta = TYPE_META[t] ?? TYPE_META.OTHER;
+    const Icon = meta.icon;
+    return (
+      <Badge
         variant="outline"
-        size="sm"
-        className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-        onClick={() => setDeleteTarget(d)}
-        aria-label="Delete distribution"
+        className={cn("gap-1 font-medium whitespace-nowrap", meta.cls, className)}
       >
-        <Trash2 className="size-3.5" aria-hidden="true" />
-      </Button>
+        <Icon className="size-3" aria-hidden="true" />
+        {meta.label}
+      </Badge>
+    );
+  };
+
+  const urgencyBadge = (level?: string | null) =>
+    level ? (
+      <StatusBadge tone={URGENCY_TONE[level] ?? "neutral"}>{titleCase(level)}</StatusBadge>
+    ) : null;
+
+  const rowMenu = (row: DistributionRow) => (
+    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label={`Actions for ${titleCase(row.type)} distribution`}
+          >
+            <MoreHorizontal className="size-4" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuItem onClick={() => setDetail(row)}>
+            <Info className="size-4" aria-hidden="true" /> View details
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openDistEdit(row)}>
+            <Pencil className="size-4" aria-hidden="true" /> Edit
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+            onClick={() => setDeleteTarget(row)}
+          >
+            <Trash2 className="size-4" aria-hidden="true" /> Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 
-  const padActions = (p: PadDrive) => (
-    <div className="flex justify-end gap-1.5">
-      <Button variant="outline" size="sm" onClick={() => setPadSheet(p)} aria-label="View pad drive">
-        View
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-        onClick={() => setDeletePad(p)}
-        aria-label="Delete pad drive"
-      >
-        <Trash2 className="size-3.5" aria-hidden="true" />
-      </Button>
+  const padRowMenu = (row: PadDrive) => (
+    <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label={`Actions for pad drive in ${row.area}`}
+          >
+            <MoreHorizontal className="size-4" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-40">
+          <DropdownMenuItem onClick={() => setPadDetail(row)}>
+            <Info className="size-4" aria-hidden="true" /> View details
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openPadEdit(row)}>
+            <Pencil className="size-4" aria-hidden="true" /> Edit
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
+            onClick={() => setDeletePad(row)}
+          >
+            <Trash2 className="size-4" aria-hidden="true" /> Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 
-  const typeChip = (t: string, className?: string) => (
-    <Badge variant="outline" className={cn(TYPE_CLS[t] ?? TYPE_CLS.OTHER, className)}>
-      {titleCase(t)}
-    </Badge>
-  );
+  const clearDistFilters = () => {
+    setQuery("");
+    setTypeFilter([]);
+    setRange("all");
+    setVolunteerFilter("");
+    setPage(1);
+  };
 
-  /* --------------------------------- render -------------------------------- */
+  const clearPadFilters = () => {
+    setPadQuery("");
+    setPadSession("all");
+    setPadRange("all");
+    setPadVolunteer("");
+    setPadPage(1);
+  };
+
+  const distColumns: DataTableColumn<DistributionRow>[] = [
+    {
+      key: "date",
+      header: "Date",
+      className: "w-[6.5rem]",
+      accessor: (r) => (
+        <span className="whitespace-nowrap text-muted-foreground">
+          {formatDate(r.distributedAt)}
+        </span>
+      ),
+    },
+    { key: "type", header: "Type", accessor: (r) => typeChip(r.type) },
+    {
+      key: "beneficiary",
+      header: "Beneficiary",
+      accessor: (r) => (
+        <div className="min-w-0">
+          <p className="truncate font-medium">
+            {r.beneficiary?.name ?? "Community hand-out"}
+          </p>
+          {r.beneficiary ? (
+            <p className="truncate text-xs text-muted-foreground">
+              {titleCase(r.beneficiary.category)} · family of {r.beneficiary.familyMembers}
+            </p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "urgency",
+      header: "Urgency",
+      hideBelow: "lg",
+      accessor: (r) =>
+        r.beneficiary ? (
+          urgencyBadge(r.beneficiary.urgencyLevel)
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        ),
+    },
+    {
+      key: "volunteer",
+      header: "Volunteer",
+      hideBelow: "md",
+      accessor: (r) => (
+        <span className="text-muted-foreground">
+          {r.volunteer?.user?.name ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "items",
+      header: "Items",
+      hideBelow: "lg",
+      accessor: (r) => (
+        <span className="block max-w-56 truncate text-muted-foreground" title={itemsSummary(r.items)}>
+          {itemsSummary(r.items)}
+        </span>
+      ),
+    },
+    {
+      key: "quantity",
+      header: "Qty",
+      align: "right",
+      mono: true,
+      accessor: (r) => r.quantity.toLocaleString("en-IN"),
+    },
+    {
+      key: "value",
+      header: "Value",
+      align: "right",
+      mono: true,
+      accessor: (r) =>
+        r.value != null ? (
+          <span className="font-medium">{formatINR(r.value)}</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      key: "location",
+      header: "Location",
+      hideBelow: "sm",
+      accessor: (r) => (
+        <span className="block max-w-44 truncate text-muted-foreground" title={r.location ?? ""}>
+          {r.location || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      className: "w-12",
+      accessor: (r) => rowMenu(r),
+    },
+  ];
+
+  const padColumns: DataTableColumn<PadDrive>[] = [
+    {
+      key: "date",
+      header: "Date",
+      className: "w-[6.5rem]",
+      accessor: (p) => (
+        <span className="whitespace-nowrap text-muted-foreground">
+          {formatDate(p.distributionDate)}
+        </span>
+      ),
+    },
+    {
+      key: "area",
+      header: "Area",
+      accessor: (p) => (
+        <div className="min-w-0">
+          <p className="truncate font-medium">{p.area}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {p.schoolName || "Community visit"}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "school",
+      header: "School",
+      hideBelow: "md",
+      accessor: (p) => (
+        <span className="block max-w-52 truncate text-muted-foreground" title={p.schoolName ?? ""}>
+          {p.schoolName || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "girls",
+      header: "Girls",
+      align: "right",
+      mono: true,
+      accessor: (p) => p.girlsCount.toLocaleString("en-IN"),
+    },
+    {
+      key: "pads",
+      header: "Pads",
+      align: "right",
+      mono: true,
+      accessor: (p) => (
+        <span className="font-medium">{p.padsDistributed.toLocaleString("en-IN")}</span>
+      ),
+    },
+    {
+      key: "perGirl",
+      header: "Per girl",
+      align: "right",
+      mono: true,
+      hideBelow: "lg",
+      accessor: (p) =>
+        p.girlsCount > 0
+          ? (Math.round((p.padsDistributed / p.girlsCount) * 10) / 10).toFixed(1)
+          : "—",
+    },
+    {
+      key: "session",
+      header: "Session",
+      hideBelow: "sm",
+      accessor: (p) =>
+        p.awarenessSession ? (
+          <Badge
+            variant="outline"
+            className="border-teal-500/30 bg-teal-500/10 font-medium text-teal-700 dark:text-teal-400"
+          >
+            Session{p.sessionAttendees != null ? ` · ${p.sessionAttendees}` : ""}
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        ),
+    },
+    {
+      key: "volunteer",
+      header: "Volunteer",
+      hideBelow: "md",
+      accessor: (p) => (
+        <span className="text-muted-foreground">
+          {p.volunteer?.name ?? p.volunteerName ?? "—"}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      className: "w-12",
+      accessor: (p) => padRowMenu(p),
+    },
+  ];
+
+  /* ================================= render ================================ */
+
+  const fyLabel = financialYear(new Date());
+  const girlMonths = Math.floor((kpi?.pads ?? 0) / PADS_PER_GIRL_MONTH);
+  const familyKits = Math.floor((kpi?.sumValue ?? 0) / RATION_KIT_COST);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Distributions"
-        description="Field distributions to beneficiaries and sanitary pad awareness drives."
+        description="Every kit, pad drive and hand-out the trust delivers — with beneficiaries, volunteers and impact math."
         icon={<Package className="size-5" aria-hidden="true" />}
         actions={
-          <Button variant="outline" onClick={load} aria-label="Refresh distributions">
+          <Button variant="outline" onClick={refreshAll} aria-label="Refresh distributions">
             <RefreshCw className="size-4" aria-hidden="true" /> Refresh
           </Button>
         }
       />
 
-      {/* muted banner — pads live here */}
-      <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
-        <Sparkles className="size-4 shrink-0 text-pink-600 dark:text-pink-400" aria-hidden="true" />
-        Sanitary pads initiative lives here — use the <strong>Pad drives</strong> tab below.
+      {/* ============================== KPI strip ============================= */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          label="Distributions"
+          value={(kpi?.count ?? 0).toLocaleString("en-IN")}
+          hint={`recorded this FY (${fyLabel})`}
+          icon={<Package className="size-5" aria-hidden="true" />}
+          accent="emerald"
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Value disbursed"
+          value={formatINRCompact(kpi?.sumValue ?? 0)}
+          hint="estimated market value this FY"
+          icon={<Wallet className="size-5" aria-hidden="true" />}
+          accent="orange"
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Beneficiaries served"
+          value={(kpi?.beneficiaries ?? 0).toLocaleString("en-IN")}
+          hint="registered cases reached this FY"
+          icon={<Users className="size-5" aria-hidden="true" />}
+          accent="teal"
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Pads distributed"
+          value={(kpi?.pads ?? 0).toLocaleString("en-IN")}
+          hint={
+            girlMonths > 0
+              ? `≈ ${girlMonths.toLocaleString("en-IN")} girl-months of protection`
+              : "via school & community drives"
+          }
+          icon={<Sparkles className="size-5" aria-hidden="true" />}
+          accent="pink"
+          loading={kpiLoading}
+        />
+        <StatCard
+          label="Avg items / kit drive"
+          value={kpi?.avgItems ? kpi.avgItems.toFixed(1) : "—"}
+          hint="item lines per recorded drive"
+          icon={<Calculator className="size-5" aria-hidden="true" />}
+          accent="amber"
+          loading={kpiLoading}
+        />
       </div>
 
-      <Tabs defaultValue="general">
-        <TabsList className="h-auto flex-wrap">
-          <TabsTrigger value="general">General distributions ({distributions.length})</TabsTrigger>
-          <TabsTrigger value="pads">Pad drives ({padDrives.length})</TabsTrigger>
+      {/* ============================ impact math ============================ */}
+      <div
+        className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground"
+        aria-label="Impact math"
+      >
+        <span className="flex items-center gap-1.5 font-semibold text-foreground">
+          <Calculator className="size-3.5 text-primary" aria-hidden="true" /> Impact math
+        </span>
+        <span>1 ration kit (₹{RATION_KIT_COST}) = a family of 4 fed for 15 days</span>
+        <span aria-hidden="true" className="hidden sm:inline">·</span>
+        <span>
+          {formatINRCompact(kpi?.sumValue ?? 0)} disbursed ≈{" "}
+          <strong className="font-semibold text-foreground">
+            {familyKits.toLocaleString("en-IN")}
+          </strong>{" "}
+          family kits
+        </span>
+        <span aria-hidden="true" className="hidden sm:inline">·</span>
+        <span>
+          {PADS_PER_GIRL_MONTH} pads = 1 girl-month ·{" "}
+          {(kpi?.pads ?? 0).toLocaleString("en-IN")} pads ≈{" "}
+          <strong className="font-semibold text-foreground">
+            {girlMonths.toLocaleString("en-IN")}
+          </strong>{" "}
+          girl-months
+        </span>
+      </div>
+
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "general" | "pads")}>
+        <TabsList className="h-auto w-full flex-wrap sm:w-auto">
+          <TabsTrigger value="general">
+            General distributions
+            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+              {distRows.length}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="pads">
+            Sanitary pads drives
+            <Badge variant="outline" className="ml-1.5 px-1.5 tabular-nums">
+              {padRows.length}
+            </Badge>
+          </TabsTrigger>
         </TabsList>
 
         {/* =========================== GENERAL TAB =========================== */}
         <TabsContent value="general" className="mt-4 space-y-4">
+          {/* filters bar */}
           <div className="flex flex-wrap items-center gap-2">
-            <Input
-              value={distQuery}
-              onChange={(e) => setDistQuery(e.target.value)}
-              placeholder="Search beneficiary, location, notes…"
-              aria-label="Search distributions"
-              className="w-full sm:w-64"
-            />
+            <div className="relative w-full sm:w-64">
+              <Search
+                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search beneficiary, location, items…"
+                aria-label="Search distributions"
+                className="pl-8"
+              />
+            </div>
+
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="group"
+              aria-label="Filter by distribution type"
+            >
+              <button
+                type="button"
+                aria-pressed={typeFilter.length === 0}
+                onClick={() => {
+                  setTypeFilter([]);
+                  setPage(1);
+                }}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                  typeFilter.length === 0
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-background text-muted-foreground hover:bg-accent"
+                )}
+              >
+                All
+              </button>
+              {DISTRIBUTION_TYPES.map((t) => {
+                const active = typeFilter.includes(t);
+                const meta = TYPE_META[t];
+                const Icon = meta.icon;
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      setTypeFilter((prev) =>
+                        prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+                      );
+                      setPage(1);
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                      active
+                        ? meta.cls
+                        : "border-border bg-background text-muted-foreground hover:bg-accent"
+                    )}
+                  >
+                    <Icon className="size-3" aria-hidden="true" />
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <select
-              aria-label="Filter by type"
-              value={typeFilter}
+              aria-label="Filter by date range"
+              value={range}
               onChange={(e) => {
-                setTypeFilter(e.target.value);
+                setRange(e.target.value as DateRange);
                 setPage(1);
               }}
               className={cn(NATIVE_SELECT_CLS, "w-full sm:w-44")}
             >
-              <option value="ALL">All types</option>
-              {DISTRIBUTION_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {titleCase(t)}
+              {RANGE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </select>
+
+            {isAdmin ? (
+              <select
+                aria-label="Filter by volunteer"
+                value={volunteerFilter}
+                onChange={(e) => {
+                  setVolunteerFilter(e.target.value);
+                  setPage(1);
+                }}
+                className={cn(NATIVE_SELECT_CLS, "w-full sm:w-48")}
+              >
+                <option value="">All volunteers</option>
+                {volunteers.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.user.name}
+                    {v.assignedArea ? ` — ${v.assignedArea}` : ""}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+
+            {distFiltersActive ? (
+              <Button variant="ghost" size="sm" onClick={clearDistFilters}>
+                <X className="size-3.5" aria-hidden="true" /> Clear
+              </Button>
+            ) : null}
+
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {distRows.length} result{distRows.length === 1 ? "" : "s"}
+            </span>
+
             <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
               <ExportMenu
                 columns={distCsv}
-                rows={filteredDist}
+                rows={distRows}
                 filename="uar-distributions"
-                disabled={filteredDist.length === 0}
+                disabled={distRows.length === 0}
               />
               <ViewSwitcher value={viewDist} onChange={setViewDist} />
-              <Button size="sm" onClick={openDistDialog}>
+              <Button size="sm" onClick={openDistCreate}>
                 <Plus className="size-4" aria-hidden="true" /> Record distribution
               </Button>
             </div>
           </div>
 
-          {loading ? (
+          {viewDist === "table" ? (
+            <DataTable
+              columns={distColumns}
+              rows={pagedDist}
+              rowKey={(r) => r.id}
+              loading={loading}
+              skeletonRows={8}
+              height="fill"
+              fillOffset={470}
+              onRowClick={(r) => setDetail(r)}
+              page={pageSafe}
+              pages={pages}
+              total={distRows.length}
+              pageSize={pageSize}
+              onPage={setPage}
+              onPageSize={(n) => {
+                setPageSize(n);
+                setPage(1);
+              }}
+              itemLabel="distributions"
+              empty={
+                <EmptyState
+                  icon={<Package className="size-8" aria-hidden="true" />}
+                  title={
+                    distFiltersActive
+                      ? "No distributions match these filters"
+                      : "No distributions recorded yet"
+                  }
+                  hint="Record a field distribution so stock levels, beneficiary history and impact stats stay accurate."
+                >
+                  <Button variant="outline" onClick={openDistCreate}>
+                    <Plus className="size-4" aria-hidden="true" /> Record distribution
+                  </Button>
+                </EmptyState>
+              }
+            />
+          ) : loading ? (
             viewDist === "grid" ? (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
                 {[0, 1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-40 rounded-xl" />
+                  <Skeleton key={i} className="h-44 rounded-xl" />
                 ))}
               </div>
             ) : (
               <div className="space-y-2" aria-busy="true">
                 {[0, 1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-12 rounded-lg" />
+                  <Skeleton key={i} className="h-14 rounded-lg" />
                 ))}
               </div>
             )
-          ) : filteredDist.length === 0 ? (
+          ) : distRows.length === 0 ? (
             <EmptyState
               icon={<Package className="size-8" aria-hidden="true" />}
               title={
-                distributions.length === 0
-                  ? "No distributions recorded"
-                  : "No distributions match this filter"
+                distFiltersActive
+                  ? "No distributions match these filters"
+                  : "No distributions recorded yet"
               }
-              hint="Record a field distribution so stock levels and impact stats stay accurate."
+              hint="Record a field distribution so stock levels, beneficiary history and impact stats stay accurate."
             >
-              <Button variant="outline" onClick={openDistDialog}>
+              <Button variant="outline" onClick={openDistCreate}>
                 <Plus className="size-4" aria-hidden="true" /> Record distribution
               </Button>
             </EmptyState>
           ) : viewDist === "grid" ? (
-            <div className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3">
-              {filteredDist.map((d) => (
-                <div key={d.id} className="flex flex-col gap-2 rounded-xl border bg-card p-4 shadow-sm">
-                  <div className="flex items-center gap-2">
-                    {typeChip(d.type)}
-                    <span className="ml-auto text-xs text-muted-foreground">{formatDate(d.distributedAt)}</span>
+            <div
+              className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+              role="list"
+              aria-label="Distributions"
+            >
+              {pagedDist.map((d) => {
+                const meta = TYPE_META[d.type] ?? TYPE_META.OTHER;
+                const Icon = meta.icon;
+                return (
+                  <div
+                    key={d.id}
+                    role="listitem"
+                    className="flex cursor-pointer flex-col gap-2.5 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+                    onClick={() => setDetail(d)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "flex size-9 items-center justify-center rounded-lg border",
+                          meta.cls
+                        )}
+                      >
+                        <Icon className="size-4" />
+                      </span>
+                      {typeChip(d.type)}
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {formatDate(d.distributedAt)}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold">
+                        {d.beneficiary?.name ?? "Community hand-out"} × {d.quantity}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {d.location || "—"}
+                        {d.volunteer?.user?.name ? ` · ${d.volunteer.user.name}` : ""}
+                      </p>
+                    </div>
+                    {d.beneficiary ? (
+                      <div>{urgencyBadge(d.beneficiary.urgencyLevel)}</div>
+                    ) : null}
+                    <div className="mt-auto flex items-center gap-2 border-t pt-3">
+                      <Badge variant="outline" className="font-mono text-xs">
+                        {d.value != null ? formatINR(d.value) : "No value"}
+                      </Badge>
+                      <div className="ml-auto">{rowMenu(d)}</div>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    className="text-left"
-                    onClick={() => setSheet(d)}
-                    aria-label="Open distribution"
-                  >
-                    <p className="truncate font-semibold">
-                      {d.beneficiary?.name ?? "Community"} × {d.quantity}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {d.location || "—"}
-                      {d.volunteer?.user?.name ? ` · ${d.volunteer.user.name}` : ""}
-                    </p>
-                  </button>
-                  <div className="mt-auto flex items-center gap-2 border-t pt-3">
-                    <Badge variant="outline">{d.value != null ? formatINR(d.value) : "No value"}</Badge>
-                    <div className="ml-auto">{distActions(d)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : viewDist === "list" ? (
-            <div className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" role="list" aria-label="Distributions">
-              {filteredDist.map((d) => (
-                <div key={d.id} className="flex items-center gap-3 rounded-lg border p-3" role="listitem">
-                  <span
-                    aria-hidden="true"
-                    className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"
-                  >
-                    <Package className="size-4" />
-                  </span>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => setSheet(d)}
-                    aria-label="Open distribution"
-                  >
-                    <p className="truncate text-sm font-medium">
-                      {d.beneficiary?.name ?? "Community"} × {d.quantity}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {titleCase(d.type)} · {d.location || "—"} · {formatDate(d.distributedAt)}
-                    </p>
-                  </button>
-                  <span className="hidden text-sm font-medium sm:block">
-                    {d.value != null ? formatINR(d.value) : "—"}
-                  </span>
-                  {distActions(d)}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <>
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Beneficiary</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Volunteer</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pagedDist.map((d) => (
-                      <TableRow key={d.id}>
-                        <TableCell className="whitespace-nowrap">{formatDate(d.distributedAt)}</TableCell>
-                        <TableCell>{typeChip(d.type)}</TableCell>
-                        <TableCell>
-                          <button
-                            type="button"
-                            className="font-medium hover:text-primary"
-                            onClick={() => setSheet(d)}
-                            aria-label="Open distribution"
-                          >
-                            {d.beneficiary?.name ?? "Community"}
-                          </button>
-                        </TableCell>
-                        <TableCell className="text-right">{d.quantity}</TableCell>
-                        <TableCell className="text-right">{d.value != null ? formatINR(d.value) : "—"}</TableCell>
-                        <TableCell className="max-w-40 truncate">{d.location || "—"}</TableCell>
-                        <TableCell>{d.volunteer?.user?.name ?? "—"}</TableCell>
-                        <TableCell className="text-right">{distActions(d)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <PaginationBar
-                  page={pageSafe}
-                  pages={pages}
-                  total={filteredDist.length}
-                  onPage={setPage}
-                  itemLabel="distributions"
-                />
-                <PageSizeSelect
-                  value={pageSize}
-                  onChange={(n) => {
-                    setPageSize(n);
-                    setPage(1);
-                  }}
-                />
-              </div>
-            </>
+            <div
+              className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+              role="list"
+              aria-label="Distributions"
+            >
+              {pagedDist.map((d) => {
+                const meta = TYPE_META[d.type] ?? TYPE_META.OTHER;
+                const Icon = meta.icon;
+                return (
+                  <div
+                    key={d.id}
+                    role="listitem"
+                    className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent/40"
+                    onClick={() => setDetail(d)}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "flex size-9 shrink-0 items-center justify-center rounded-lg border",
+                        meta.cls
+                      )}
+                    >
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {d.beneficiary?.name ?? "Community hand-out"} × {d.quantity}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {meta.label} · {d.location || "—"} · {formatDate(d.distributedAt)}
+                      </p>
+                    </div>
+                    <span className="hidden font-mono text-sm font-medium tabular-nums sm:block">
+                      {d.value != null ? formatINR(d.value) : "—"}
+                    </span>
+                    {rowMenu(d)}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </TabsContent>
 
         {/* ============================ PAD DRIVES ============================ */}
         <TabsContent value="pads" className="mt-4 space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Pads distributed" value={padStats.pads.toLocaleString("en-IN")} accent="pink" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
-            <StatCard label="Girls reached" value={padStats.girls.toLocaleString("en-IN")} accent="fuchsia" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
-            <StatCard label="Awareness sessions" value={padStats.sessions} accent="teal" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
-            <StatCard label="Schools covered" value={padStats.driveSchools} accent="amber" icon={<School className="size-5" aria-hidden="true" />} loading={loading} />
+          {/* pads mini-metrics */}
+          <div
+            className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border bg-muted/30 px-4 py-3 text-sm"
+            aria-label="Pad programme summary"
+          >
+            <span className="flex items-center gap-1.5 font-semibold text-foreground">
+              <Sparkles className="size-4 text-pink-600 dark:text-pink-400" aria-hidden="true" />
+              Programme
+            </span>
+            <span className="text-muted-foreground">
+              <strong className="font-semibold text-foreground tabular-nums">
+                {(padTotals?.sumPads ?? 0).toLocaleString("en-IN")}
+              </strong>{" "}
+              pads distributed
+            </span>
+            <span className="text-muted-foreground">
+              <strong className="font-semibold text-foreground tabular-nums">
+                {(padTotals?.sumGirls ?? 0).toLocaleString("en-IN")}
+              </strong>{" "}
+              girls reached
+            </span>
+            <span className="text-muted-foreground">
+              <strong className="font-semibold text-foreground tabular-nums">
+                {padTotals?.sessions ?? 0}
+              </strong>{" "}
+              awareness sessions
+            </span>
+            <span className="text-muted-foreground">
+              <strong className="font-semibold text-foreground tabular-nums">
+                {padTotals?.schools ?? 0}
+              </strong>{" "}
+              schools covered
+            </span>
           </div>
+
+          {/* filters bar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-64">
+              <Search
+                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                value={padQuery}
+                onChange={(e) => setPadQuery(e.target.value)}
+                placeholder="Search school or area…"
+                aria-label="Search pad drives"
+                className="pl-8"
+              />
+            </div>
+            <select
+              aria-label="Filter by awareness session"
+              value={padSession}
+              onChange={(e) => {
+                setPadSession(e.target.value as "all" | "yes" | "no");
+                setPadPage(1);
+              }}
+              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-52")}
+            >
+              <option value="all">All drives</option>
+              <option value="yes">With awareness session</option>
+              <option value="no">Without session</option>
+            </select>
+            <select
+              aria-label="Filter pad drives by date range"
+              value={padRange}
+              onChange={(e) => {
+                setPadRange(e.target.value as DateRange);
+                setPadPage(1);
+              }}
+              className={cn(NATIVE_SELECT_CLS, "w-full sm:w-44")}
+            >
+              {RANGE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            {isAdmin ? (
+              <select
+                aria-label="Filter pad drives by volunteer"
+                value={padVolunteer}
+                onChange={(e) => {
+                  setPadVolunteer(e.target.value);
+                  setPadPage(1);
+                }}
+                className={cn(NATIVE_SELECT_CLS, "w-full sm:w-48")}
+              >
+                <option value="">All volunteers</option>
+                {volunteers.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.user.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {padFiltersActive ? (
+              <Button variant="ghost" size="sm" onClick={clearPadFilters}>
+                <X className="size-3.5" aria-hidden="true" /> Clear
+              </Button>
+            ) : null}
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {padRows.length} drive{padRows.length === 1 ? "" : "s"}
+            </span>
+            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+              <ExportMenu
+                columns={padCsv}
+                rows={padRows}
+                filename="uar-pad-drives"
+                disabled={padRows.length === 0}
+              />
+              <ViewSwitcher value={viewPad} onChange={setViewPad} />
+              <Button size="sm" onClick={openPadCreate}>
+                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+              </Button>
+            </div>
+          </div>
+
+          {viewPad === "table" ? (
+            <DataTable
+              columns={padColumns}
+              rows={pagedPads}
+              rowKey={(p) => p.id}
+              loading={loading}
+              skeletonRows={6}
+              height="fill"
+              fillOffset={470}
+              onRowClick={(p) => setPadDetail(p)}
+              page={padPageSafe}
+              pages={padPages}
+              total={padRows.length}
+              pageSize={padPageSize}
+              onPage={setPadPage}
+              onPageSize={(n) => {
+                setPadPageSize(n);
+                setPadPage(1);
+              }}
+              itemLabel="pad drives"
+              empty={
+                <EmptyState
+                  icon={<Sparkles className="size-8" aria-hidden="true" />}
+                  title={
+                    padFiltersActive
+                      ? "No pad drives match these filters"
+                      : "No pad drives recorded yet"
+                  }
+                  hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+                >
+                  <Button variant="outline" onClick={openPadCreate}>
+                    <Plus className="size-4" aria-hidden="true" /> Record pad drive
+                  </Button>
+                </EmptyState>
+              }
+            />
+          ) : loading ? (
+            viewPad === "grid" ? (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+                {[0, 1, 2].map((i) => (
+                  <Skeleton key={i} className="h-44 rounded-xl" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2" aria-busy="true">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-14 rounded-lg" />
+                ))}
+              </div>
+            )
+          ) : padRows.length === 0 ? (
+            <EmptyState
+              icon={<Sparkles className="size-8" aria-hidden="true" />}
+              title={
+                padFiltersActive
+                  ? "No pad drives match these filters"
+                  : "No pad drives recorded yet"
+              }
+              hint="Record school visits with pads distributed and menstrual-health awareness session counts."
+            >
+              <Button variant="outline" onClick={openPadCreate}>
+                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+              </Button>
+            </EmptyState>
+          ) : viewPad === "grid" ? (
+            <div
+              className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3"
+              role="list"
+              aria-label="Pad drives"
+            >
+              {pagedPads.map((p) => (
+                <div
+                  key={p.id}
+                  role="listitem"
+                  className="flex cursor-pointer flex-col gap-2.5 rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bg-accent/40"
+                  onClick={() => setPadDetail(p)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-9 items-center justify-center rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400"
+                    >
+                      <Sparkles className="size-4" />
+                    </span>
+                    <p className="min-w-0 flex-1 truncate font-semibold">{p.area}</p>
+                    {p.awarenessSession ? (
+                      <Badge
+                        variant="outline"
+                        className="shrink-0 border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+                      >
+                        Session
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDate(p.distributionDate)} · {p.schoolName || "Community visit"}
+                  </p>
+                  <p className="text-sm">
+                    <strong className="font-semibold">{p.padsDistributed}</strong> pads ·{" "}
+                    <strong className="font-semibold">{p.girlsCount}</strong> girls
+                    {p.girlsCount > 0 ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {(p.padsDistributed / p.girlsCount).toFixed(1)}/girl
+                      </span>
+                    ) : null}
+                  </p>
+                  <div className="mt-auto flex items-center border-t pt-3">{padRowMenu(p)}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div
+              className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+              role="list"
+              aria-label="Pad drives"
+            >
+              {pagedPads.map((p) => (
+                <div
+                  key={p.id}
+                  role="listitem"
+                  className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent/40"
+                  onClick={() => setPadDetail(p)}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400"
+                  >
+                    <Sparkles className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{p.area}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {p.schoolName || "Community visit"} · {formatDate(p.distributionDate)}
+                    </p>
+                  </div>
+                  <span className="hidden text-sm tabular-nums sm:block">
+                    {p.padsDistributed} pads · {p.girlsCount} girls
+                  </span>
+                  {padRowMenu(p)}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* school registry mini-panel */}
           <SectionCard
@@ -896,7 +2078,7 @@ export default function DistributionsView() {
               <EmptyState
                 icon={<School className="size-6" aria-hidden="true" />}
                 title="No schools registered yet"
-                hint="Register schools here or just type a new school name in the drive form — it registers automatically."
+                hint="Register schools here, or just type a new school name in the drive form — it registers automatically."
               >
                 <Button variant="outline" size="sm" onClick={openSchoolCreate}>
                   <Plus className="size-4" aria-hidden="true" /> Register school
@@ -911,7 +2093,9 @@ export default function DistributionsView() {
                   >
                     <span className="min-w-0 flex-1 truncate font-medium">
                       {s.schoolName}
-                      {s.city ? <span className="font-normal text-muted-foreground"> — {s.city}</span> : null}
+                      {s.city ? (
+                        <span className="font-normal text-muted-foreground"> — {s.city}</span>
+                      ) : null}
                     </span>
                     <Badge variant="outline">{s.visitsCount} visits</Badge>
                     <Badge variant="outline">{s.totalGirls} girls</Badge>
@@ -921,308 +2105,440 @@ export default function DistributionsView() {
                       </Badge>
                     ) : null}
                     {s.lastVisited ? (
-                      <span className="text-xs text-muted-foreground">last {formatDate(s.lastVisited)}</span>
+                      <span className="text-xs text-muted-foreground">
+                        last {formatDate(s.lastVisited)}
+                      </span>
                     ) : null}
                   </li>
                 ))}
               </ul>
             )}
           </SectionCard>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="mr-auto text-sm text-muted-foreground">
-              {padDrives.length} drive{padDrives.length === 1 ? "" : "s"} recorded
-            </p>
-            <ViewSwitcher value={viewPad} onChange={setViewPad} />
-            <Button size="sm" onClick={openPadDialog}>
-              <Plus className="size-4" aria-hidden="true" /> Record pad drive
-            </Button>
-          </div>
-
-          {loading ? (
-            viewPad === "grid" ? (
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
-                {[0, 1, 2].map((i) => (
-                  <Skeleton key={i} className="h-40 rounded-xl" />
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-2" aria-busy="true">
-                {[0, 1, 2].map((i) => (
-                  <Skeleton key={i} className="h-12 rounded-lg" />
-                ))}
-              </div>
-            )
-          ) : padDrives.length === 0 ? (
-            <EmptyState
-              icon={<Sparkles className="size-8" aria-hidden="true" />}
-              title="No pad drives yet"
-              hint="Record school visits with pads distributed and awareness session counts."
-            >
-              <Button variant="outline" onClick={openPadDialog}>
-                <Plus className="size-4" aria-hidden="true" /> Record pad drive
-              </Button>
-            </EmptyState>
-          ) : viewPad === "grid" ? (
-            <div className="grid max-h-[36rem] gap-4 overflow-y-auto scrollbar-thin sm:grid-cols-2 xl:grid-cols-3">
-              {padDrives.map((p) => (
-                <div key={p.id} className="flex flex-col gap-2 rounded-xl border bg-card p-4 shadow-sm">
-                  <div className="flex items-center gap-2">
-                    <p className="min-w-0 flex-1 truncate font-semibold">{p.area}</p>
-                    {p.awarenessSession ? (
-                      <Badge variant="outline" className="shrink-0 border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
-                        Session
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    className="text-left"
-                    onClick={() => setPadSheet(p)}
-                    aria-label="Open pad drive"
-                  >
-                    <p className="text-xs text-muted-foreground">
-                      {formatDate(p.distributionDate)} · {p.schoolName || "Community visit"}
-                    </p>
-                    <p className="mt-1 text-sm">
-                      {p.padsDistributed} pads · {p.girlsCount} girls
-                    </p>
-                  </button>
-                  <div className="mt-auto flex items-center border-t pt-3">{padActions(p)}</div>
-                </div>
-              ))}
-            </div>
-          ) : viewPad === "list" ? (
-            <div className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" role="list" aria-label="Pad drives">
-              {padDrives.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 rounded-lg border p-3" role="listitem">
-                  <span
-                    aria-hidden="true"
-                    className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-pink-600 dark:text-pink-400"
-                  >
-                    <Sparkles className="size-4" />
-                  </span>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => setPadSheet(p)}
-                    aria-label="Open pad drive"
-                  >
-                    <p className="truncate text-sm font-medium">{p.area}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {p.schoolName || "Community visit"} · {formatDate(p.distributionDate)}
-                    </p>
-                  </button>
-                  <span className="hidden text-sm sm:block">
-                    {p.padsDistributed} pads · {p.girlsCount} girls
-                  </span>
-                  {padActions(p)}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Area</TableHead>
-                    <TableHead>School</TableHead>
-                    <TableHead className="text-right">Girls</TableHead>
-                    <TableHead className="text-right">Pads</TableHead>
-                    <TableHead>Session</TableHead>
-                    <TableHead className="text-right">Attendees</TableHead>
-                    <TableHead>Volunteer</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {padDrives.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="whitespace-nowrap">{formatDate(p.distributionDate)}</TableCell>
-                      <TableCell className="font-medium">{p.area}</TableCell>
-                      <TableCell className="max-w-44 truncate">{p.schoolName || "—"}</TableCell>
-                      <TableCell className="text-right">{p.girlsCount}</TableCell>
-                      <TableCell className="text-right">{p.padsDistributed}</TableCell>
-                      <TableCell>
-                        {p.awarenessSession ? (
-                          <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
-                            Yes
-                          </Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">No</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">{p.sessionAttendees ?? "—"}</TableCell>
-                      <TableCell>{p.volunteer?.name ?? "—"}</TableCell>
-                      <TableCell className="text-right">{padActions(p)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
         </TabsContent>
       </Tabs>
 
-      {/* ========================= DISTRIBUTION SHEET ========================= */}
-      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
-          {sheet && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  Distribution
-                  <span className="ml-auto">{typeChip(sheet.type)}</span>
-                </SheetTitle>
-                <SheetDescription>{formatDateTime(sheet.distributedAt)}</SheetDescription>
-              </SheetHeader>
-
-              <div className="grid grid-cols-2 gap-3">
-                <DataField label="Beneficiary" value={sheet.beneficiary?.name ?? "Community hand-out"} />
-                <DataField label="Quantity" value={String(sheet.quantity)} />
-                <DataField label="Value" value={sheet.value != null ? formatINR(sheet.value) : "—"} />
-                <DataField label="Volunteer" value={sheet.volunteer?.user?.name ?? "—"} />
-                <DataField label="Location" value={sheet.location || "—"} />
-                <DataField label="Campaign" value={sheet.campaign?.title ?? "—"} />
-              </div>
-
-              <SectionCard title="Items">
-                {parseItems(sheet.items).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No item breakdown recorded.</p>
-                ) : (
-                  <ul className="space-y-1.5 text-sm">
-                    {parseItems(sheet.items).map((i, idx) => (
-                      <li
-                        key={idx}
-                        className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-1.5"
-                      >
-                        <span className="min-w-0 truncate">{String(i?.name ?? i)}</span>
-                        <span className="shrink-0 font-medium text-muted-foreground">
-                          {String(i?.qty ?? "×1")}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SectionCard>
-
-              {sheet.notes ? (
-                <SectionCard title="Notes">
-                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.notes}</p>
-                </SectionCard>
-              ) : null}
-
-              <div className="flex gap-2 border-t pt-4">
+      {/* ========================= DISTRIBUTION DETAIL ========================= */}
+      <DetailSheet
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetail(null)}
+        eyebrow="Distributions"
+        title={
+          detail
+            ? `${(TYPE_META[detail.type] ?? TYPE_META.OTHER).label} · ${formatDate(detail.distributedAt)}`
+            : ""
+        }
+        description={detail?.location ?? undefined}
+        status={detail ? typeChip(detail.type) : null}
+        footer={
+          detail ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Recorded {detail.createdAt ? formatDateTime(detail.createdAt) : formatDate(detail.distributedAt)}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => openDistEdit(detail)}>
+                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                  onClick={() => setDeleteTarget(sheet)}
+                  onClick={() => setDeleteTarget(detail)}
                 >
                   <Trash2 className="size-3.5" aria-hidden="true" /> Delete
                 </Button>
               </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            </>
+          ) : null
+        }
+      >
+        {detail ? (
+          <>
+            <DetailSection title="Overview" description="What moved, for whom, and where.">
+              <DetailGrid cols={4}>
+                <DataField
+                  label="Beneficiary"
+                  value={detail.beneficiary?.name ?? "Community hand-out"}
+                />
+                <DataField label="Quantity" value={detail.quantity.toLocaleString("en-IN")} />
+                <DataField
+                  label="Estimated value"
+                  value={detail.value != null ? formatINR(detail.value) : null}
+                  mono
+                />
+                <DataField label="Location" value={detail.location ?? null} icon={<MapPin className="size-3" aria-hidden="true" />} />
+                <DataField label="Volunteer" value={detail.volunteer?.user?.name ?? null} />
+                <DataField label="Campaign" value={detail.campaign?.title ?? null} icon={<Megaphone className="size-3" aria-hidden="true" />} />
+                <DataField
+                  label="Distributed on"
+                  value={formatDateTime(detail.distributedAt)}
+                  icon={<CalendarDays className="size-3" aria-hidden="true" />}
+                />
+                <DataField
+                  label="Reference"
+                  value={detail.id}
+                  mono
+                  copy
+                />
+              </DetailGrid>
+            </DetailSection>
 
-      {/* ============================ PAD DRIVE SHEET =========================== */}
-      <Sheet open={!!padSheet} onOpenChange={(o) => !o && setPadSheet(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
-          {padSheet && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  Pad drive
-                  {padSheet.awarenessSession ? (
-                    <Badge
-                      variant="outline"
-                      className="ml-auto border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+            <DetailSection title="Items" description="Item-level breakdown recorded in the field.">
+              {parseItems(detail.items).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No item breakdown recorded — quantity {detail.quantity} ×{" "}
+                  {(TYPE_META[detail.type] ?? TYPE_META.OTHER).label.toLowerCase()}.
+                </p>
+              ) : (
+                <div className="overflow-hidden rounded-lg border">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/70">
+                      <tr className="border-b text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-3 py-2">Item</th>
+                        <th scope="col" className="px-3 py-2 text-right">Qty</th>
+                        <th scope="col" className="px-3 py-2">Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parseItems(detail.items).map((i, idx) => (
+                        <tr key={idx} className="border-b last:border-b-0">
+                          <td className="px-3 py-2">{String(i?.name ?? i)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums">
+                            {String(i?.qty ?? 1)}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {i?.unit ? String(i.unit) : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </DetailSection>
+
+            <DetailSection title="Linked records" description="People and campaigns connected to this distribution.">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="rounded-lg border p-4">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Beneficiary
+                  </p>
+                  {detail.beneficiary ? (
+                    <div className="mt-1.5 space-y-1.5">
+                      <p className="font-medium">{detail.beneficiary.name}</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {urgencyBadge(detail.beneficiary.urgencyLevel)}
+                        <Badge variant="outline">
+                          {titleCase(detail.beneficiary.category)}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Family of {detail.beneficiary.familyMembers}
+                        {detail.beneficiary.city ? ` · ${detail.beneficiary.city}` : ""}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      Community hand-out — no individual case linked.
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Volunteer
+                  </p>
+                  <p className="mt-1.5 font-medium">
+                    {detail.volunteer?.user?.name ?? "Not attributed"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {detail.volunteer
+                      ? "Field volunteer on record for this distribution"
+                      : "Recorded without a volunteer profile"}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Campaign
+                  </p>
+                  {detail.campaign ? (
+                    <div className="mt-1.5 space-y-1.5">
+                      <p className="font-medium">{detail.campaign.title}</p>
+                      {detail.campaign.targetAmount ? (
+                        <>
+                          <Progress
+                            value={Math.min(
+                              100,
+                              Math.round(
+                                ((detail.campaign.raisedAmount ?? 0) /
+                                  detail.campaign.targetAmount) *
+                                  100
+                              )
+                            )}
+                            className="h-1.5"
+                            aria-label="Campaign progress"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {formatINRCompact(detail.campaign.raisedAmount ?? 0)} of{" "}
+                            {formatINRCompact(detail.campaign.targetAmount)} ·{" "}
+                            {titleCase(detail.campaign.status ?? "")}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {titleCase(detail.campaign.status ?? "")}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      Not linked to a campaign.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </DetailSection>
+
+            <DetailSection
+              title="Impact estimate"
+              description="Rough field math — assumptions are indicative, not audited figures."
+            >
+              <div className="space-y-2">
+                {(
+                  IMPACT_PER_TYPE[detail.type] ??
+                  IMPACT_PER_TYPE.OTHER
+                )(detail.quantity)
+                  .split("—")
+                  .map((line, i) => (
+                    <p
+                      key={i}
+                      className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm"
                     >
-                      Awareness session
-                    </Badge>
-                  ) : null}
-                </SheetTitle>
-                <SheetDescription>{formatDateTime(padSheet.distributionDate)}</SheetDescription>
-              </SheetHeader>
+                      <Calculator
+                        className="mt-0.5 size-3.5 shrink-0 text-primary"
+                        aria-hidden="true"
+                      />
+                      {line.trim()}
+                    </p>
+                  ))}
+                {detail.value != null ? (
+                  <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                    <Wallet className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    Estimated market value {formatINR(detail.value)}
+                    {detail.type === "FOOD"
+                      ? ` ≈ ${Math.floor(detail.value / RATION_KIT_COST)} ration kits at ₹${RATION_KIT_COST}/kit`
+                      : ""}
+                  </p>
+                ) : null}
+              </div>
+            </DetailSection>
 
-              <div className="grid grid-cols-2 gap-3">
-                <DataField label="Area" value={padSheet.area} />
-                <DataField label="School" value={padSheet.schoolName || "Community visit"} />
-                <DataField label="Girls reached" value={String(padSheet.girlsCount)} />
-                <DataField label="Pads distributed" value={String(padSheet.padsDistributed)} />
+            {detail.notes ? (
+              <DetailSection title="Notes">
+                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+                  {detail.notes}
+                </p>
+              </DetailSection>
+            ) : null}
+          </>
+        ) : null}
+      </DetailSheet>
+
+      {/* =========================== PAD DRIVE DETAIL =========================== */}
+      <DetailSheet
+        open={!!padDetail}
+        onOpenChange={(o) => !o && setPadDetail(null)}
+        eyebrow="Sanitary pads programme"
+        title={
+          padDetail
+            ? `${padDetail.schoolName || padDetail.area} · ${formatDate(padDetail.distributionDate)}`
+            : ""
+        }
+        description={padDetail ? `${padDetail.area}${padDetail.schoolName ? ` · ${padDetail.schoolName}` : ""}` : undefined}
+        status={
+          padDetail?.awarenessSession ? (
+            <Badge
+              variant="outline"
+              className="border-teal-500/30 bg-teal-500/10 font-medium text-teal-700 dark:text-teal-400"
+            >
+              Awareness session
+            </Badge>
+          ) : null
+        }
+        footer={
+          padDetail ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Drive date {formatDate(padDetail.distributionDate)}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => openPadEdit(padDetail)}>
+                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  onClick={() => setDeletePad(padDetail)}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+                </Button>
+              </div>
+            </>
+          ) : null
+        }
+      >
+        {padDetail ? (
+          <>
+            <DetailSection title="Overview" description="School or community drive details.">
+              <DetailGrid cols={4}>
+                <DataField label="School" value={padDetail.schoolName ?? "Community visit"} icon={<School className="size-3" aria-hidden="true" />} />
+                <DataField label="Area" value={padDetail.area} icon={<MapPin className="size-3" aria-hidden="true" />} />
+                <DataField
+                  label="Drive date"
+                  value={formatDate(padDetail.distributionDate)}
+                  icon={<CalendarDays className="size-3" aria-hidden="true" />}
+                />
+                <DataField
+                  label="Volunteer"
+                  value={padDetail.volunteer?.name ?? padDetail.volunteerName ?? null}
+                />
+                <DataField
+                  label="Girls reached"
+                  value={padDetail.girlsCount.toLocaleString("en-IN")}
+                />
+                <DataField
+                  label="Pads distributed"
+                  value={padDetail.padsDistributed.toLocaleString("en-IN")}
+                />
+                <DataField
+                  label="Pads per girl"
+                  value={
+                    padDetail.girlsCount > 0
+                      ? (Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)
+                      : null
+                  }
+                  mono
+                />
                 <DataField
                   label="Session attendees"
-                  value={padSheet.sessionAttendees != null ? String(padSheet.sessionAttendees) : "—"}
+                  value={
+                    padDetail.awarenessSession
+                      ? padDetail.sessionAttendees != null
+                        ? padDetail.sessionAttendees.toLocaleString("en-IN")
+                        : "Held — count not recorded"
+                      : null
+                  }
                 />
-                <DataField label="Volunteer" value={padSheet.volunteer?.name ?? "—"} />
-              </div>
+              </DetailGrid>
+            </DetailSection>
 
-              {padSheet.notes ? (
-                <SectionCard title="Notes">
-                  <p className="text-sm leading-relaxed text-muted-foreground">{padSheet.notes}</p>
-                </SectionCard>
-              ) : null}
-
-              <div className="flex gap-2 border-t pt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                  onClick={() => setDeletePad(padSheet)}
-                >
-                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
-                </Button>
+            <DetailSection
+              title="Impact estimate"
+              description="Protection math based on 18 pads per girl-month."
+            >
+              <div className="space-y-2">
+                <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                  <Calculator className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  {padDetail.padsDistributed.toLocaleString("en-IN")} pads ≈{" "}
+                  {Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH).toLocaleString("en-IN")}{" "}
+                  girl-month{Math.floor(padDetail.padsDistributed / PADS_PER_GIRL_MONTH) === 1 ? "" : "s"} of protection
+                  {padDetail.girlsCount > 0
+                    ? ` — about ${(Math.round((padDetail.padsDistributed / padDetail.girlsCount) * 10) / 10).toFixed(1)} months per girl reached`
+                    : ""}
+                </p>
+                {padDetail.awarenessSession ? (
+                  <p className="flex items-start gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                    <Users className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                    Menstrual-health awareness session delivered
+                    {padDetail.sessionAttendees != null
+                      ? ` to ${padDetail.sessionAttendees.toLocaleString("en-IN")} attendee${padDetail.sessionAttendees === 1 ? "" : "s"}`
+                      : ""}
+                    .
+                  </p>
+                ) : null}
               </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            </DetailSection>
+
+            {padDetail.notes ? (
+              <DetailSection title="Notes">
+                <p className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+                  {padDetail.notes}
+                </p>
+              </DetailSection>
+            ) : null}
+          </>
+        ) : null}
+      </DetailSheet>
 
       {/* ======================= RECORD DISTRIBUTION (FormSheet) ====================== */}
       <FormSheet
         open={distOpen}
         onOpenChange={setDistOpen}
-        title="Record distribution"
-        description="Logged against your volunteer profile — attribution is automatic."
+        title={editingDist ? "Edit distribution" : "Record distribution"}
+        description={
+          editingDist
+            ? "Update the field record — changes apply immediately."
+            : "Log what was distributed, to whom, by whom, and what it was worth."
+        }
+        badge={editingDist ? <Badge variant="outline">Editing</Badge> : null}
         onSubmit={saveDist}
-        submitLabel="Record"
+        submitLabel={editingDist ? "Save changes" : "Record distribution"}
         loading={savingDist}
-        dirty={distTouched}
-        size="lg"
+        dirty={distDirty}
+        size="full"
       >
-        <FormSection title="What & for whom" description="Type, beneficiary and campaign attribution.">
+        {/* 1 — What & for whom */}
+        <FormSection title="What & for whom" description="Type, beneficiary and quantity.">
           <FieldGrid>
             <SelectField
               label="Type"
               required
               value={distForm.type}
-              onChange={(v) => {
-                setDistForm({ ...distForm, type: v });
-                setDistTouched(true);
-              }}
-              options={DISTRIBUTION_TYPES.map((t) => ({ value: t, label: titleCase(t) }))}
+              onChange={(v) => setDistForm((f) => ({ ...f, type: v }))}
+              options={DISTRIBUTION_TYPES.map((t) => ({
+                value: t,
+                label: (TYPE_META[t] ?? TYPE_META.OTHER).label,
+              }))}
             />
-            <SelectField
-              label="Campaign (optional)"
-              value={distForm.campaignId || "NONE"}
-              onChange={(v) => {
-                setDistForm({ ...distForm, campaignId: v === "NONE" ? "" : v });
-                setDistTouched(true);
-              }}
-              options={[
-                { value: "NONE", label: "— No campaign —" },
-                ...campaigns.map((c) => ({ value: c.id, label: c.title })),
-              ]}
+            <TextField
+              label="Quantity (units / kits)"
+              required
+              type="number"
+              min="1"
+              value={distForm.quantity}
+              onChange={(v) => setDistForm((f) => ({ ...f, quantity: v }))}
+              error={distErrors.quantity ?? null}
             />
           </FieldGrid>
+
+          {distForm.type === "SANITARY_PADS" ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-pink-500/30 bg-pink-500/10 px-3 py-2.5 text-xs text-pink-700 dark:text-pink-400">
+              <Info className="size-4 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1">
+                Running a school or community pad drive with an awareness session? The
+                pads tracker records girls count and sessions.
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-pink-500/40 text-pink-700 hover:bg-pink-500/10 dark:text-pink-400"
+                onClick={() => {
+                  setDistOpen(false);
+                  setTab("pads");
+                  openPadCreate();
+                }}
+              >
+                Log as Pad Drive instead
+              </Button>
+            </div>
+          ) : null}
+
           <Field
             label="Beneficiary"
             hint={
               beneficiaries.length > 0
-                ? `${beneficiaries.length} on file — type in the filter box to narrow the list.`
+                ? `${beneficiaries.length} on file — filter by name or city. Leave empty for a community hand-out.`
                 : "Directory unavailable — the record will be saved as a community hand-out."
             }
           >
@@ -1236,61 +2552,69 @@ export default function DistributionsView() {
               <select
                 aria-label="Select beneficiary"
                 value={distForm.beneficiaryId}
-                onChange={(e) => {
-                  setDistForm({ ...distForm, beneficiaryId: e.target.value });
-                  setDistTouched(true);
-                }}
+                onChange={(e) =>
+                  setDistForm((f) => ({ ...f, beneficiaryId: e.target.value }))
+                }
                 className={NATIVE_SELECT_CLS}
               >
                 <option value="">Community hand-out (none)</option>
                 {benFiltered.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.name}
-                    {b.city ? ` — ${b.city}` : ""}
+                    {b.city ? ` — ${b.city}` : ""} · {titleCase(b.category)} ·{" "}
+                    {titleCase(b.urgencyLevel)} urgency
                   </option>
                 ))}
               </select>
+              {selectedBeneficiary ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+                  <Users className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  <span className="font-medium">{selectedBeneficiary.name}</span>
+                  {urgencyBadge(selectedBeneficiary.urgencyLevel)}
+                  <span className="text-muted-foreground">
+                    {titleCase(selectedBeneficiary.category)} · family of{" "}
+                    {selectedBeneficiary.familyMembers}
+                    {selectedBeneficiary.city ? ` · ${selectedBeneficiary.city}` : ""}
+                  </span>
+                </div>
+              ) : null}
             </div>
           </Field>
+
+          <TextField
+            label="Estimated value (₹)"
+            prefix="₹"
+            type="number"
+            min="0"
+            value={distForm.value}
+            onChange={(v) => setDistForm((f) => ({ ...f, value: v }))}
+            error={distErrors.value ?? null}
+            hint={
+              itemTotals.estValue > 0 && distForm.value === ""
+                ? `Inventory estimate: ${formatINR(itemTotals.estValue)} — type it above to persist.`
+                : perUnitHint
+            }
+          />
         </FormSection>
 
-        <FormSection title="Quantity & value" description="Value persists now — it feeds exports and impact stats.">
-          <FieldGrid>
-            <TextField
-              label="Quantity"
-              required
-              type="number"
-              min="1"
-              value={distForm.quantity}
-              onChange={(v) => {
-                setDistForm({ ...distForm, quantity: v });
-                setDistTouched(true);
-              }}
-            />
-            <TextField
-              label="Value (₹)"
-              prefix="₹"
-              type="number"
-              min="0"
-              value={distForm.value}
-              onChange={(v) => {
-                setDistForm({ ...distForm, value: v });
-                setDistTouched(true);
-              }}
-              hint={perUnitHint}
-            />
-          </FieldGrid>
+        {/* 2 — Items */}
+        <FormSection
+          title="Items in this distribution"
+          description="Item-level tracking — names auto-match inventory to estimate value."
+        >
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Item breakdown (optional)</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                {itemTotals.lines} item line{itemTotals.lines === 1 ? "" : "s"} ·{" "}
+                {itemTotals.units.toLocaleString("en-IN")} total units
+              </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  setDistForm((f) => ({ ...f, items: [...f.items, { name: "", qty: "1" }] }));
-                  setDistTouched(true);
-                }}
+                onClick={() =>
+                  setDistForm((f) => ({ ...f, items: [...f.items, { ...EMPTY_ITEM }] }))
+                }
                 aria-label="Add item row"
               >
                 <Plus className="size-3.5" aria-hidden="true" /> Add item
@@ -1302,7 +2626,7 @@ export default function DistributionsView() {
               const priceKnown = inv?.pricePerUnit != null && Number.isFinite(q) && q > 0;
               return (
                 <div key={i} className="space-y-1">
-                  <div className="grid grid-cols-[1fr_76px_36px] items-center gap-2">
+                  <div className="grid grid-cols-[1fr_76px_88px_36px] items-center gap-2">
                     <Input
                       value={item.name}
                       onChange={(e) => {
@@ -1311,7 +2635,6 @@ export default function DistributionsView() {
                           ...f,
                           items: f.items.map((it, j) => (j === i ? { ...it, name: v } : it)),
                         }));
-                        setDistTouched(true);
                       }}
                       placeholder="Rice (5kg bags)"
                       aria-label={`Item ${i + 1} name`}
@@ -1319,6 +2642,7 @@ export default function DistributionsView() {
                     <Input
                       type="number"
                       min={0}
+                      step="any"
                       value={item.qty}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -1326,24 +2650,42 @@ export default function DistributionsView() {
                           ...f,
                           items: f.items.map((it, j) => (j === i ? { ...it, qty: v } : it)),
                         }));
-                        setDistTouched(true);
                       }}
                       aria-label={`Item ${i + 1} quantity`}
+                    />
+                    <Input
+                      value={item.unit}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setDistForm((f) => ({
+                          ...f,
+                          items: f.items.map((it, j) => (j === i ? { ...it, unit: v } : it)),
+                        }));
+                      }}
+                      placeholder="kg, kits…"
+                      aria-label={`Item ${i + 1} unit`}
                     />
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
-                      onClick={() => {
-                        setDistForm((f) => ({ ...f, items: f.items.filter((_, j) => j !== i) }));
-                        setDistTouched(true);
-                      }}
+                      onClick={() =>
+                        setDistForm((f) => ({
+                          ...f,
+                          items: f.items.filter((_, j) => j !== i),
+                        }))
+                      }
                       aria-label={`Remove item ${i + 1}`}
                       disabled={distForm.items.length <= 1}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
                     </Button>
                   </div>
+                  {itemError(distErrors, i) ? (
+                    <p className="text-xs font-medium text-destructive" role="alert">
+                      {itemError(distErrors, i)}
+                    </p>
+                  ) : null}
                   {priceKnown ? (
                     <p className="text-[11px] text-muted-foreground">
                       Inventory match: {inv?.name} @ {formatINR(inv?.pricePerUnit ?? 0)}/{inv?.unit} · est{" "}
@@ -1356,34 +2698,70 @@ export default function DistributionsView() {
           </div>
         </FormSection>
 
-        <FormSection title="Where & when" description="Location is required; the date defaults to today.">
+        {/* 3 — People & place */}
+        <FormSection title="People & place" description="Volunteer assignment, campaign linkage and location.">
+          {isAdmin ? (
+            <FieldGrid>
+              <SelectField
+                label="Volunteer"
+                value={distForm.volunteerId || "NONE"}
+                onChange={(v) =>
+                  setDistForm((f) => ({ ...f, volunteerId: v === "NONE" ? "" : v }))
+                }
+                options={[
+                  { value: "NONE", label: "— Not assigned —" },
+                  ...volunteers.map((v) => ({
+                    value: v.id,
+                    label: `${v.user.name}${v.assignedArea ? ` — ${v.assignedArea}` : ""}${v.status !== "ACTIVE" ? ` (${titleCase(v.status)})` : ""}`,
+                  })),
+                ]}
+              />
+              <SelectField
+                label="Campaign"
+                value={distForm.campaignId || "NONE"}
+                onChange={(v) =>
+                  setDistForm((f) => ({ ...f, campaignId: v === "NONE" ? "" : v }))
+                }
+                options={[
+                  { value: "NONE", label: "— No campaign —" },
+                  ...campaigns.map((c) => ({
+                    value: c.id,
+                    label: `${c.title}${c.status ? ` (${titleCase(c.status)})` : ""}`,
+                  })),
+                ]}
+              />
+            </FieldGrid>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+              <Users className="size-4 shrink-0" aria-hidden="true" />
+              This record will be attributed to your volunteer profile automatically.
+            </div>
+          )}
           <TextField
             label="Location"
             required
             value={distForm.location}
-            onChange={(v) => {
-              setDistForm({ ...distForm, location: v });
-              setDistTouched(true);
-            }}
-            placeholder="Ambedkar Nagar community hall"
+            onChange={(v) => setDistForm((f) => ({ ...f, location: v }))}
+            error={distErrors.location ?? null}
+            placeholder="Ambedkar Nagar community hall, Bengaluru"
           />
+        </FormSection>
+
+        {/* 4 — Notes & timing */}
+        <FormSection title="Notes & timing" description="When it happened and anything worth remembering.">
           <TextField
             label="Distributed on"
-            type="date"
+            type="datetime-local"
             value={distForm.distributedAt}
-            onChange={(v) => {
-              setDistForm({ ...distForm, distributedAt: v });
-              setDistTouched(true);
-            }}
+            onChange={(v) => setDistForm((f) => ({ ...f, distributedAt: v }))}
+            error={distErrors.distributedAt ?? null}
           />
           <TextareaField
             label="Notes"
-            rows={2}
+            rows={3}
             value={distForm.notes}
-            onChange={(v) => {
-              setDistForm({ ...distForm, notes: v });
-              setDistTouched(true);
-            }}
+            onChange={(v) => setDistForm((f) => ({ ...f, notes: v }))}
+            placeholder="Follow-ups, community feedback, photos pending…"
           />
         </FormSection>
       </FormSheet>
@@ -1392,34 +2770,31 @@ export default function DistributionsView() {
       <FormSheet
         open={padOpen}
         onOpenChange={setPadOpen}
-        title="Record pad drive"
+        title={editingPad ? "Edit pad drive" : "Record pad drive"}
         description="School or community visit with pads distributed and an optional awareness session."
+        badge={editingPad ? <Badge variant="outline">Editing</Badge> : null}
         onSubmit={savePad}
-        submitLabel="Record drive"
+        submitLabel={editingPad ? "Save changes" : "Record drive"}
         loading={savingPad}
-        dirty={padTouched}
-        size="md"
+        dirty={padDirty}
+        size="full"
       >
-        <FormSection title="Drive details" description="Where the drive happened and who led it.">
+        <FormSection title="Where & when" description="Drive location and date.">
           <FieldGrid>
             <TextField
               label="Area"
               required
               value={padForm.area}
-              onChange={(v) => {
-                setPadForm({ ...padForm, area: v });
-                setPadTouched(true);
-              }}
+              onChange={(v) => setPadForm((f) => ({ ...f, area: v }))}
+              error={padErrors.area ?? null}
               placeholder="Yelahanka, Bengaluru"
             />
             <TextField
-              label="Distributed on"
+              label="Drive date"
               type="date"
               value={padForm.distributionDate}
-              onChange={(v) => {
-                setPadForm({ ...padForm, distributionDate: v });
-                setPadTouched(true);
-              }}
+              onChange={(v) => setPadForm((f) => ({ ...f, distributionDate: v }))}
+              error={padErrors.distributionDate ?? null}
             />
           </FieldGrid>
           <Field
@@ -1434,8 +2809,8 @@ export default function DistributionsView() {
               <Input
                 value={padForm.schoolName}
                 onChange={(e) => {
-                  setPadForm({ ...padForm, schoolName: e.target.value });
-                  setPadTouched(true);
+                  const v = e.target.value;
+                  setPadForm((f) => ({ ...f, schoolName: v }));
                   setSchoolDdOpen(true);
                 }}
                 onFocus={() => setSchoolDdOpen(true)}
@@ -1464,8 +2839,11 @@ export default function DistributionsView() {
                         aria-selected={padForm.schoolName === s.schoolName}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
-                          setPadForm((f) => ({ ...f, schoolName: s.schoolName }));
-                          setPadTouched(true);
+                          setPadForm((f) => ({
+                            ...f,
+                            schoolName: s.schoolName,
+                            area: f.area || (s.city ? `${s.city}` : f.area),
+                          }));
                           setSchoolDdOpen(false);
                         }}
                         className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
@@ -1481,19 +2859,9 @@ export default function DistributionsView() {
               ) : null}
             </div>
           </Field>
-          <TextField
-            label="Volunteer name"
-            value={padForm.volunteerName}
-            onChange={(v) => {
-              setPadForm({ ...padForm, volunteerName: v });
-              setPadTouched(true);
-            }}
-            placeholder="Recorded in the activity log"
-            hint="The drive is also attributed to your volunteer profile automatically."
-          />
         </FormSection>
 
-        <FormSection title="Reach" description="Girls reached, pads distributed and session details.">
+        <FormSection title="Reach & session" description="Girls reached, pads handed out and awareness session.">
           <FieldGrid>
             <TextField
               label="Girls reached"
@@ -1501,10 +2869,8 @@ export default function DistributionsView() {
               type="number"
               min="0"
               value={padForm.girlsCount}
-              onChange={(v) => {
-                setPadForm({ ...padForm, girlsCount: v });
-                setPadTouched(true);
-              }}
+              onChange={(v) => setPadForm((f) => ({ ...f, girlsCount: v }))}
+              error={padErrors.girlsCount ?? null}
             />
             <TextField
               label="Pads distributed"
@@ -1512,20 +2878,27 @@ export default function DistributionsView() {
               type="number"
               min="0"
               value={padForm.padsDistributed}
-              onChange={(v) => {
-                setPadForm({ ...padForm, padsDistributed: v });
-                setPadTouched(true);
-              }}
+              onChange={(v) => setPadForm((f) => ({ ...f, padsDistributed: v }))}
+              error={padErrors.padsDistributed ?? null}
+              hint={
+                padPerGirl != null
+                  ? `≈ ${padPerGirl} pads per girl (30 pads ≈ 2 months of protection)`
+                  : undefined
+              }
             />
           </FieldGrid>
+          {padGirlsNum > 0 && padPadsNum > 0 && padPadsNum < padGirlsNum ? (
+            <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              Fewer pads than girls — that&apos;s under {PADS_PER_GIRL_MONTH} pads per
+              girl. Double-check the counts before saving.
+            </p>
+          ) : null}
           <SwitchField
             label="Awareness session conducted"
             hint="Menstrual health & hygiene talk."
             checked={padForm.awarenessSession}
-            onChange={(v) => {
-              setPadForm({ ...padForm, awarenessSession: v });
-              setPadTouched(true);
-            }}
+            onChange={(v) => setPadForm((f) => ({ ...f, awarenessSession: v }))}
           />
           {padForm.awarenessSession ? (
             <TextField
@@ -1533,20 +2906,56 @@ export default function DistributionsView() {
               type="number"
               min="0"
               value={padForm.sessionAttendees}
-              onChange={(v) => {
-                setPadForm({ ...padForm, sessionAttendees: v });
-                setPadTouched(true);
-              }}
+              onChange={(v) => setPadForm((f) => ({ ...f, sessionAttendees: v }))}
+              error={padErrors.sessionAttendees ?? null}
             />
           ) : null}
+          {isAdmin ? (
+            <FieldGrid>
+              <SelectField
+                label="Volunteer"
+                value={padForm.volunteerId || "NONE"}
+                onChange={(v) =>
+                  setPadForm((f) => ({ ...f, volunteerId: v === "NONE" ? "" : v }))
+                }
+                options={[
+                  { value: "NONE", label: "— Not assigned —" },
+                  ...volunteers.map((v) => ({
+                    value: v.id,
+                    label: `${v.user.name}${v.assignedArea ? ` — ${v.assignedArea}` : ""}`,
+                  })),
+                ]}
+              />
+              <TextField
+                label="On-site volunteer name (optional)"
+                value={padForm.volunteerName}
+                onChange={(v) => setPadForm((f) => ({ ...f, volunteerName: v }))}
+                placeholder="For drives led by non-profile volunteers"
+              />
+            </FieldGrid>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+                <Users className="size-4 shrink-0" aria-hidden="true" />
+                This drive will be attributed to your volunteer profile automatically.
+              </div>
+              <TextField
+                label="On-site volunteer name (optional)"
+                value={padForm.volunteerName}
+                onChange={(v) => setPadForm((f) => ({ ...f, volunteerName: v }))}
+                placeholder="If someone else led the drive on the ground"
+              />
+            </>
+          )}
+        </FormSection>
+
+        <FormSection title="Notes" description="Anything worth remembering about the visit.">
           <TextareaField
             label="Notes"
-            rows={2}
+            rows={3}
             value={padForm.notes}
-            onChange={(v) => {
-              setPadForm({ ...padForm, notes: v });
-              setPadTouched(true);
-            }}
+            onChange={(v) => setPadForm((f) => ({ ...f, notes: v }))}
+            placeholder="School feedback, follow-up plans, session topics…"
           />
         </FormSection>
       </FormSheet>
@@ -1612,12 +3021,12 @@ export default function DistributionsView() {
         title="Delete this distribution?"
         recordName={
           deleteTarget
-            ? `${titleCase(deleteTarget.type)} × ${deleteTarget.quantity} · ${deleteTarget.location ?? "unknown location"}`
+            ? `${(TYPE_META[deleteTarget.type] ?? TYPE_META.OTHER).label} × ${deleteTarget.quantity} · ${deleteTarget.location ?? "unknown location"}`
             : null
         }
-        description="This cannot be undone."
+        description="Removes the record from beneficiary history, reports and impact stats. This cannot be undone."
         confirmLabel="Delete"
-        loading={false}
+        loading={deletingDist}
         onConfirm={removeDist}
       />
 
@@ -1630,11 +3039,16 @@ export default function DistributionsView() {
             ? `${deletePad.area} — ${deletePad.padsDistributed} pads, ${deletePad.girlsCount} girls`
             : null
         }
-        description="This cannot be undone."
+        description="Removes the drive from programme totals. This cannot be undone."
         confirmLabel="Delete"
-        loading={false}
+        loading={deletingPad}
         onConfirm={removePad}
       />
     </div>
   );
+}
+
+/** Per-item error lookup helper. */
+function itemError(errors: Errors, i: number): string | null {
+  return errors[`item-${i}`] ?? null;
 }

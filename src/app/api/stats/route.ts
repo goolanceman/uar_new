@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { json, handleError } from "@/lib/session";
 
@@ -5,9 +6,41 @@ export const dynamic = "force-dynamic";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// GET /api/stats — public aggregate snapshot
-export async function GET() {
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function pctChange(current: number, previous: number): number | null {
+  if (!Number.isFinite(previous) || previous <= 0) return null;
+  return round2(((current - previous) / previous) * 100);
+}
+
+// GET /api/stats — public aggregate snapshot.
+//   ?from=&to= (ISO) → range-scoped giving numbers (raised, donations,
+//   monthly, categories, recent) plus deltas vs the previous equal-length
+//   period. Without params → all-time defaults (fully backward compatible);
+//   `categories` is included in both paths.
+export async function GET(req: NextRequest) {
   try {
+    const sp = new URL(req.url).searchParams;
+    const fromRaw = sp.get("from");
+    const toRaw = sp.get("to");
+    const from = fromRaw ? new Date(fromRaw) : null;
+    const to = toRaw ? new Date(toRaw) : null;
+    const hasRange =
+      !!from &&
+      !!to &&
+      !Number.isNaN(from.getTime()) &&
+      !Number.isNaN(to.getTime()) &&
+      from.getTime() < to.getTime();
+
+    const donationWhere = hasRange
+      ? { paymentStatus: "COMPLETED", createdAt: { gte: from!, lte: to! } }
+      : { paymentStatus: "COMPLETED" };
+
+    // Previous equal-length window [from - len, from) for cheap deltas
+    const prevFrom = hasRange
+      ? new Date(from!.getTime() - (to!.getTime() - from!.getTime()))
+      : null;
+
     const [
       raisedAgg,
       donationCount,
@@ -26,9 +59,10 @@ export async function GET() {
       campaignTop,
       roleGroups,
       distributionGroups,
+      prevAgg,
     ] = await Promise.all([
-      db.donation.aggregate({ _sum: { amount: true }, where: { paymentStatus: "COMPLETED" } }),
-      db.donation.count({ where: { paymentStatus: "COMPLETED" } }),
+      db.donation.aggregate({ _sum: { amount: true }, where: donationWhere }),
+      db.donation.count({ where: donationWhere }),
       db.campaign.count({ where: { status: "ACTIVE" } }),
       db.beneficiary.count(),
       db.user.count({ where: { role: "VOLUNTEER", status: "ACTIVE" } }),
@@ -41,9 +75,16 @@ export async function GET() {
       db.mission.count(),
       db.mission.aggregate({ _sum: { vehiclesAlerted: true, timeSavedSec: true } }),
       db.donation.findMany({
-        where: { paymentStatus: "COMPLETED" },
+        where: donationWhere,
         orderBy: { createdAt: "desc" },
-        include: { campaign: { select: { title: true } } },
+        select: {
+          amount: true,
+          category: true,
+          donorName: true,
+          isAnonymous: true,
+          createdAt: true,
+          campaign: { select: { title: true } },
+        },
       }),
       db.campaign.findMany({
         where: { status: { not: "DRAFT" } },
@@ -53,23 +94,109 @@ export async function GET() {
       }),
       db.user.groupBy({ by: ["role"], _count: { _all: true } }),
       db.distribution.groupBy({ by: ["type"], _count: { _all: true } }),
+      hasRange
+        ? db.donation.aggregate({
+            _sum: { amount: true },
+            _count: { _all: true },
+            where: {
+              paymentStatus: "COMPLETED",
+              createdAt: { gte: prevFrom!, lt: from! },
+            },
+          })
+        : Promise.resolve(null),
     ]);
 
-    // Monthly giving — last 6 months, computed in JS
+    /* --------------------------- monthly buckets --------------------------- */
+
     const now = new Date();
     const monthly: { month: string; amount: number }[] = [];
-    for (let i = 5; i >= 0; i--) {
-      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-      const amount = completedDonations
-        .filter((d) => d.createdAt >= start && d.createdAt < end)
-        .reduce((sum, d) => sum + d.amount, 0);
-      monthly.push({ month: MONTHS[start.getMonth()], amount });
+
+    if (hasRange) {
+      // Monthly buckets inside the requested window, capped at 24 buckets
+      // (older windows fall back to the last 24 months ending at `to`).
+      const startM = new Date(from!.getFullYear(), from!.getMonth(), 1);
+      const endM = new Date(to!.getFullYear(), to!.getMonth(), 1);
+      let buckets =
+        (endM.getFullYear() - startM.getFullYear()) * 12 +
+        (endM.getMonth() - startM.getMonth()) +
+        1;
+      if (buckets > 24) {
+        startM.setMonth(startM.getMonth() + (buckets - 24));
+        buckets = 24;
+      }
+      const withYears = buckets > 12;
+      for (let i = 0; i < buckets; i++) {
+        const s = new Date(startM.getFullYear(), startM.getMonth() + i, 1);
+        const e = new Date(startM.getFullYear(), startM.getMonth() + i + 1, 1);
+        const amount = completedDonations
+          .filter((d) => d.createdAt >= s && d.createdAt < e)
+          .reduce((sum, d) => sum + d.amount, 0);
+        monthly.push({
+          month: withYears
+            ? `${MONTHS[s.getMonth()]} '${String(s.getFullYear()).slice(2)}`
+            : MONTHS[s.getMonth()],
+          amount: round2(amount),
+        });
+      }
+    } else {
+      // Default: last 6 months (legacy shape)
+      for (let i = 5; i >= 0; i--) {
+        const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+        const amount = completedDonations
+          .filter((d) => d.createdAt >= start && d.createdAt < end)
+          .reduce((sum, d) => sum + d.amount, 0);
+        monthly.push({ month: MONTHS[start.getMonth()], amount: round2(amount) });
+      }
     }
 
+    /* ------------------------ category mix (both paths) --------------------- */
+
+    const catMap = new Map<string, number>();
+    for (const d of completedDonations) {
+      catMap.set(d.category, (catMap.get(d.category) ?? 0) + d.amount);
+    }
+    const categories = [...catMap.entries()]
+      .map(([category, amount]) => ({ category, amount: round2(amount) }))
+      .sort((a, b) => b.amount - a.amount);
+
+    /* ------------------------------ deltas ---------------------------------- */
+
+    const rangeRaised = round2(raisedAgg._sum.amount ?? 0);
+    const deltas = hasRange
+      ? {
+          raised: {
+            current: rangeRaised,
+            previous: round2((prevAgg?._sum.amount as number | undefined) ?? 0),
+            pct: pctChange(rangeRaised, (prevAgg?._sum.amount as number | undefined) ?? 0),
+          },
+          donations: {
+            current: donationCount,
+            previous: (prevAgg?._count as { _all?: number } | undefined)?._all ?? 0,
+            pct: pctChange(
+              donationCount,
+              (prevAgg?._count as { _all?: number } | undefined)?._all ?? 0
+            ),
+          },
+        }
+      : null;
+
     return json({
+      ...(hasRange
+        ? {
+            range: {
+              from: from!.toISOString(),
+              to: to!.toISOString(),
+              previous: {
+                from: prevFrom!.toISOString(),
+                to: from!.toISOString(),
+              },
+            },
+            deltas,
+          }
+        : {}),
       totals: {
-        raised: raisedAgg._sum.amount ?? 0,
+        raised: rangeRaised,
         donations: donationCount,
         campaigns: activeCampaigns,
         beneficiaries: beneficiaryCount,
@@ -86,6 +213,7 @@ export async function GET() {
         timeSavedMin: Math.round((missionSums._sum.timeSavedSec ?? 0) / 60),
       },
       monthly,
+      categories,
       byCampaign: campaignTop.map((c) => ({
         title: c.title,
         raised: c.raisedAmount,
@@ -100,6 +228,7 @@ export async function GET() {
       recentDonations: completedDonations.slice(0, 5).map((d) => ({
         donorName: d.isAnonymous ? "Anonymous" : d.donorName,
         amount: d.amount,
+        category: d.category,
         campaign: d.campaign?.title ?? null,
         createdAt: d.createdAt,
       })),

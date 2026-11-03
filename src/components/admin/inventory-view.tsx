@@ -1,9 +1,11 @@
 "use client";
 
 /**
- * Inventory — admin module.
- * Stock items with categories/units from the MDM registry, low-stock and
- * expiry monitoring, table/grid/list views, CSV export and a stock-in flow.
+ * Inventory — round-5: DataTable (fill height, skeleton rows, built-in
+ * pagination), low-stock warning tint + badges, "Restock" quick action with
+ * prefilled quantity, full-screen DetailSheet with stock-health progress and
+ * movement quick-stats, lg FormSheet with expiry shown only for perishable
+ * categories, grid/list views, filter chips and CSV export.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,6 +13,7 @@ import {
   AlertTriangle,
   Boxes,
   CalendarClock,
+  Gauge,
   Package,
   PackagePlus,
   Pencil,
@@ -26,12 +29,16 @@ import { formatDate, formatINR, titleCase } from "@/lib/format";
 import { dateRule } from "@/lib/validators";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
-import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
 import {
   FieldGrid,
   FormSection,
@@ -39,15 +46,18 @@ import {
   TextField,
   TextareaField,
 } from "@/components/shared/form-fields";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { CsvColumn, ExportMenu } from "@/components/shared/csv";
 import {
   DataViewMode,
   PaginationBar,
-  PageSizeSelect,
   useViewPref,
   ViewSwitcher,
 } from "@/components/shared/view-switcher";
-import { Badge } from "@/components/ui/badge";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -59,21 +69,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -149,10 +144,28 @@ function isExpiring(i: InventoryItem): boolean {
   return d.getTime() <= in30;
 }
 
+function daysToExpiry(i: InventoryItem): number | null {
+  if (!i.expiryDate) return null;
+  const d = new Date(i.expiryDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
 /** Healthy-level progress: 100% means stock is at 2× the minimum. */
 function stockPct(i: InventoryItem): number {
   const healthy = Math.max(i.minStock * 2, 1);
   return Math.min(100, Math.round((i.quantity / healthy) * 100));
+}
+
+/** Expiry only applies to perishable categories (food, medicine, feed). */
+function isPerishable(category: string): boolean {
+  const c = (category ?? "").toUpperCase();
+  return c.includes("FOOD") || c.includes("MEDICINE") || c.includes("FEED") || c.includes("PADS");
+}
+
+/** Suggested restock quantity to bring the item back to 2× its minimum. */
+function restockQty(i: InventoryItem): number {
+  return Math.max(i.minStock * 2 - i.quantity, 10);
 }
 
 /* ---------------------------------- view ----------------------------------- */
@@ -175,7 +188,8 @@ export default function InventoryView() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<InventoryItem | null>(null);
   const [form, setForm] = useState<ItemForm>(EMPTY_ITEM_FORM);
-  const [formTouched, setFormTouched] = useState(false);
+  const [formSnapshot, setFormSnapshot] = useState<string>(JSON.stringify(EMPTY_ITEM_FORM));
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
 
@@ -250,7 +264,10 @@ export default function InventoryView() {
 
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageSafe = Math.min(page, pages);
-  const paged = filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize);
+  const paged = useMemo(
+    () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [filtered, pageSafe, pageSize]
+  );
 
   const stats = useMemo(
     () => ({
@@ -262,22 +279,33 @@ export default function InventoryView() {
     [items]
   );
 
+  const hasFilters = catFilter !== "ALL" || lowOnly || appliedQuery.trim() !== "";
+
+  const clearFilters = () => {
+    setQuery("");
+    setCatFilter("ALL");
+    setLowOnly(false);
+    setPage(1);
+  };
+
   /* ------------------------------ form actions ----------------------------- */
 
   const openCreate = () => {
     setEditing(null);
-    setForm({
+    const f: ItemForm = {
       ...EMPTY_ITEM_FORM,
       category: mergedCategories[0]?.value ?? "OTHER",
       unit: mergedUnits[0]?.value ?? "pcs",
-    });
-    setFormTouched(false);
+    };
+    setForm(f);
+    setFormSnapshot(JSON.stringify(f));
+    setErrors({});
     setFormOpen(true);
   };
 
   const openEdit = (i: InventoryItem) => {
     setEditing(i);
-    setForm({
+    const f: ItemForm = {
       name: i.name ?? "",
       description: i.description ?? "",
       category: i.category ?? "OTHER",
@@ -287,38 +315,34 @@ export default function InventoryView() {
       pricePerUnit: i.pricePerUnit != null ? String(i.pricePerUnit) : "",
       location: i.location ?? "",
       expiryDate: i.expiryDate ? i.expiryDate.slice(0, 10) : "",
-    });
-    setFormTouched(false);
+    };
+    setForm(f);
+    setFormSnapshot(JSON.stringify(f));
+    setErrors({});
     setFormOpen(true);
   };
 
+  const formDirty = formOpen && JSON.stringify(form) !== formSnapshot;
+
   const save = async () => {
-    if (!form.name.trim()) {
-      toast.error("Item name is required");
-      return;
-    }
+    const nextErrors: Record<string, string | undefined> = {};
+    if (!form.name.trim()) nextErrors.name = "Item name is required";
     const qty = Number(form.quantity);
-    if (!Number.isFinite(qty) || qty < 0) {
-      toast.error("Quantity must be 0 or more");
-      return;
-    }
+    if (!Number.isFinite(qty) || qty < 0) nextErrors.quantity = "Quantity must be 0 or more";
     const min = Number(form.minStock);
-    if (!Number.isFinite(min) || min < 0) {
-      toast.error("Minimum stock must be 0 or more");
-      return;
-    }
+    if (!Number.isFinite(min) || min < 0) nextErrors.minStock = "Minimum stock must be 0 or more";
     if (form.pricePerUnit) {
       const price = Number(form.pricePerUnit);
-      if (!Number.isFinite(price) || price < 0) {
-        toast.error("Price per unit must be 0 or more");
-        return;
-      }
+      if (!Number.isFinite(price) || price < 0) nextErrors.pricePerUnit = "Price per unit must be 0 or more";
     }
     const dateErr = dateRule(true)(form.expiryDate);
-    if (dateErr) {
-      toast.error(dateErr);
+    if (dateErr) nextErrors.expiryDate = dateErr;
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
+      toast.error(Object.values(nextErrors)[0] as string);
       return;
     }
+    setErrors({});
     setSaving(true);
     try {
       const body = {
@@ -330,7 +354,7 @@ export default function InventoryView() {
         minStock: Math.trunc(min),
         pricePerUnit: form.pricePerUnit === "" ? undefined : Number(form.pricePerUnit),
         location: form.location.trim() || undefined,
-        expiryDate: form.expiryDate || undefined,
+        expiryDate: isPerishable(form.category) && form.expiryDate ? form.expiryDate : undefined,
       };
       if (editing) {
         await patch(`/api/inventory/${editing.id}`, body);
@@ -349,10 +373,21 @@ export default function InventoryView() {
     }
   };
 
-  const openStockIn = (i: InventoryItem) => {
+  /** Open the stock-in sheet, optionally prefilling a suggested restock qty. */
+  const openStockIn = (i: InventoryItem, prefill = false) => {
     setStockTarget(i);
-    setStockForm(EMPTY_STOCK_FORM);
+    setStockForm({
+      ...EMPTY_STOCK_FORM,
+      quantity: prefill ? String(restockQty(i)) : "",
+    });
   };
+
+  const stockDirty =
+    !!stockTarget &&
+    (stockForm.quantity.trim() !== "" ||
+      stockForm.pricePerUnit.trim() !== "" ||
+      stockForm.supplier.trim() !== "" ||
+      stockForm.invoiceNumber.trim() !== "");
 
   const addStock = async () => {
     if (!stockTarget) return;
@@ -418,49 +453,55 @@ export default function InventoryView() {
 
   /* ------------------------------ small pieces ----------------------------- */
 
-  const stockCell = (i: InventoryItem) => (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 font-medium",
-        isLowStock(i) && "text-amber-700 dark:text-amber-400"
-      )}
-    >
-      {isLowStock(i) && <AlertTriangle className="size-3.5" aria-hidden="true" />}
-      {i.quantity} {i.unit}
-    </span>
-  );
-
   const expiryChip = (i: InventoryItem) =>
     i.expiryDate ? (
-      <Badge
-        variant="outline"
-        className={cn(
-          isExpiring(i)
-            ? "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
-            : "text-muted-foreground"
-        )}
+      <StatusBadge
+        tone={isExpiring(i) ? "danger" : "neutral"}
+        className={isExpiring(i) ? "" : "text-muted-foreground"}
       >
         <CalendarClock className="size-3" aria-hidden="true" />
         {isExpiring(i) ? "Expires " : "Exp. "}
         {formatDate(i.expiryDate)}
-      </Badge>
+      </StatusBadge>
     ) : (
       <span className="text-xs text-muted-foreground">—</span>
     );
 
   const rowActions = (i: InventoryItem) => (
     <>
-      <Button variant="outline" size="sm" onClick={() => openStockIn(i)} aria-label={`Stock in ${i.name}`}>
+      <Button
+        variant="outline"
+        size="sm"
+        className={cn("min-h-9", isLowStock(i) && "border-amber-500/50 text-amber-700 dark:text-amber-400")}
+        onClick={(e) => {
+          e.stopPropagation();
+          openStockIn(i, isLowStock(i));
+        }}
+        aria-label={`Restock ${i.name}`}
+      >
         <PackagePlus className="size-3.5" aria-hidden="true" />
+        <span className="hidden lg:inline">{isLowStock(i) ? "Restock" : "Stock in"}</span>
       </Button>
-      <Button variant="outline" size="sm" onClick={() => openEdit(i)} aria-label={`Edit ${i.name}`}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="min-h-9"
+        onClick={(e) => {
+          e.stopPropagation();
+          openEdit(i);
+        }}
+        aria-label={`Edit ${i.name}`}
+      >
         <Pencil className="size-3.5" aria-hidden="true" />
       </Button>
       <Button
         variant="outline"
         size="sm"
-        className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-        onClick={() => setDeleteTarget(i)}
+        className="min-h-9 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+        onClick={(e) => {
+          e.stopPropagation();
+          setDeleteTarget(i);
+        }}
         aria-label={`Delete ${i.name}`}
       >
         <Trash2 className="size-3.5" aria-hidden="true" />
@@ -483,6 +524,21 @@ export default function InventoryView() {
     ],
     []
   );
+
+  /* ------------------------------- table columns ----------------------------- */
+
+  const columns: DataTableColumn<InventoryItem>[] = [
+    { key: "name", header: "Item" },
+    { key: "category", header: "Category", hideBelow: "md" },
+    { key: "stock", header: "Stock", align: "right" },
+    { key: "min", header: "Min", align: "right", hideBelow: "sm" },
+    { key: "price", header: "Unit price", align: "right", mono: true, hideBelow: "sm" },
+    { key: "location", header: "Location", hideBelow: "lg" },
+    { key: "expiry", header: "Expiry", hideBelow: "md" },
+    { key: "actions", header: "", align: "right", className: "w-32" },
+  ];
+
+  const sheetItem = sheet ? (items.find((x) => x.id === sheet.id) ?? sheet) : null;
 
   /* --------------------------------- render -------------------------------- */
 
@@ -537,18 +593,9 @@ export default function InventoryView() {
         />
       </div>
 
-      {/* list */}
-      <SectionCard
-        title="Stock items"
-        description={`${filtered.length} of ${items.length} item${items.length === 1 ? "" : "s"} shown`}
-        actions={
-          <>
-            <ExportMenu columns={csvColumns} rows={filtered} filename="uar-inventory" disabled={filtered.length === 0} />
-            <ViewSwitcher value={view} onChange={setView} />
-          </>
-        }
-      >
-        <div className="flex flex-wrap items-center gap-2 pb-4">
+      {/* toolbar */}
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full sm:w-64">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -584,6 +631,7 @@ export default function InventoryView() {
           <Button
             variant={lowOnly ? "default" : "outline"}
             size="sm"
+            className="min-h-9"
             onClick={() => {
               setLowOnly((v) => !v);
               setPage(1);
@@ -592,89 +640,186 @@ export default function InventoryView() {
           >
             <AlertTriangle className="size-4" aria-hidden="true" /> Low stock
           </Button>
-          <Button size="sm" className="sm:ml-auto" onClick={openCreate}>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" className="min-h-9" onClick={clearFilters} aria-label="Clear filters">
+              Clear
+            </Button>
+          )}
+          <Button size="sm" className="min-h-9 sm:ml-auto" onClick={openCreate}>
             <Plus className="size-4" aria-hidden="true" /> Add item
           </Button>
         </div>
+        {/* active filter chips */}
+        {hasFilters && (
+          <div className="flex flex-wrap items-center gap-1.5" aria-label="Active filters">
+            {appliedQuery.trim() !== "" && (
+              <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                Search: <strong className="font-semibold text-foreground">{appliedQuery.trim()}</strong>
+              </span>
+            )}
+            {catFilter !== "ALL" && (
+              <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                Category: <strong className="font-semibold text-foreground">{labelOf(mergedCategories, catFilter)}</strong>
+              </span>
+            )}
+            {lowOnly && (
+              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                Low stock only
+              </span>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground" aria-live="polite">
+              {loading ? "Loading…" : `${filtered.length} of ${items.length} item${items.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+        )}
+      </div>
 
-        {loading ? (
-          view === "grid" ? (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
-              {[0, 1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-44 rounded-xl" />
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-2" aria-busy="true">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-12 rounded-lg" />
-              ))}
-            </div>
-          )
-        ) : filtered.length === 0 ? (
-          items.length === 0 ? (
-            <EmptyState
-              icon={<Boxes className="size-8" aria-hidden="true" />}
-              title="Inventory is empty"
-              hint="Add the first stock item — ration kits, pads, medicine or equipment."
-            >
-              <Button onClick={openCreate}>
-                <Plus className="size-4" aria-hidden="true" /> New item
-              </Button>
-            </EmptyState>
-          ) : (
-            <EmptyState
-              icon={<Search className="size-8" aria-hidden="true" />}
-              title="No items match the filters"
-              hint="Try a different search term, category or clear the low-stock filter."
-            >
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setQuery("");
-                  setCatFilter("ALL");
-                  setLowOnly(false);
-                  setPage(1);
-                }}
+      {/* table view */}
+      {view === "table" ? (
+        <DataTable
+          columns={columns}
+          rows={paged}
+          rowKey={(i) => i.id}
+          loading={loading}
+          skeletonRows={8}
+          height="fill"
+          fillOffset={330}
+          onRowClick={openSheet}
+          page={pageSafe}
+          pages={pages}
+          total={filtered.length}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={(n) => {
+            setPageSize(n);
+            setPage(1);
+          }}
+          itemLabel="items"
+          empty={
+            items.length === 0 ? (
+              <EmptyState
+                icon={<Boxes className="size-8" aria-hidden="true" />}
+                title="Inventory is empty"
+                hint="Add the first stock item — ration kits, pads, medicine or equipment."
               >
-                Reset filters
-              </Button>
-            </EmptyState>
-          )
-        ) : view === "grid" ? (
+                <Button onClick={openCreate}>
+                  <Plus className="size-4" aria-hidden="true" /> New item
+                </Button>
+              </EmptyState>
+            ) : (
+              <EmptyState
+                icon={<Search className="size-8" aria-hidden="true" />}
+                title="No items match the filters"
+                hint="Try a different search term, category or clear the low-stock filter."
+              >
+                <Button variant="outline" onClick={clearFilters}>
+                  Reset filters
+                </Button>
+              </EmptyState>
+            )
+          }
+        >
+          {(i, col) => {
+            switch (col.key) {
+              case "name":
+                return (
+                  <div
+                    className={cn(
+                      "min-w-0 border-l-2 py-0.5 pl-2",
+                      isLowStock(i) ? "border-amber-500/70" : "border-transparent"
+                    )}
+                  >
+                    <p className="truncate font-medium">{i.name}</p>
+                    {isLowStock(i) ? (
+                      <StatusBadge tone="warning" className="mt-0.5">
+                        <AlertTriangle className="size-3" aria-hidden="true" /> Low — reorder
+                      </StatusBadge>
+                    ) : null}
+                  </div>
+                );
+              case "category":
+                return <span className="text-sm">{labelOf(mergedCategories, i.category)}</span>;
+              case "stock":
+                return (
+                  <span
+                    className={cn(
+                      "inline-flex items-center justify-end gap-1 font-medium tabular-nums",
+                      isLowStock(i) && "text-amber-700 dark:text-amber-400"
+                    )}
+                  >
+                    {isLowStock(i) && <AlertTriangle className="size-3.5" aria-hidden="true" />}
+                    {i.quantity} {i.unit}
+                  </span>
+                );
+              case "min":
+                return <span className="text-muted-foreground tabular-nums">{i.minStock}</span>;
+              case "price":
+                return <span>{i.pricePerUnit != null ? formatINR(i.pricePerUnit) : "—"}</span>;
+              case "location":
+                return <span className="block max-w-36 truncate text-sm text-muted-foreground">{i.location || "—"}</span>;
+              case "expiry":
+                return expiryChip(i);
+              case "actions":
+                return <div className="flex justify-end gap-1.5">{rowActions(i)}</div>;
+              default:
+                return null;
+            }
+          }}
+        </DataTable>
+      ) : null}
+
+      {/* grid view */}
+      {view === "grid" ? (
+        loading ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-44 rounded-xl" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={<Search className="size-8" aria-hidden="true" />}
+            title="No items match the filters"
+            hint="Try a different search term, category or clear the low-stock filter."
+          >
+            <Button variant="outline" onClick={clearFilters}>
+              Reset filters
+            </Button>
+          </EmptyState>
+        ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((i) => {
+            {paged.map((i) => {
               const pct = stockPct(i);
               return (
                 <div
                   key={i.id}
                   className={cn(
-                    "flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm",
+                    "flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm transition",
                     isLowStock(i) && "border-amber-500/40 bg-amber-500/5"
                   )}
                 >
-                  <div className="flex items-start gap-2">
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left"
-                      onClick={() => openSheet(i)}
-                      aria-label={`Open ${i.name}`}
-                    >
+                  <button
+                    type="button"
+                    className="flex items-start gap-2 text-left"
+                    onClick={() => openSheet(i)}
+                    aria-label={`Open ${i.name}`}
+                  >
+                    <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold leading-tight">{i.name}</p>
                       <p className="truncate text-xs text-muted-foreground">
                         {labelOf(mergedCategories, i.category)} · {i.location || "No location"}
                       </p>
-                    </button>
+                    </div>
                     {isLowStock(i) && (
                       <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
                     )}
-                  </div>
+                  </button>
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-xs">
-                      <span className={cn("font-medium", isLowStock(i) && "text-amber-700 dark:text-amber-400")}>
+                      <span className={cn("font-medium tabular-nums", isLowStock(i) && "text-amber-700 dark:text-amber-400")}>
                         {i.quantity} {i.unit} in stock
                       </span>
-                      <span className="text-muted-foreground">min {i.minStock}</span>
+                      <span className="text-muted-foreground tabular-nums">min {i.minStock}</span>
                     </div>
                     <Progress
                       value={pct}
@@ -683,7 +828,7 @@ export default function InventoryView() {
                     />
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge variant="outline">{i.pricePerUnit != null ? formatINR(i.pricePerUnit) : "No price"}</Badge>
+                    <StatusBadge tone="neutral">{i.pricePerUnit != null ? formatINR(i.pricePerUnit) : "No price"}</StatusBadge>
                     {expiryChip(i)}
                   </div>
                   <div className="mt-auto flex gap-1.5 border-t pt-3">{rowActions(i)}</div>
@@ -691,12 +836,36 @@ export default function InventoryView() {
               );
             })}
           </div>
-        ) : view === "list" ? (
+        )
+      ) : null}
+
+      {/* list view */}
+      {view === "list" ? (
+        loading ? (
+          <div className="space-y-2" aria-busy="true">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-12 rounded-lg" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={<Search className="size-8" aria-hidden="true" />}
+            title="No items match the filters"
+            hint="Try a different search term, category or clear the low-stock filter."
+          >
+            <Button variant="outline" onClick={clearFilters}>
+              Reset filters
+            </Button>
+          </EmptyState>
+        ) : (
           <div className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" role="list" aria-label="Inventory items">
-            {filtered.map((i) => (
+            {paged.map((i) => (
               <div
                 key={i.id}
-                className={cn("flex items-center gap-3 rounded-lg border p-3", isLowStock(i) && "border-amber-500/40 bg-amber-500/5")}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg border p-3",
+                  isLowStock(i) && "border-amber-500/40 bg-amber-500/5"
+                )}
                 role="listitem"
               >
                 <span
@@ -715,129 +884,168 @@ export default function InventoryView() {
                     {i.expiryDate ? ` · exp. ${formatDate(i.expiryDate)}` : ""}
                   </p>
                 </button>
-                <span className="hidden text-xs text-muted-foreground sm:block">min {i.minStock}</span>
-                {stockCell(i)}
+                <span className="hidden text-xs text-muted-foreground tabular-nums sm:block">min {i.minStock}</span>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 text-sm font-medium tabular-nums",
+                    isLowStock(i) && "text-amber-700 dark:text-amber-400"
+                  )}
+                >
+                  {isLowStock(i) && <AlertTriangle className="size-3.5" aria-hidden="true" />}
+                  {i.quantity} {i.unit}
+                </span>
                 {rowActions(i)}
               </div>
             ))}
           </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Stock</TableHead>
-                    <TableHead className="text-right">Min</TableHead>
-                    <TableHead className="text-right">Unit price</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Expiry</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paged.map((i) => (
-                    <TableRow key={i.id} className={cn(isLowStock(i) && "bg-amber-500/5")}>
-                      <TableCell>
-                        <button
-                          type="button"
-                          className="text-left font-medium hover:text-primary"
-                          onClick={() => openSheet(i)}
-                          aria-label={`Open ${i.name}`}
-                        >
-                          {i.name}
-                        </button>
-                        {isLowStock(i) ? (
-                          <span className="block text-xs text-amber-700 dark:text-amber-400">Low stock — reorder</span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>{labelOf(mergedCategories, i.category)}</TableCell>
-                      <TableCell className="text-right">{stockCell(i)}</TableCell>
-                      <TableCell className="text-right text-muted-foreground">{i.minStock}</TableCell>
-                      <TableCell className="text-right">{i.pricePerUnit != null ? formatINR(i.pricePerUnit) : "—"}</TableCell>
-                      <TableCell className="max-w-36 truncate">{i.location || "—"}</TableCell>
-                      <TableCell>{expiryChip(i)}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1.5">{rowActions(i)}</div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-3">
-              <PaginationBar
-                page={pageSafe}
-                pages={pages}
-                total={filtered.length}
-                onPage={setPage}
-                itemLabel="items"
-              />
-              <PageSizeSelect
-                value={pageSize}
-                onChange={(n) => {
-                  setPageSize(n);
-                  setPage(1);
-                }}
-              />
-            </div>
-          </>
-        )}
-      </SectionCard>
+        )
+      ) : null}
+
+      {/* pagination for grid/list (table paginates inside DataTable) */}
+      {view !== "table" && !loading && filtered.length > 0 ? (
+        <PaginationBar
+          page={pageSafe}
+          pages={pages}
+          total={filtered.length}
+          onPage={setPage}
+          itemLabel="items"
+        />
+      ) : null}
 
       {/* ============================== DETAIL SHEET ============================= */}
-      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
-          {sheet && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle>{sheet.name}</SheetTitle>
-                <SheetDescription>{labelOf(mergedCategories, sheet.category)}</SheetDescription>
-              </SheetHeader>
-
-              {isLowStock(sheet) && (
-                <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="size-4" aria-hidden="true" />
-                  At or below minimum stock ({sheet.minStock} {sheet.unit}) — reorder soon.
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <DataField label="In stock" value={`${sheet.quantity} ${sheet.unit}`} />
-                <DataField label="Minimum stock" value={`${sheet.minStock} ${sheet.unit}`} />
-                <DataField label="Price per unit" value={sheet.pricePerUnit != null ? formatINR(sheet.pricePerUnit) : "—"} />
-                <DataField label="Stock value" value={formatINR((sheet.pricePerUnit ?? 0) * sheet.quantity)} />
-                <DataField label="Location" value={sheet.location || "—"} />
-                <DataField label="Expiry" value={sheet.expiryDate ? formatDate(sheet.expiryDate) : "No expiry"} />
+      <DetailSheet
+        open={!!sheetItem}
+        onOpenChange={(o) => !o && setSheet(null)}
+        eyebrow="Inventory"
+        title={sheetItem?.name ?? "Item"}
+        description={sheetItem ? `${labelOf(mergedCategories, sheetItem.category)} · ${sheetItem.location || "No location"}` : ""}
+        status={
+          sheetItem ? (
+            isLowStock(sheetItem) ? (
+              <StatusBadge tone="warning">
+                <AlertTriangle className="size-3" aria-hidden="true" /> Low stock
+              </StatusBadge>
+            ) : (
+              <StatusBadge tone="success">Healthy</StatusBadge>
+            )
+          ) : undefined
+        }
+        actions={
+          sheetItem ? (
+            <>
+              <Button size="sm" onClick={() => openStockIn(sheetItem, isLowStock(sheetItem))}>
+                <PackagePlus className="size-3.5" aria-hidden="true" /> Stock in
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => openEdit(sheetItem)}>
+                <Pencil className="size-3.5" aria-hidden="true" /> Edit
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {sheetItem ? (
+          <>
+            {isLowStock(sheetItem) && (
+              <div
+                className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-800 dark:text-amber-300"
+                role="alert"
+              >
+                <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                At or below minimum stock ({sheetItem.minStock} {sheetItem.unit}) — reorder soon.
               </div>
+            )}
+            {isExpiring(sheetItem) && (
+              <div
+                className="flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-800 dark:text-red-300"
+                role="alert"
+              >
+                <CalendarClock className="size-4 shrink-0" aria-hidden="true" />
+                Expires {formatDate(sheetItem.expiryDate)} — use or discard before hand-out.
+              </div>
+            )}
 
-              {sheet.description ? (
-                <SectionCard title="Description">
-                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.description}</p>
-                </SectionCard>
-              ) : null}
+            <DetailSection title="Stock health" description="Quantity against the reorder minimum.">
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs">
+                  <span className={cn("font-medium tabular-nums", isLowStock(sheetItem) && "text-amber-700 dark:text-amber-400")}>
+                    {sheetItem.quantity} {sheetItem.unit} in stock
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">min {sheetItem.minStock} {sheetItem.unit}</span>
+                </div>
+                <Progress
+                  value={stockPct(sheetItem)}
+                  className={cn("h-2.5", isLowStock(sheetItem) ? "[&>div]:bg-amber-500" : "[&>div]:bg-emerald-600")}
+                  aria-label={`Stock at ${stockPct(sheetItem)}% of healthy level`}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {stockPct(sheetItem)}% of the healthy level (2× minimum) ·{" "}
+                  {restockQty(sheetItem)} {sheetItem.unit} would restore it.
+                </p>
+              </div>
+              <DetailGrid cols={2} className="mt-4">
+                <DataField label="In stock" value={`${sheetItem.quantity} ${sheetItem.unit}`} />
+                <DataField label="Minimum stock" value={`${sheetItem.minStock} ${sheetItem.unit}`} />
+                <DataField label="Price per unit" value={sheetItem.pricePerUnit != null ? formatINR(sheetItem.pricePerUnit) : ""} mono />
+                <DataField label="Stock value" value={formatINR((sheetItem.pricePerUnit ?? 0) * sheetItem.quantity)} mono />
+                <DataField label="Location" value={sheetItem.location} />
+                <DataField
+                  label="Expiry"
+                  value={sheetItem.expiryDate ? formatDate(sheetItem.expiryDate) : ""}
+                />
+              </DetailGrid>
+            </DetailSection>
 
-              <SectionCard title="Purchase history" description="Stock-ins recorded against this item.">
+            {sheetItem.description ? (
+              <DetailSection title="Description">
+                <p className="text-sm leading-relaxed text-muted-foreground">{sheetItem.description}</p>
+              </DetailSection>
+            ) : null}
+
+            <DetailSection
+              title="Movement quick-stats"
+              description="Live stock position and recorded stock-ins for this item."
+            >
+              <DetailGrid cols={2}>
+                <DataField
+                  label="Health"
+                  icon={<Gauge className="size-3" aria-hidden="true" />}
+                  value={
+                    <StatusBadge tone={isLowStock(sheetItem) ? "warning" : "success"}>
+                      {stockPct(sheetItem)}% of healthy level
+                    </StatusBadge>
+                  }
+                />
+                <DataField label="Units to healthy" value={`${restockQty(sheetItem)} ${sheetItem.unit}`} />
+                <DataField
+                  label="Expiry state"
+                  value={
+                    sheetItem.expiryDate ? (
+                      <StatusBadge tone={isExpiring(sheetItem) ? "danger" : "neutral"}>
+                        {isExpiring(sheetItem) ? `Expires in ${daysToExpiry(sheetItem)} day${(daysToExpiry(sheetItem) ?? 0) === 1 ? "" : "s"}` : "Not near expiry"}
+                      </StatusBadge>
+                    ) : (
+                      "No expiry tracked"
+                    )
+                  }
+                />
+                <DataField label="Stock-ins recorded" value={purchases === null ? "" : String(purchases.length)} />
+              </DetailGrid>
+              <div className="mt-4">
                 {purchases === null ? (
                   <div className="space-y-2" aria-busy="true">
                     <Skeleton className="h-9 rounded-lg" />
                     <Skeleton className="h-9 rounded-lg" />
                   </div>
                 ) : purchases.length === 0 ? (
-                  <div>
-                    <DataField label="Purchases" value="—" />
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      The inventory API doesn&apos;t return purchase records yet — stock-ins are applied as direct
-                      quantity updates and supplier/invoice notes land in the activity log.
-                    </p>
-                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The inventory API doesn&apos;t return purchase records yet — stock-ins are applied as
+                    direct quantity updates and supplier/invoice notes land in the activity log.
+                  </p>
                 ) : (
-                  <ul className="max-h-56 space-y-1.5 overflow-y-auto text-sm scrollbar-thin">
+                  <ul className="max-h-56 space-y-1.5 overflow-y-auto text-sm scrollbar-thin" aria-label="Stock-in history">
                     {purchases.map((p) => (
                       <li key={p.id} className="rounded-md bg-muted/50 px-2.5 py-1.5">
-                        <span className="font-medium">+{p.quantity}</span>
+                        <span className="font-medium tabular-nums">+{p.quantity}</span>
                         {p.pricePerUnit != null ? ` @ ${formatINR(p.pricePerUnit)}` : ""}
                         {p.supplier ? ` · ${p.supplier}` : ""}
                         {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ""}
@@ -848,40 +1056,50 @@ export default function InventoryView() {
                     ))}
                   </ul>
                 )}
-              </SectionCard>
+              </div>
+            </DetailSection>
 
-              <div className="flex flex-wrap gap-2 border-t pt-4">
-                <Button size="sm" onClick={() => openStockIn(sheet)}>
-                  <PackagePlus className="size-3.5" aria-hidden="true" /> Stock in
+            <DetailSection title="Manage">
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => openStockIn(sheetItem, isLowStock(sheetItem))}>
+                  <PackagePlus className="size-4" aria-hidden="true" /> Stock in
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
-                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+                <Button variant="outline" onClick={() => openEdit(sheetItem)}>
+                  <Pencil className="size-4" aria-hidden="true" /> Edit item
                 </Button>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                  onClick={() => setDeleteTarget(sheet)}
+                  className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                  onClick={() => setDeleteTarget(sheetItem)}
                 >
-                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+                  <Trash2 className="size-4" aria-hidden="true" /> Delete
                 </Button>
               </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            </DetailSection>
+          </>
+        ) : null}
+      </DetailSheet>
 
       {/* ============================ STOCK-IN FORMSHEET ========================== */}
       <FormSheet
         open={!!stockTarget}
-        onOpenChange={(o) => !o && setStockTarget(null)}
+        onOpenChange={(o) => {
+          if (!o && !addingStock) setStockTarget(null);
+        }}
         title={`Stock in — ${stockTarget?.name ?? ""}`}
         description={`Currently ${stockTarget?.quantity ?? 0} ${stockTarget?.unit ?? ""} in stock. The quantity is added immediately.`}
         onSubmit={addStock}
         submitLabel="Add stock"
         loading={addingStock}
-        dirty={stockForm.quantity.trim() !== "" || stockForm.supplier.trim() !== "" || stockForm.invoiceNumber.trim() !== ""}
+        dirty={stockDirty}
         size="sm"
+        badge={
+          stockTarget && isLowStock(stockTarget) ? (
+            <StatusBadge tone="warning">
+              <AlertTriangle className="size-3" aria-hidden="true" /> Low stock
+            </StatusBadge>
+          ) : undefined
+        }
       >
         <FormSection title="Stock in" description="Supplier and invoice are noted in the activity log.">
           <FieldGrid>
@@ -893,6 +1111,11 @@ export default function InventoryView() {
               value={stockForm.quantity}
               onChange={(v) => setStockForm({ ...stockForm, quantity: v })}
               placeholder="50"
+              hint={
+                stockTarget && isLowStock(stockTarget)
+                  ? `Prefilled to restore healthy level (${restockQty(stockTarget)} ${stockTarget.unit}).`
+                  : undefined
+              }
             />
             <TextField
               label="Price per unit (₹)"
@@ -924,67 +1147,57 @@ export default function InventoryView() {
       {/* ============================ ITEM FORMSHEET ============================= */}
       <FormSheet
         open={formOpen}
-        onOpenChange={setFormOpen}
+        onOpenChange={(o) => {
+          if (!o && !saving) setFormOpen(false);
+        }}
         title={editing ? `Edit ${editing.name}` : "New inventory item"}
         description="Categories and units come from the Masters (MDM) registry."
         onSubmit={save}
         submitLabel={editing ? "Save changes" : "Add item"}
         loading={saving}
-        dirty={formTouched}
-        size="md"
+        dirty={formDirty}
+        size="lg"
       >
         <FormSection title="Item" description="Identity and storage details.">
-          <TextField
-            label="Name"
-            required
-            value={form.name}
-            onChange={(v) => {
-              setForm({ ...form, name: v });
-              setFormTouched(true);
-            }}
-            placeholder="Rice (5 kg bags)"
-          />
           <FieldGrid>
+            <TextField
+              label="Name"
+              required
+              value={form.name}
+              onChange={(v) => setForm({ ...form, name: v })}
+              error={errors.name}
+              placeholder="Rice (5 kg bags)"
+            />
             <SelectField
               label="Category"
               value={form.category}
               onChange={(v) => {
-                setForm({ ...form, category: v });
-                setFormTouched(true);
+                setForm({ ...form, category: v, expiryDate: isPerishable(v) ? form.expiryDate : "" });
               }}
               options={mergedCategories}
             />
             <SelectField
               label="Unit"
               value={form.unit}
-              onChange={(v) => {
-                setForm({ ...form, unit: v });
-                setFormTouched(true);
-              }}
+              onChange={(v) => setForm({ ...form, unit: v })}
               options={mergedUnits}
             />
+            <TextField
+              label="Location"
+              value={form.location}
+              onChange={(v) => setForm({ ...form, location: v })}
+              placeholder="Main godown — Rack B2"
+            />
           </FieldGrid>
-          <TextField
-            label="Location"
-            value={form.location}
-            onChange={(v) => {
-              setForm({ ...form, location: v });
-              setFormTouched(true);
-            }}
-            placeholder="Main godown — Rack B2"
-          />
           <TextareaField
             label="Description"
             rows={2}
             value={form.description}
-            onChange={(v) => {
-              setForm({ ...form, description: v });
-              setFormTouched(true);
-            }}
+            onChange={(v) => setForm({ ...form, description: v })}
           />
         </FormSection>
 
-        <FormSection title="Stock" description="Quantity, reorder level, pricing and expiry.">
+        <FormSection title="Stock" description="Quantity, reorder level and pricing.">
           <FieldGrid>
             <TextField
               label="Quantity"
@@ -992,10 +1205,8 @@ export default function InventoryView() {
               type="number"
               min="0"
               value={form.quantity}
-              onChange={(v) => {
-                setForm({ ...form, quantity: v });
-                setFormTouched(true);
-              }}
+              onChange={(v) => setForm({ ...form, quantity: v })}
+              error={errors.quantity}
             />
             <TextField
               label="Minimum stock"
@@ -1003,38 +1214,43 @@ export default function InventoryView() {
               type="number"
               min="0"
               value={form.minStock}
-              onChange={(v) => {
-                setForm({ ...form, minStock: v });
-                setFormTouched(true);
-              }}
+              onChange={(v) => setForm({ ...form, minStock: v })}
+              error={errors.minStock}
               hint="Low-stock alert fires when quantity ≤ this."
             />
-          </FieldGrid>
-          <FieldGrid>
             <TextField
               label="Price per unit (₹)"
               prefix="₹"
               type="number"
               min="0"
               value={form.pricePerUnit}
-              onChange={(v) => {
-                setForm({ ...form, pricePerUnit: v });
-                setFormTouched(true);
-              }}
+              onChange={(v) => setForm({ ...form, pricePerUnit: v })}
+              error={errors.pricePerUnit}
               placeholder="Optional"
             />
+          </FieldGrid>
+        </FormSection>
+
+        {isPerishable(form.category) ? (
+          <FormSection
+            title="Expiry"
+            description="Perishable categories (food, pads, medicine, feed) are monitored for expiry."
+          >
             <TextField
               label="Expiry date"
               type="date"
               value={form.expiryDate}
-              onChange={(v) => {
-                setForm({ ...form, expiryDate: v });
-                setFormTouched(true);
-              }}
+              onChange={(v) => setForm({ ...form, expiryDate: v })}
+              error={errors.expiryDate}
               hint="Expiring items are flagged within 30 days."
             />
-          </FieldGrid>
-        </FormSection>
+          </FormSection>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No expiry tracking for “{labelOf(mergedCategories, form.category)}” — expiry applies to
+            perishable categories only.
+          </p>
+        )}
       </FormSheet>
 
       {/* ============================ DELETE CONFIRM ============================ */}
@@ -1045,7 +1261,6 @@ export default function InventoryView() {
         recordName={deleteTarget ? `${deleteTarget.name} · ${deleteTarget.quantity} ${deleteTarget.unit}` : null}
         description="The item and its purchase history are removed permanently."
         confirmLabel="Delete item"
-        loading={false}
         onConfirm={remove}
       />
     </div>

@@ -1,22 +1,24 @@
 "use client";
 
 /**
- * Donations — premium admin ledger.
+ * Donations — premium admin ledger (round-5 design system).
  *
  * - StatCards: FY collected (server completedSum), all-time count, pending,
  *   refunded total
  * - Server-side pagination + filters (status/type/category/method/date-range)
- *   + debounced search over name / email / receipt / txn
- * - Table / Grid / List layouts (preference persisted via useViewPref)
- * - Detail sheet (donor, payment, receipt + 80G note, refund, notes, campaign)
- * - Record/Edit FormSheet with rule-factory validation and dirty tracking
+ *   + debounced search over name / email / receipt / txn, with active-filter
+ *   chips, clear-all and a live result count in one toolbar row
+ * - Table view = DataTable (height="fill", sticky header, skeleton rows,
+ *   built-in premium pager); grid/list persist via useViewPref
+ * - Full-screen DetailSheet (eyebrow, status chip, 80G + Edit header actions)
+ *   showing every Donation field; Record/Edit FormSheet (lg) with rule-factory
+ *   validation and dirty tracking
  * - Refund (FormSheet sm + ConfirmDialog), Delete (ConfirmDialog), CSV export
  */
 
 import { useEffect, useMemo, useState } from "react";
 import {
   Clock3,
-  CreditCard,
   ExternalLink,
   Eye,
   IndianRupee,
@@ -27,9 +29,7 @@ import {
   ReceiptText,
   RotateCcw,
   Search,
-  StickyNote,
   Trash2,
-  UserRound,
   UserX,
   X,
 } from "lucide-react";
@@ -59,6 +59,12 @@ import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { DataField } from "@/components/shared/data-field";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import { FormSheet } from "@/components/shared/form-sheet";
 import {
   FieldGrid,
@@ -71,8 +77,8 @@ import {
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
 import {
-  PageSizeSelect,
   PaginationBar,
+  PageSizeSelect,
   ViewSwitcher,
   useViewPref,
   type DataViewMode,
@@ -96,14 +102,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ------------------------------- types ------------------------------------ */
 
@@ -409,7 +407,7 @@ function RowActions({
   );
 }
 
-function ListSkeleton({ mode }: { mode: DataViewMode }) {
+function ListSkeleton({ mode }: { mode: "grid" | "list" }) {
   if (mode === "grid") {
     return (
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -419,19 +417,10 @@ function ListSkeleton({ mode }: { mode: DataViewMode }) {
       </div>
     );
   }
-  if (mode === "list") {
-    return (
-      <div className="flex flex-col gap-2">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Skeleton key={i} className="h-14 rounded-lg" />
-        ))}
-      </div>
-    );
-  }
   return (
     <div className="flex flex-col gap-2">
-      {Array.from({ length: 7 }).map((_, i) => (
-        <Skeleton key={i} className="h-12 rounded-lg" />
+      {Array.from({ length: 8 }).map((_, i) => (
+        <Skeleton key={i} className="h-14 rounded-lg" />
       ))}
     </div>
   );
@@ -459,95 +448,147 @@ function DetailSkeleton() {
 
 function DetailContent({ d }: { d: DonationRow }) {
   const cashOverLimit = d.paymentMethod === "CASH" && Number(d.amount) > 2000;
-  const canOpenReceipt = Boolean(d.receiptNumber) && d.paymentStatus === "COMPLETED";
   const hasRefund =
     Number(d.refundAmount ?? 0) > 0 ||
     d.paymentStatus === "REFUNDED" ||
     Boolean(d.refundReason);
 
-  const openReceipt = () => {
-    if (!d.receiptNumber) return;
-    window.open(`/api/receipts/${d.receiptNumber}/html`, "_blank", "noopener,noreferrer");
-  };
-
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       {/* Donor */}
-      <SectionCard
+      <DetailSection
         title="Donor"
-        icon={<UserRound className="size-4" />}
-        bodyClassName="grid gap-4 sm:grid-cols-2"
+        description="Identity used on the receipt and in the donor CRM."
+        actions={
+          d.donorRef ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/admin/donors")}
+            >
+              Open donor CRM
+            </Button>
+          ) : undefined
+        }
       >
-        <DataField label="Name" value={d.isAnonymous ? `${d.donorName} (anonymous)` : d.donorName} />
-        <DataField label="Email" value={d.donorEmail} copy />
-        <DataField label="Phone" value={d.donorPhone ?? ""} />
-        <DataField label="PAN" value={d.pan ?? ""} mono copy />
-        <DataField
-          label="Anonymous"
-          value={d.isAnonymous ? "Yes" : "No"}
-        />
-        <DataField label="Donor message" value={d.message ?? ""} />
-      </SectionCard>
+        <DetailGrid cols={2}>
+          <DataField
+            label="Donor name"
+            value={d.isAnonymous ? `${d.donorName} (anonymous)` : d.donorName}
+          />
+          <DataField label="Email" value={d.donorEmail} copy />
+          <DataField label="Phone" value={d.donorPhone ?? ""} />
+          <DataField label="PAN" value={d.pan ?? ""} mono copy />
+          <DataField label="Anonymous" value={d.isAnonymous ? "Yes" : "No"} />
+          <DataField
+            label="Donor CRM profile"
+            value={
+              d.donorRef
+                ? d.donorRef.category
+                  ? `Linked · ${humanize(d.donorRef.category)}`
+                  : "Linked"
+                : "Not linked"
+            }
+          />
+          <DataField
+            label="Donor message"
+            value={d.message ?? ""}
+            className="sm:col-span-2"
+          />
+        </DetailGrid>
+      </DetailSection>
+
+      {/* Gift */}
+      <DetailSection
+        title="Gift"
+        description="What was given and which fund it supports."
+        actions={
+          d.campaignId ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/admin/campaigns")}
+            >
+              <ExternalLink className="size-4" /> Open campaigns
+            </Button>
+          ) : undefined
+        }
+      >
+        <DetailGrid cols={2}>
+          <DataField label="Amount" value={formatINR(d.amount)} />
+          <DataField label="Currency" value={d.currency || "INR"} />
+          <DataField
+            label="Type"
+            value={
+              d.type === "RECURRING"
+                ? `Recurring${d.recurringFrequency ? ` · ${titleCase(d.recurringFrequency)}` : ""}`
+                : "One-time"
+            }
+          />
+          <DataField
+            label="Category"
+            value={CATEGORY_LABEL[d.category] ?? titleCase(d.category)}
+          />
+          <DataField
+            label="Campaign"
+            value={d.campaign?.title ?? "General fund (not linked)"}
+          />
+          {d.type === "RECURRING" ? (
+            <DataField label="Next charge at" value={formatDate(d.nextChargeAt)} />
+          ) : null}
+        </DetailGrid>
+      </DetailSection>
 
       {/* Payment */}
-      <SectionCard
-        title="Payment"
-        icon={<CreditCard className="size-4" />}
-        bodyClassName="grid gap-4 sm:grid-cols-2"
-      >
-        <DataField label="Amount" value={formatINR(d.amount)} />
-        <DataField
-          label="Status"
-          value={<StatusBadge status={d.paymentStatus} />}
-        />
-        <DataField
-          label="Method"
-          value={`${METHOD_LABEL[d.paymentMethod] ?? titleCase(d.paymentMethod)}${
-            d.paymentProvider ? ` · ${titleCase(d.paymentProvider)}` : ""
-          }`}
-        />
-        <DataField
-          label="Type"
-          value={
-            d.type === "RECURRING"
-              ? `Recurring${d.recurringFrequency ? ` · ${titleCase(d.recurringFrequency)}` : ""}`
-              : "One-time"
-          }
-        />
-        <DataField label="Transaction ID" value={d.transactionId ?? ""} mono copy />
-        <DataField label="Gateway order ID" value={d.gatewayOrderId ?? ""} mono copy />
-        <DataField label="Gateway fees" value={d.fees != null ? formatINR(d.fees) : "—"} />
-        <DataField
-          label="Net amount"
-          value={d.netAmount != null ? formatINR(d.netAmount) : "—"}
-        />
-        <DataField label="Settlement date" value={formatDate(d.settlementDate)} />
-        {d.type === "RECURRING" ? (
-          <DataField label="Next charge at" value={formatDate(d.nextChargeAt)} />
-        ) : null}
-      </SectionCard>
+      <DetailSection title="Payment">
+        <DetailGrid cols={2}>
+          <DataField label="Payment status" value={<StatusBadge status={d.paymentStatus} />} />
+          <DataField
+            label="Method"
+            value={`${METHOD_LABEL[d.paymentMethod] ?? titleCase(d.paymentMethod)}${
+              d.paymentProvider ? ` · ${titleCase(d.paymentProvider)}` : ""
+            }`}
+          />
+          <DataField label="Transaction ID" value={d.transactionId ?? ""} mono copy />
+          <DataField label="Gateway order ID" value={d.gatewayOrderId ?? ""} mono copy />
+          <DataField
+            label="Gateway fees"
+            value={d.fees != null ? formatINR(d.fees) : ""}
+          />
+          <DataField
+            label="Net amount"
+            value={d.netAmount != null ? formatINR(d.netAmount) : ""}
+          />
+          <DataField label="Settlement date" value={formatDate(d.settlementDate)} />
+        </DetailGrid>
+      </DetailSection>
 
       {/* Receipt + 80G */}
-      <SectionCard
+      <DetailSection
         title="Receipt & 80G"
-        icon={<ReceiptText className="size-4" />}
+        description="Receipts open as print-ready A4 documents."
         actions={
-          canOpenReceipt ? (
-            <Button type="button" variant="outline" size="sm" onClick={openReceipt}>
+          d.receiptNumber && d.paymentStatus === "COMPLETED" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                window.open(`/api/receipts/${d.receiptNumber}/html`, "_blank", "noopener,noreferrer")
+              }
+            >
               <ExternalLink className="size-4" /> Open 80G receipt
             </Button>
           ) : undefined
         }
-        bodyClassName="flex flex-col gap-4"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
+        <DetailGrid cols={2}>
           <DataField label="Receipt number" value={d.receiptNumber} mono copy />
-          <DataField
-            label="Receipt status"
-            value={<StatusBadge status={d.receiptStatus} />}
-          />
+          <DataField label="Receipt status" value={<StatusBadge status={d.receiptStatus} />} />
           <DataField label="Issued at" value={formatDateTime(d.receiptIssuedAt)} />
-        </div>
+        </DetailGrid>
         {cashOverLimit ? (
           <p
             role="note"
@@ -574,53 +615,44 @@ function DetailContent({ d }: { d: DonationRow }) {
             Completed.
           </p>
         )}
-      </SectionCard>
+      </DetailSection>
 
       {/* Refund */}
       {hasRefund ? (
-        <SectionCard
-          title="Refund"
-          icon={<RotateCcw className="size-4" />}
-          bodyClassName="grid gap-4 sm:grid-cols-2"
-        >
-          <DataField
-            label="Refund amount"
-            value={d.refundAmount != null ? formatINR(d.refundAmount) : "—"}
-          />
-          <DataField label="Refunded at" value={formatDateTime(d.refundedAt)} />
-          <DataField label="Reason" value={d.refundReason ?? ""} className="sm:col-span-2" />
-        </SectionCard>
+        <DetailSection title="Refund">
+          <DetailGrid cols={2}>
+            <DataField
+              label="Refund amount"
+              value={d.refundAmount != null ? formatINR(d.refundAmount) : ""}
+            />
+            <DataField label="Refunded at" value={formatDateTime(d.refundedAt)} />
+            <DataField
+              label="Refund reason"
+              value={d.refundReason ?? ""}
+              className="sm:col-span-2"
+            />
+          </DetailGrid>
+        </DetailSection>
       ) : null}
 
-      {/* Campaign */}
-      <SectionCard
-        title="Campaign"
-        icon={<Megaphone className="size-4" />}
-        actions={
-          d.campaignId ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate("/admin/campaigns")}
-            >
-              <ExternalLink className="size-4" /> Open campaigns
-            </Button>
-          ) : undefined
-        }
-      >
-        <DataField
-          label="Linked campaign"
-          value={d.campaign?.title ?? "General fund (not linked)"}
-        />
-      </SectionCard>
-
       {/* Internal notes */}
-      <SectionCard title="Internal notes" icon={<StickyNote className="size-4" />}>
+      <DetailSection
+        title="Internal notes"
+        description="Never shown to donors."
+      >
         <p className="min-h-10 whitespace-pre-wrap rounded-lg border bg-muted/30 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
           {d.internalNotes || "—"}
         </p>
-      </SectionCard>
+      </DetailSection>
+
+      {/* Record */}
+      <DetailSection title="Record">
+        <DetailGrid cols={2}>
+          <DataField label="Donation ID" value={d.id} mono copy />
+          <DataField label="Created" value={formatDateTime(d.createdAt)} />
+          <DataField label="Last updated" value={formatDateTime(d.updatedAt)} />
+        </DetailGrid>
+      </DetailSection>
     </div>
   );
 }
@@ -1043,6 +1075,123 @@ export default function DonationsView() {
     setPage(1);
   };
 
+  /* ---------------------------- table + toolbar ---------------------------- */
+
+  const filterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (q) filterChips.push({ key: "q", label: `“${q}”`, clear: () => setSearch("") });
+  if (status !== "ALL")
+    filterChips.push({ key: "status", label: humanize(status), clear: () => setStatus("ALL") });
+  if (type !== "ALL")
+    filterChips.push({ key: "type", label: humanize(type), clear: () => setType("ALL") });
+  if (category !== "ALL")
+    filterChips.push({
+      key: "category",
+      label: CATEGORY_LABEL[category] ?? titleCase(category),
+      clear: () => setCategory("ALL"),
+    });
+  if (method !== "ALL")
+    filterChips.push({
+      key: "method",
+      label: METHOD_LABEL[method] ?? titleCase(method),
+      clear: () => setMethod("ALL"),
+    });
+  if (from)
+    filterChips.push({ key: "from", label: `From ${formatDate(from)}`, clear: () => setFrom("") });
+  if (to) filterChips.push({ key: "to", label: `To ${formatDate(to)}`, clear: () => setTo("") });
+
+  const emptyNode = (
+    <EmptyState
+      icon={<ReceiptText className="size-6" />}
+      title={hasFilters ? "No donations match your filters" : "No donations recorded yet"}
+      hint={
+        hasFilters
+          ? "Try widening the date range or clearing the filters below."
+          : "Record the first gift — online or offline — to start the ledger."
+      }
+    >
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {hasFilters ? (
+          <Button variant="outline" size="sm" onClick={clearFilters}>
+            <X className="size-4" /> Clear filters
+          </Button>
+        ) : null}
+        <Button size="sm" onClick={openCreate}>
+          <Plus className="size-4" /> Record donation
+        </Button>
+      </div>
+    </EmptyState>
+  );
+
+  const donationColumns: DataTableColumn<DonationRow>[] = [
+    { key: "receiptNumber", header: "Receipt #", mono: true },
+    { key: "donor", header: "Donor" },
+    { key: "amount", header: "Amount", align: "right", mono: true, className: "font-semibold" },
+    { key: "type", header: "Type", hideBelow: "md" },
+    { key: "category", header: "Category", hideBelow: "lg" },
+    { key: "method", header: "Method", hideBelow: "lg" },
+    { key: "status", header: "Status" },
+    { key: "date", header: "Date", hideBelow: "md" },
+    { key: "campaign", header: "Campaign", hideBelow: "lg" },
+    { key: "actions", header: <span className="sr-only">Actions</span>, align: "right" },
+  ];
+
+  const renderDonationCell = (d: DonationRow, col: DataTableColumn<DonationRow>) => {
+    switch (col.key) {
+      case "receiptNumber":
+        return d.receiptNumber;
+      case "donor":
+        return (
+          <div className="flex max-w-[220px] flex-col">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span className="truncate">{d.donorName}</span>
+              {d.isAnonymous ? (
+                <span className="flex shrink-0 items-center gap-0.5 rounded-full border bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+                  <UserX className="size-3" aria-hidden="true" /> Anon
+                </span>
+              ) : null}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">{d.donorEmail}</span>
+          </div>
+        );
+      case "amount":
+        return formatINR(d.amount);
+      case "type":
+        return <span className="text-xs">{humanize(d.type)}</span>;
+      case "category":
+        return <span className="text-xs">{CATEGORY_LABEL[d.category] ?? titleCase(d.category)}</span>;
+      case "method":
+        return (
+          <span className="text-xs">
+            {METHOD_LABEL[d.paymentMethod] ?? titleCase(d.paymentMethod)}
+          </span>
+        );
+      case "status":
+        return <StatusBadge status={d.paymentStatus} />;
+      case "date":
+        return <span className="text-xs">{formatDate(d.createdAt)}</span>;
+      case "campaign":
+        return (
+          <span className="block max-w-[160px] truncate text-xs text-muted-foreground">
+            {d.campaign?.title ?? "General fund"}
+          </span>
+        );
+      case "actions":
+        return (
+          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+            <RowActions
+              row={d}
+              onView={() => openDetail(d)}
+              onEdit={() => openEdit(d)}
+              onRefund={() => openRefund(d)}
+              onDelete={() => askDelete(d)}
+            />
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   /* -------------------------------- render -------------------------------- */
 
   return (
@@ -1239,121 +1388,63 @@ export default function DonationsView() {
             className="h-8 w-[140px] text-xs"
           />
 
+          {filterChips.map((chip) => (
+            <Badge key={chip.key} variant="outline" className="gap-1 pr-1 text-xs font-medium">
+              {chip.label}
+              <button
+                type="button"
+                aria-label={`Clear ${chip.label} filter`}
+                onClick={chip.clear}
+                className="rounded-full p-0.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="size-3" aria-hidden="true" />
+              </button>
+            </Badge>
+          ))}
+
           {hasFilters ? (
             <Button variant="ghost" size="sm" onClick={clearFilters} aria-label="Clear all filters">
-              <X className="size-4" /> Clear
+              <X className="size-4" /> Clear all
             </Button>
           ) : null}
 
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="size-4" /> Record
-          </Button>
+          <span
+            className="ml-auto text-xs tabular-nums text-muted-foreground"
+            aria-live="polite"
+          >
+            {loading ? "Loading…" : `${total} result${total === 1 ? "" : "s"}`}
+          </span>
         </div>
 
         {/* Content */}
-        {loading ? (
+        {view === "table" ? (
+          <DataTable
+            columns={donationColumns}
+            rows={items}
+            rowKey={(d) => d.id}
+            loading={loading}
+            skeletonRows={9}
+            height="fill"
+            fillOffset={520}
+            onRowClick={openDetail}
+            page={page}
+            pages={pages}
+            total={total}
+            pageSize={limit}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setLimit(n);
+              setPage(1);
+            }}
+            itemLabel="donations"
+            empty={emptyNode}
+          >
+            {renderDonationCell}
+          </DataTable>
+        ) : loading ? (
           <ListSkeleton mode={view} />
         ) : items.length === 0 ? (
-          <EmptyState
-            icon={<ReceiptText className="size-6" />}
-            title={hasFilters ? "No donations match your filters" : "No donations recorded yet"}
-            hint={
-              hasFilters
-                ? "Try widening the date range or clearing the filters below."
-                : "Record the first gift — online or offline — to start the ledger."
-            }
-          >
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {hasFilters ? (
-                <Button variant="outline" size="sm" onClick={clearFilters}>
-                  <X className="size-4" /> Clear filters
-                </Button>
-              ) : null}
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="size-4" /> Record donation
-              </Button>
-            </div>
-          </EmptyState>
-        ) : view === "table" ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50 hover:bg-muted/50">
-                  <TableHead>Receipt #</TableHead>
-                  <TableHead>Donor</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Campaign</TableHead>
-                  <TableHead className="w-12 text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((d) => (
-                  <TableRow
-                    key={d.id}
-                    onClick={() => openDetail(d)}
-                    className="cursor-pointer"
-                  >
-                    <TableCell className="whitespace-nowrap font-mono text-xs">
-                      {d.receiptNumber}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex max-w-[220px] flex-col">
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <span className="truncate">{d.donorName}</span>
-                          {d.isAnonymous ? (
-                            <span className="flex shrink-0 items-center gap-0.5 rounded-full border bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
-                              <UserX className="size-3" aria-hidden="true" /> Anonymous
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="truncate text-xs text-muted-foreground">
-                          {d.donorEmail}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">
-                      {formatINR(d.amount)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {humanize(d.type)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {CATEGORY_LABEL[d.category] ?? titleCase(d.category)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {METHOD_LABEL[d.paymentMethod] ?? titleCase(d.paymentMethod)}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={d.paymentStatus} />
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDate(d.createdAt)}
-                    </TableCell>
-                    <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
-                      {d.campaign?.title ?? "General fund"}
-                    </TableCell>
-                    <TableCell
-                      className="text-right"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <RowActions
-                        row={d}
-                        onView={() => openDetail(d)}
-                        onEdit={() => openEdit(d)}
-                        onRefund={() => openRefund(d)}
-                        onDelete={() => askDelete(d)}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          emptyNode
         ) : view === "grid" ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {items.map((d) => (
@@ -1479,8 +1570,8 @@ export default function DonationsView() {
           </div>
         )}
 
-        {/* Pagination */}
-        {!loading && items.length > 0 ? (
+        {/* Pagination (grid / list — the DataTable pager covers the table view) */}
+        {view !== "table" && !loading && items.length > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
             <PaginationBar
               page={page}
@@ -1500,26 +1591,46 @@ export default function DonationsView() {
         ) : null}
       </SectionCard>
 
-      {/* Detail sheet */}
-      <FormSheet
+      {/* Detail sheet — full-screen, all Donation fields */}
+      <DetailSheet
         open={detailOpen}
         onOpenChange={setDetailOpen}
-        size="lg"
-        title={
-          detail?.receiptNumber ? `Donation · ${detail.receiptNumber}` : "Donation detail"
-        }
+        eyebrow="Donations"
+        title={detail?.receiptNumber ?? "Donation detail"}
         description={
           detail
-            ? `${detail.isAnonymous ? "Anonymous donor" : detail.donorName} · recorded ${formatDateTime(detail.createdAt)}`
+            ? `${detail.isAnonymous ? "Anonymous donor" : detail.donorName} · ${detail.donorEmail} · recorded ${formatDateTime(detail.createdAt)}`
             : "Loading donation…"
         }
+        status={detail ? <StatusBadge status={detail.paymentStatus} /> : undefined}
+        loading={detailLoading && !detail}
+        actions={
+          detail ? (
+            <>
+              {detail.receiptNumber && detail.paymentStatus === "COMPLETED" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    window.open(
+                      `/api/receipts/${detail.receiptNumber}/html`,
+                      "_blank",
+                      "noopener,noreferrer"
+                    )
+                  }
+                >
+                  <ExternalLink className="size-4" /> 80G receipt
+                </Button>
+              ) : null}
+              <Button size="sm" onClick={() => openEdit(detail)}>
+                <Pencil className="size-4" /> Edit
+              </Button>
+            </>
+          ) : undefined
+        }
       >
-        {detail && !detailLoading ? (
-          <DetailContent d={detail} />
-        ) : (
-          <DetailSkeleton />
-        )}
-      </FormSheet>
+        {detail && !detailLoading ? <DetailContent d={detail} /> : <DetailSkeleton />}
+      </DetailSheet>
 
       {/* Record / Edit form */}
       <FormSheet

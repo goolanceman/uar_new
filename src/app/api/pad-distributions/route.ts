@@ -11,26 +11,73 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET /api/pad-distributions?q= (auth)
+function parseFrom(sp: URLSearchParams): Date | undefined {
+  const raw = sp.get("from")?.trim();
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+function parseTo(sp: URLSearchParams): Date | undefined {
+  const raw = sp.get("to")?.trim();
+  if (!raw) return undefined;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T23:59:59.999` : raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+function buildWhere(sp: URLSearchParams): Prisma.PadDistributionWhereInput {
+  const where: Prisma.PadDistributionWhereInput = {};
+
+  const q = sp.get("q")?.trim();
+  if (q)
+    where.OR = [
+      { schoolName: { contains: q } },
+      { area: { contains: q } },
+      { volunteerName: { contains: q } },
+      { notes: { contains: q } },
+    ];
+
+  const session = sp.get("session");
+  if (session === "1") where.awarenessSession = true;
+  else if (session === "0") where.awarenessSession = false;
+
+  const from = parseFrom(sp);
+  const to = parseTo(sp);
+  if (from || to)
+    where.distributionDate = {
+      ...(from ? { gte: from } : {}),
+      ...(to ? { lte: to } : {}),
+    };
+
+  const volunteerId = sp.get("volunteerId")?.trim();
+  if (volunteerId) where.volunteerId = volunteerId;
+
+  return where;
+}
+
+// GET /api/pad-distributions
+//   ?q= &session=1|0 &from= &to= &volunteerId= &limit= &offset= &withTotals=1   (auth)
+// Default = raw array (legacy). withTotals=1 → {items,total,sumPads,sumGirls,…}
 export async function GET(req: Request) {
   try {
     await requireAuth();
     const sp = new URL(req.url).searchParams;
-    const q = sp.get("q")?.trim() || undefined;
+    const where = buildWhere(sp);
+    const limit = Math.min(500, Math.max(1, Math.trunc(Number(sp.get("limit")) || 100)));
+    const offset = Math.max(0, Math.trunc(Number(sp.get("offset")) || 0));
+    const withTotals = sp.get("withTotals") === "1";
 
-    const where: Prisma.PadDistributionWhereInput = {};
-    if (q)
-      where.OR = [
-        { schoolName: { contains: q } },
-        { area: { contains: q } },
-      ];
+    const [rows, total] = await Promise.all([
+      db.padDistribution.findMany({
+        where,
+        orderBy: { distributionDate: "desc" },
+        take: limit,
+        skip: offset,
+      }),
+      db.padDistribution.count({ where }),
+    ]);
 
-    const rows = await db.padDistribution.findMany({
-      where,
-      orderBy: { distributionDate: "desc" },
-    });
-
-    // PadDistribution has volunteerId but no Prisma relation — attach volunteer info manually
+    // PadDistribution has volunteerId but no Prisma relation — attach manually.
     const volunteerIds = Array.from(
       new Set(rows.map((r) => r.volunteerId).filter((v): v is string => Boolean(v)))
     );
@@ -44,12 +91,36 @@ export async function GET(req: Request) {
       volunteers.map((v) => [v.id, { id: v.id, name: v.user.name }])
     );
 
-    return json(
-      rows.map((r) => ({
-        ...r,
-        volunteer: r.volunteerId ? volunteerMap.get(r.volunteerId) ?? null : null,
-      }))
-    );
+    const items = rows.map((r) => ({
+      ...r,
+      volunteer: r.volunteerId ? volunteerMap.get(r.volunteerId) ?? null : null,
+    }));
+
+    if (!withTotals) return json(items);
+
+    const [agg, sessionAgg, schoolRows] = await Promise.all([
+      db.padDistribution.aggregate({
+        where,
+        _sum: { padsDistributed: true, girlsCount: true, sessionAttendees: true },
+      }),
+      db.padDistribution.count({ where: { ...where, awarenessSession: true } }),
+      db.padDistribution.findMany({
+        where,
+        distinct: ["schoolName"],
+        select: { schoolName: true },
+      }),
+    ]);
+
+    return json({
+      items,
+      total,
+      count: total,
+      sumPads: agg._sum.padsDistributed ?? 0,
+      sumGirls: agg._sum.girlsCount ?? 0,
+      sumAttendees: agg._sum.sessionAttendees ?? 0,
+      sessions: sessionAgg,
+      schools: schoolRows.filter((s) => s.schoolName).length,
+    });
   } catch (e) {
     return handleError(e);
   }
@@ -84,10 +155,20 @@ export async function POST(req: Request) {
       ? new Date()
       : distributionDateRaw;
 
-    // attribute to the session's volunteer profile
-    const volunteer = await db.volunteer.findUnique({
-      where: { userId: session.userId },
-    });
+    // Explicit volunteerId (admin assignment) wins; else session profile.
+    let volunteerId: string | null = null;
+    if (body.volunteerId) {
+      const assigned = await db.volunteer.findUnique({
+        where: { id: String(body.volunteerId) },
+      });
+      if (!assigned) throw new ApiError("Volunteer not found", 400);
+      volunteerId = assigned.id;
+    } else {
+      const volunteer = await db.volunteer.findUnique({
+        where: { userId: session.userId },
+      });
+      volunteerId = volunteer?.id ?? null;
+    }
 
     const row = await db.padDistribution.create({
       data: {
@@ -98,8 +179,8 @@ export async function POST(req: Request) {
         awarenessSession,
         sessionAttendees,
         notes: body.notes ? String(body.notes) : null,
-        volunteerId: volunteer?.id ?? null,
-        volunteerName: body.volunteerName ? String(body.volunteerName).trim() : (volunteer ? null : session.name),
+        volunteerId,
+        volunteerName: body.volunteerName ? String(body.volunteerName).trim() : (volunteerId ? null : session.name),
         distributionDate,
       },
     });

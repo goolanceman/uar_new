@@ -1,9 +1,15 @@
 "use client";
 
 /**
- * Aid & Distribution Kits — admin module.
- * Kind-tagged kit templates (RATION / FOOD / EDUCATION / …) → QR-coded
- * batches → per-unit scan tracking with printable label sheets.
+ * Aid & Distribution Kits — round-5: DataTable for the templates tab (fill
+ * height, skeleton rows, built-in pagination), full-screen DetailSheets for
+ * templates (items table + per-batch scan progress) and batches (units
+ * drill-in with scanned-by/when, instructions, QR label sheets), `xl`
+ * FormSheets for the template composer and batch creation, grid/list views
+ * for both tabs.
+ *
+ * The live scanning flow (scan input + recent scans + stock decrement) lives
+ * in the volunteer portal (`/volunteer/scan`) and is intentionally untouched.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -41,6 +47,11 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormSheet } from "@/components/shared/form-sheet";
 import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import {
   Field,
   FieldGrid,
   FormSection,
@@ -50,9 +61,14 @@ import {
 import { CsvColumn, ExportMenu } from "@/components/shared/csv";
 import {
   DataViewMode,
+  PaginationBar,
   useViewPref,
   ViewSwitcher,
 } from "@/components/shared/view-switcher";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,27 +83,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -269,6 +270,12 @@ function parseItems(json: string | null | undefined): TplItem[] {
   }
 }
 
+function scanPct(b: Pick<KitBatch, "totalUnits" | "scannedUnits">): number {
+  return b.totalUnits > 0
+    ? Math.min(100, Math.round(((b.scannedUnits ?? 0) / b.totalUnits) * 100))
+    : 0;
+}
+
 /* ---------------------------------- view ----------------------------------- */
 
 export default function KitsView() {
@@ -294,6 +301,9 @@ export default function KitsView() {
   const [savingBatch, setSavingBatch] = useState(false);
   const [deleteBatch, setDeleteBatch] = useState<KitBatch | null>(null);
 
+  /* template detail sheet */
+  const [tplDetail, setTplDetail] = useState<KitTemplate | null>(null);
+
   /* batch detail sheet */
   const [sheet, setSheet] = useState<KitBatch | null>(null);
   const [units, setUnits] = useState<KitUnit[]>([]);
@@ -306,8 +316,13 @@ export default function KitsView() {
   const [qrLabels, setQrLabels] = useState<{ code: string; dataUrl: string }[]>([]);
   const [qrLoading, setQrLoading] = useState(false);
 
-  /* templates view preference */
+  /* view preferences */
   const [view, setView] = useViewPref("kit-templates");
+  const [batchView, setBatchView] = useViewPref("kit-batches", "grid");
+
+  /* template table pagination */
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const unitOptions = useMasters("UNIT");
 
@@ -329,6 +344,10 @@ export default function KitsView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
 
   const tplMap = useMemo(() => {
     const m = new Map<string, KitTemplate>();
@@ -422,6 +441,7 @@ export default function KitsView() {
       await del(`/api/kit-templates/${deleteTpl.id}`);
       toast.success(`Template "${deleteTpl.name}" deleted`);
       setDeleteTpl(null);
+      setTplDetail((d) => (d && d.id === deleteTpl.id ? null : d));
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
@@ -588,31 +608,45 @@ export default function KitsView() {
     []
   );
 
-  /* ------------------------------ templates views --------------------------- */
+  /* ------------------------- templates table columns ------------------------ */
+
+  const columns: DataTableColumn<KitTemplate>[] = [
+    { key: "name", header: "Template" },
+    { key: "kind", header: "Kind", hideBelow: "sm" },
+    { key: "items", header: "Items", align: "right", hideBelow: "md" },
+    { key: "cost", header: "Cost / unit", align: "right", mono: true, hideBelow: "sm" },
+    { key: "batches", header: "Batches", align: "right", hideBelow: "lg" },
+    { key: "prefix", header: "Codes", mono: true, hideBelow: "lg" },
+    { key: "status", header: "Status" },
+    { key: "actions", header: "", align: "right", className: "w-40" },
+  ];
+
+  const tplPages = Math.max(1, Math.ceil(templates.length / pageSize));
+  const tplPageSafe = Math.min(page, tplPages);
+  const tplPaged = useMemo(
+    () => templates.slice((tplPageSafe - 1) * pageSize, tplPageSafe * pageSize),
+    [templates, tplPageSafe, pageSize]
+  );
 
   const tplActions = (t: KitTemplate) => (
-    <div className="flex shrink-0 gap-1.5">
+    <div className="flex shrink-0 justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
       <Button
         variant="outline"
         size="sm"
-        onClick={(e) => {
-          e.stopPropagation();
-          openWizardFromTpl(t);
-        }}
+        className="min-h-9"
+        onClick={() => openWizardFromTpl(t)}
         disabled={t.status === "RETIRED"}
         title={t.status === "RETIRED" ? "Retired — templates must be Active to start batches" : undefined}
         aria-label={`Start batch from ${t.name}`}
       >
-        <PackagePlus className="size-3.5" aria-hidden="true" /> Use
+        <PackagePlus className="size-3.5" aria-hidden="true" />
+        <span className="hidden md:inline">Use</span>
       </Button>
       <Button
         variant="outline"
         size="icon"
-        className="size-8"
-        onClick={(e) => {
-          e.stopPropagation();
-          openTplEdit(t);
-        }}
+        className="size-11 md:size-8"
+        onClick={() => openTplEdit(t)}
         aria-label={`Edit ${t.name}`}
       >
         <Pencil className="size-3.5" aria-hidden="true" />
@@ -620,16 +654,18 @@ export default function KitsView() {
       <Button
         variant="outline"
         size="icon"
-        className="size-8 text-red-600 hover:bg-red-500/10 dark:text-red-400"
-        onClick={(e) => {
-          e.stopPropagation();
-          setDeleteTpl(t);
-        }}
+        className="size-11 text-red-600 hover:bg-red-500/10 hover:text-red-700 md:size-8 dark:text-red-400"
+        onClick={() => setDeleteTpl(t)}
         aria-label={`Delete ${t.name}`}
       >
         <Trash2 className="size-3.5" aria-hidden="true" />
       </Button>
     </div>
+  );
+
+  const templateBatches = useMemo(
+    () => (tplDetail ? batches.filter((b) => b.templateId === tplDetail.id) : []),
+    [batches, tplDetail]
   );
 
   /* --------------------------------- render -------------------------------- */
@@ -666,13 +702,29 @@ export default function KitsView() {
         </TabsList>
 
         {/* ============================== BATCHES ============================== */}
-        <TabsContent value="batches" className="mt-4">
+        <TabsContent value="batches" className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="mr-auto text-sm text-muted-foreground">
+              {batches.length} batch{batches.length === 1 ? "" : "es"} ·{" "}
+              {totals.scanned.toLocaleString("en-IN")}/{totals.totalUnits.toLocaleString("en-IN")} units scanned
+            </p>
+            <ViewSwitcher value={batchView} onChange={setBatchView} options={["grid", "list"]} />
+          </div>
+
           {loading ? (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
-              {[0, 1, 2].map((i) => (
-                <Skeleton key={i} className="h-56 rounded-xl" />
-              ))}
-            </div>
+            batchView === "grid" ? (
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+                {[0, 1, 2].map((i) => (
+                  <Skeleton key={i} className="h-56 rounded-xl" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2" aria-busy="true">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-14 rounded-lg" />
+                ))}
+              </div>
+            )
           ) : batches.length === 0 ? (
             <EmptyState
               icon={<Package className="size-8" aria-hidden="true" />}
@@ -683,13 +735,12 @@ export default function KitsView() {
                 <Plus className="size-4" aria-hidden="true" /> New batch
               </Button>
             </EmptyState>
-          ) : (
+          ) : batchView === "grid" ? (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {batches.map((b) => {
                 const tpl = tplMap.get(b.templateId);
                 const km = kindMeta(tpl?.kind);
-                const pct =
-                  b.totalUnits > 0 ? Math.min(100, Math.round(((b.scannedUnits ?? 0) / b.totalUnits) * 100)) : 0;
+                const pct = scanPct(b);
                 return (
                   <button
                     key={b.id}
@@ -710,14 +761,14 @@ export default function KitsView() {
                         <km.icon className="size-3" aria-hidden="true" />
                         {km.label} kit
                       </Badge>
-                      <Badge variant="outline">
+                      <Badge variant="outline" className="tabular-nums">
                         {b.scannedUnits ?? 0}/{b.totalUnits} scanned
                       </Badge>
                     </div>
                     <div className="space-y-1.5">
                       <div className="flex justify-between text-xs text-muted-foreground">
                         <span>Scan progress</span>
-                        <span>{pct}%</span>
+                        <span className="tabular-nums">{pct}%</span>
                       </div>
                       <Progress value={pct} className="h-2 [&>div]:bg-emerald-600" aria-label={`${pct}% scanned`} />
                     </div>
@@ -731,6 +782,46 @@ export default function KitsView() {
                 );
               })}
             </div>
+          ) : (
+            <ul className="max-h-[32rem] space-y-2 overflow-y-auto scrollbar-thin" aria-label="Kit batches list">
+              {batches.map((b) => {
+                const tpl = tplMap.get(b.templateId);
+                const km = kindMeta(tpl?.kind);
+                const pct = scanPct(b);
+                const remaining = Math.max(0, b.totalUnits - (b.scannedUnits ?? 0));
+                return (
+                  <li key={b.id}>
+                    <button
+                      type="button"
+                      onClick={() => openSheet(b)}
+                      aria-label={`Open batch ${b.name}`}
+                      className="flex w-full items-center gap-3 rounded-lg border p-3 text-left transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted", km.iconCls)}
+                      >
+                        <km.icon className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold">{b.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {b.template?.name ?? "Template"} · {km.label} kit ·{" "}
+                          {remaining} of {b.totalUnits} units remaining
+                        </span>
+                      </span>
+                      <span className="hidden w-32 shrink-0 sm:block">
+                        <Progress value={pct} className="h-2 [&>div]:bg-emerald-600" aria-label={`${pct}% scanned`} />
+                      </span>
+                      <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground md:block">
+                        {b.scannedUnits ?? 0}/{b.totalUnits}
+                      </span>
+                      <StatusBadge status={b.status} className="shrink-0" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </TabsContent>
 
@@ -747,7 +838,72 @@ export default function KitsView() {
             </Button>
           </div>
 
-          {loading ? (
+          {view === "table" ? (
+            <DataTable
+              columns={columns}
+              rows={tplPaged}
+              rowKey={(t) => t.id}
+              loading={loading}
+              skeletonRows={6}
+              height="fill"
+              fillOffset={330}
+              onRowClick={(t) => setTplDetail(t)}
+              page={tplPageSafe}
+              pages={tplPages}
+              total={templates.length}
+              pageSize={pageSize}
+              onPage={setPage}
+              onPageSize={setPageSize}
+              itemLabel="templates"
+              empty={
+                <EmptyState
+                  icon={<ClipboardList className="size-8" aria-hidden="true" />}
+                  title="No kit templates yet"
+                  hint="Define what goes into a standard kit — items, quantities, kind and cost."
+                >
+                  <Button onClick={openTplCreate}>
+                    <Plus className="size-4" aria-hidden="true" /> New template
+                  </Button>
+                </EmptyState>
+              }
+            >
+              {(t, col) => {
+                const km = kindMeta(t.kind);
+                switch (col.key) {
+                  case "name":
+                    return (
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{t.name}</p>
+                        {t.description ? (
+                          <p className="max-w-56 truncate text-xs text-muted-foreground">{t.description}</p>
+                        ) : null}
+                      </div>
+                    );
+                  case "kind":
+                    return (
+                      <Badge variant="outline" className={cn(km.chip)}>
+                        <km.icon className="size-3" aria-hidden="true" />
+                        {km.label}
+                      </Badge>
+                    );
+                  case "items":
+                    return <span className="tabular-nums">{parseItems(t.items).length}</span>;
+                  case "cost":
+                    return <span>{formatINR(t.costPerUnit)}</span>;
+                  case "batches":
+                    return <span className="tabular-nums">{t._count?.batches ?? 0}</span>;
+                  case "prefix":
+                    return <span className="font-mono text-xs">{prefixFor(t)}</span>;
+                  case "status":
+                    return <StatusBadge status={t.status ?? "ACTIVE"} />;
+                  case "actions":
+                    return tplActions(t);
+                  default:
+                    return null;
+                }
+              }}
+            </DataTable>
+          ) : loading ? (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
               {[0, 1, 2].map((i) => (
                 <Skeleton key={i} className="h-56 rounded-xl" />
@@ -763,78 +919,41 @@ export default function KitsView() {
                 <Plus className="size-4" aria-hidden="true" /> New template
               </Button>
             </EmptyState>
-          ) : view === "table" ? (
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Template</TableHead>
-                    <TableHead>Kind</TableHead>
-                    <TableHead className="text-right">Items</TableHead>
-                    <TableHead className="text-right">Cost / unit</TableHead>
-                    <TableHead className="text-right">Batches</TableHead>
-                    <TableHead>Codes</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {templates.map((t) => {
-                    const km = kindMeta(t.kind);
-                    return (
-                      <TableRow key={t.id}>
-                        <TableCell>
-                          <p className="font-medium">{t.name}</p>
-                          {t.description ? (
-                            <p className="max-w-56 truncate text-xs text-muted-foreground">{t.description}</p>
-                          ) : null}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={cn(km.chip)}>
-                            <km.icon className="size-3" aria-hidden="true" />
-                            {km.label}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">{parseItems(t.items).length}</TableCell>
-                        <TableCell className="text-right">{formatINR(t.costPerUnit)}</TableCell>
-                        <TableCell className="text-right">{t._count?.batches ?? 0}</TableCell>
-                        <TableCell className="font-mono text-xs">{prefixFor(t)}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={t.status ?? "ACTIVE"} />
-                        </TableCell>
-                        <TableCell className="text-right">{tplActions(t)}</TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
           ) : view === "list" ? (
-            <div className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" role="list" aria-label="Kit templates">
+            <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" role="list" aria-label="Kit templates">
               {templates.map((t) => {
                 const km = kindMeta(t.kind);
                 const items = parseItems(t.items);
                 return (
-                  <div key={t.id} className="flex items-center gap-3 rounded-lg border p-3" role="listitem">
-                    <span
-                      aria-hidden="true"
-                      className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted", km.iconCls)}
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      onClick={() => setTplDetail(t)}
+                      aria-label={`Open template ${t.name}`}
+                      className="flex w-full items-center gap-3 rounded-lg border p-3 text-left transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary"
                     >
-                      <km.icon className="size-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{t.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {items.length} item{items.length === 1 ? "" : "s"} · {formatINR(t.costPerUnit)} per kit ·{" "}
-                        {t._count?.batches ?? 0} batch{(t._count?.batches ?? 0) === 1 ? "" : "es"}
-                      </p>
-                    </div>
-                    <StatusBadge status={t.status ?? "ACTIVE"} className="hidden sm:inline-flex" />
-                    {tplActions(t)}
-                  </div>
+                      <span
+                        aria-hidden="true"
+                        className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted", km.iconCls)}
+                      >
+                        <km.icon className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{t.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {items.length} item{items.length === 1 ? "" : "s"} · {formatINR(t.costPerUnit)} per kit ·{" "}
+                          {t._count?.batches ?? 0} batch{(t._count?.batches ?? 0) === 1 ? "" : "es"}
+                        </span>
+                      </span>
+                      <StatusBadge status={t.status ?? "ACTIVE"} className="hidden shrink-0 sm:inline-flex" />
+                      <span className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                        {tplActions(t)}
+                      </span>
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {templates.map((t) => {
@@ -851,17 +970,22 @@ export default function KitsView() {
                         className="mb-3 h-24 w-full rounded-lg border object-cover"
                       />
                     ) : null}
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-semibold leading-tight">{t.name}</p>
-                        <p className="text-xs text-muted-foreground">
+                    <button
+                      type="button"
+                      className="flex items-start gap-2 text-left"
+                      onClick={() => setTplDetail(t)}
+                      aria-label={`Open template ${t.name}`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-semibold leading-tight">{t.name}</span>
+                        <span className="block text-xs text-muted-foreground">
                           {items.length} item{items.length === 1 ? "" : "s"} · {formatINR(t.costPerUnit)} per kit
-                        </p>
-                      </div>
+                        </span>
+                      </span>
                       <Badge variant="outline" className="shrink-0">
                         {t._count?.batches ?? 0} batch{(t._count?.batches ?? 0) === 1 ? "" : "es"}
                       </Badge>
-                    </div>
+                    </button>
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <Badge variant="outline" className={cn(km.chip)}>
                         <km.icon className="size-3" aria-hidden="true" />
@@ -894,6 +1018,7 @@ export default function KitsView() {
                       <Button
                         variant="outline"
                         size="sm"
+                        className="min-h-9"
                         onClick={() => openWizardFromTpl(t)}
                         disabled={retired}
                         title={retired ? "Retired — templates must be Active to start batches" : undefined}
@@ -901,13 +1026,13 @@ export default function KitsView() {
                       >
                         <PackagePlus className="size-3.5" aria-hidden="true" /> Use
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => openTplEdit(t)} aria-label={`Edit ${t.name}`}>
+                      <Button variant="outline" size="sm" className="min-h-9" onClick={() => openTplEdit(t)} aria-label={`Edit ${t.name}`}>
                         <Pencil className="size-3.5" aria-hidden="true" /> Edit
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
-                        className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                        className="ml-auto min-h-9 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
                         onClick={() => setDeleteTpl(t)}
                         aria-label={`Delete ${t.name}`}
                       >
@@ -922,49 +1047,266 @@ export default function KitsView() {
         </TabsContent>
       </Tabs>
 
-      {/* ============================== BATCH SHEET ============================== */}
-      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg">
-          {sheet && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  {sheet.name}
-                  <StatusBadge status={sheet.status} className="ml-auto" />
-                </SheetTitle>
-                <SheetDescription>
-                  {sheet.template?.name ?? "Template"} · {sheetKind.label} kit ·{" "}
-                  {formatINR(sheet.template?.costPerUnit ?? 0)} per unit
-                </SheetDescription>
-              </SheetHeader>
+      {/* pagination for non-table template views */}
+      {view !== "table" && !loading && templates.length > 0 ? (
+        <PaginationBar
+          page={tplPageSafe}
+          pages={tplPages}
+          total={templates.length}
+          onPage={setPage}
+          itemLabel="templates"
+        />
+      ) : null}
 
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {/* ============================ TEMPLATE SHEET ============================= */}
+      <DetailSheet
+        open={!!tplDetail}
+        onOpenChange={(o) => !o && setTplDetail(null)}
+        eyebrow="Kit template"
+        title={tplDetail?.name ?? "Template"}
+        description={
+          tplDetail
+            ? `${kindMeta(tplDetail.kind).label} kit · ${formatINR(tplDetail.costPerUnit)} per unit · ${prefixFor(tplDetail)}-YYYY-NNNNNN`
+            : ""
+        }
+        status={tplDetail ? <StatusBadge status={tplDetail.status ?? "ACTIVE"} /> : undefined}
+        actions={
+          tplDetail ? (
+            <>
+              <Button
+                size="sm"
+                onClick={() => openWizardFromTpl(tplDetail)}
+                disabled={tplDetail.status === "RETIRED"}
+              >
+                <PackagePlus className="size-3.5" aria-hidden="true" /> Start batch
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => openTplEdit(tplDetail)}>
+                <Pencil className="size-3.5" aria-hidden="true" /> Edit
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {tplDetail ? (
+          <>
+            <DetailSection title="Overview" description="Identity, cost and unit-code settings.">
+              <DetailGrid cols={2}>
+                <DataField label="Name" value={tplDetail.name} />
+                <DataField
+                  label="Kind"
+                  value={
+                    <Badge variant="outline" className={cn(kindMeta(tplDetail.kind).chip)}>
+                      {kindMeta(tplDetail.kind).label} kit
+                    </Badge>
+                  }
+                />
+                <DataField label="Cost per unit" value={formatINR(tplDetail.costPerUnit)} mono />
+                <DataField label="Code prefix" value={prefixFor(tplDetail)} mono copy />
+                <DataField label="Status" value={<StatusBadge status={tplDetail.status ?? "ACTIVE"} />} />
+                <DataField label="Batches" value={String(tplDetail._count?.batches ?? 0)} />
+                <DataField label="Description" value={tplDetail.description} className="sm:col-span-2" />
+                {tplDetail.image ? (
+                  <div className="sm:col-span-2">
+                    <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Cover image
+                    </p>
+                    <img
+                      src={tplDetail.image}
+                      alt={`${tplDetail.name} cover`}
+                      className="h-28 w-full max-w-sm rounded-lg border object-cover"
+                    />
+                  </div>
+                ) : null}
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection
+              title="Template items"
+              description="Everything packed into one kit — the checklist volunteers follow."
+            >
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th scope="col" className="px-3 py-2 font-semibold">#</th>
+                      <th scope="col" className="px-3 py-2 font-semibold">Item</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold">Qty</th>
+                      <th scope="col" className="px-3 py-2 font-semibold">Unit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parseItems(tplDetail.items).map((i, idx) => (
+                      <tr key={idx} className="border-b last:border-b-0">
+                        <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{idx + 1}</td>
+                        <td className="px-3 py-2 font-medium">{i.name}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{i.qty}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{i.unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </DetailSection>
+
+            <DetailSection
+              title="Batches from this template"
+              description="Scan progress per batch — open a batch to drill into units."
+            >
+              {templateBatches.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No batches assembled from this template yet.
+                </p>
+              ) : (
+                <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Batches from this template">
+                  {templateBatches.map((b) => {
+                    const pct = scanPct(b);
+                    return (
+                      <li key={b.id}>
+                        <button
+                          type="button"
+                          onClick={() => openSheet(b)}
+                          className="w-full rounded-lg border p-3 text-left transition hover:bg-accent"
+                          aria-label={`Open batch ${b.name}`}
+                        >
+                          <span className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="truncate text-sm font-medium">{b.name}</span>
+                            <span className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="tabular-nums">
+                                {b.scannedUnits ?? 0}/{b.totalUnits} scanned
+                              </Badge>
+                              <StatusBadge status={b.status} />
+                            </span>
+                          </span>
+                          <span className="mt-2 block">
+                            <Progress value={pct} className="h-2 [&>div]:bg-emerald-600" aria-label={`${pct}% scanned`} />
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </DetailSection>
+          </>
+        ) : null}
+      </DetailSheet>
+
+      {/* ============================== BATCH SHEET ============================== */}
+      <DetailSheet
+        open={!!sheet}
+        onOpenChange={(o) => !o && setSheet(null)}
+        eyebrow="Kit batch"
+        title={sheet?.name ?? "Batch"}
+        description={
+          sheet
+            ? `${sheet.template?.name ?? "Template"} · ${sheetKind.label} kit · ${formatINR(sheet.template?.costPerUnit ?? 0)} per unit`
+            : ""
+        }
+        status={sheet ? <StatusBadge status={sheet.status} /> : undefined}
+        actions={
+          sheet ? (
+            <Button
+              size="sm"
+              onClick={() => setQrOpen(true)}
+              disabled={readyUnits.length === 0}
+              aria-label="Print QR labels for ready units"
+            >
+              <Printer className="size-3.5" aria-hidden="true" /> QR labels
+            </Button>
+          ) : undefined
+        }
+        footer={
+          sheet ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {readyUnits.length} READY unit{readyUnits.length === 1 ? "" : "s"} awaiting hand-off ·{" "}
+                {Math.max(0, sheet.totalUnits - (sheet.scannedUnits ?? 0))} unscanned in total
+              </p>
+              <Button
+                variant="outline"
+                className="text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                onClick={() => setDeleteBatch(sheet)}
+                aria-label={`Delete batch ${sheet.name}`}
+              >
+                <Trash2 className="size-4" aria-hidden="true" /> Delete batch
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {sheet ? (
+          <>
+            <DetailSection title="Scan progress" description="Units marked distributed at beneficiary hand-off.">
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span className="tabular-nums">
+                    {sheet.scannedUnits ?? 0} of {sheet.totalUnits} scanned
+                  </span>
+                  <span className="tabular-nums">{scanPct(sheet)}%</span>
+                </div>
+                <Progress
+                  value={scanPct(sheet)}
+                  className="h-2.5 [&>div]:bg-emerald-600"
+                  aria-label={`${scanPct(sheet)}% scanned`}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {Math.max(0, sheet.totalUnits - (sheet.scannedUnits ?? 0))} unit
+                  {Math.max(0, sheet.totalUnits - (sheet.scannedUnits ?? 0)) === 1 ? "" : "s"} remaining —
+                  scanning happens in the volunteer portal via QR codes.
+                </p>
+              </div>
+              <DetailGrid cols={3} className="mt-4">
                 <DataField label="Total units" value={String(sheet.totalUnits)} />
                 <DataField label="Scanned" value={String(sheet.scannedUnits ?? 0)} />
                 <DataField label="Remaining" value={String(Math.max(0, sheet.totalUnits - (sheet.scannedUnits ?? 0)))} />
-              </div>
+              </DetailGrid>
+            </DetailSection>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className={cn(sheetKind.chip)}>
-                  <sheetKind.icon className="size-3" aria-hidden="true" />
-                  {sheetKind.label} kit
-                </Badge>
-                <Button
-                  size="sm"
-                  className="ml-auto"
-                  onClick={() => setQrOpen(true)}
-                  disabled={readyUnits.length === 0}
-                >
-                  <Printer className="size-3.5" aria-hidden="true" /> Print QR labels
-                </Button>
-              </div>
-
-              {sheet.instructions ? (
-                <div className="rounded-lg border border-dashed bg-muted/40 p-3 text-xs text-muted-foreground">
-                  <strong className="text-foreground">Instructions:</strong> {sheet.instructions}
+            {sheet.instructions ? (
+              <DetailSection title="Instructions" description="Packing notes attached to this batch.">
+                <div className="rounded-lg border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+                  {sheet.instructions}
                 </div>
-              ) : null}
+              </DetailSection>
+            ) : null}
 
+            <DetailSection
+              title="Kit contents"
+              description="What goes into every unit of this batch."
+            >
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th scope="col" className="px-3 py-2 font-semibold">#</th>
+                      <th scope="col" className="px-3 py-2 font-semibold">Item</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold">Qty</th>
+                      <th scope="col" className="px-3 py-2 font-semibold">Unit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parseItems(tplMap.get(sheet.templateId)?.items).map((i, idx) => (
+                      <tr key={idx} className="border-b last:border-b-0">
+                        <td className="px-3 py-2 text-xs text-muted-foreground tabular-nums">{idx + 1}</td>
+                        <td className="px-3 py-2 font-medium">{i.name}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{i.qty}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{i.unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </DetailSection>
+
+            <DetailSection
+              title="Units"
+              description="Every QR-coded unit in this batch — click a code to copy it."
+              actions={
+                <Badge variant="outline" className="tabular-nums">
+                  {readyUnits.length} ready
+                </Badge>
+              }
+            >
               {/* unit filters */}
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Select value={unitStatus} onValueChange={setUnitStatus}>
@@ -1000,19 +1342,19 @@ export default function KitsView() {
                 />
               ) : (
                 <div className="max-h-[420px] overflow-y-auto rounded-lg border scrollbar-thin">
-                  <Table>
-                    <TableHeader className="sticky top-0 bg-card">
-                      <TableRow>
-                        <TableHead>Code</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Scanned</TableHead>
-                        <TableHead>Location</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-card">
+                      <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-3 py-2 font-semibold">Code</th>
+                        <th scope="col" className="px-3 py-2 font-semibold">Status</th>
+                        <th scope="col" className="hidden px-3 py-2 font-semibold sm:table-cell">Scanned</th>
+                        <th scope="col" className="hidden px-3 py-2 font-semibold lg:table-cell">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
                       {filteredUnits.map((u) => (
-                        <TableRow key={u.id}>
-                          <TableCell>
+                        <tr key={u.id} className="border-b last:border-b-0">
+                          <td className="px-3 py-2">
                             <button
                               type="button"
                               className="flex items-center gap-1 font-mono text-xs hover:text-primary"
@@ -1027,11 +1369,11 @@ export default function KitsView() {
                               {u.code}
                               <Copy className="size-3 opacity-60" aria-hidden="true" />
                             </button>
-                          </TableCell>
-                          <TableCell>
+                          </td>
+                          <td className="px-3 py-2">
                             <StatusBadge status={u.status} />
-                          </TableCell>
-                          <TableCell className="text-xs">
+                          </td>
+                          <td className="hidden px-3 py-2 text-xs sm:table-cell">
                             {u.scannedAt ? (
                               <>
                                 {formatDateTime(u.scannedAt)}
@@ -1042,30 +1384,18 @@ export default function KitsView() {
                             ) : (
                               "—"
                             )}
-                          </TableCell>
-                          <TableCell className="text-xs">{u.location || "—"}</TableCell>
-                        </TableRow>
+                          </td>
+                          <td className="hidden px-3 py-2 text-xs lg:table-cell">{u.location || "—"}</td>
+                        </tr>
                       ))}
-                    </TableBody>
-                  </Table>
+                    </tbody>
+                  </table>
                 </div>
               )}
-
-              <div className="flex gap-2 border-t pt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setDeleteBatch(sheet)}
-                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
-                  aria-label={`Delete batch ${sheet.name}`}
-                >
-                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete batch
-                </Button>
-              </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            </DetailSection>
+          </>
+        ) : null}
+      </DetailSheet>
 
       {/* ============================ QR LABEL DIALOG ============================ */}
       <Dialog open={qrOpen} onOpenChange={setQrOpen}>
@@ -1128,8 +1458,10 @@ export default function KitsView() {
       <FormSheet
         open={wizardOpen}
         onOpenChange={(o) => {
-          setWizardOpen(o);
-          if (!o) setWizardStep(1);
+          if (!o && !savingBatch) {
+            setWizardOpen(false);
+            setWizardStep(1);
+          }
         }}
         title="New batch"
         description="Pick a template, then name the batch and set how many QR-coded units to produce."
@@ -1138,7 +1470,7 @@ export default function KitsView() {
         cancelLabel="Cancel"
         loading={savingBatch}
         dirty={wizardTouched}
-        size="md"
+        size="xl"
         footerExtra={
           <span>
             Step {wizardStep} of 2 — {wizardStep === 1 ? "pick a template" : "batch details"}
@@ -1157,7 +1489,7 @@ export default function KitsView() {
                 hint="Create a kit template first."
               />
             ) : (
-              <div className="grid gap-2">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {templates.map((t) => {
                   const km = kindMeta(t.kind);
                   const retired = t.status === "RETIRED";
@@ -1172,7 +1504,7 @@ export default function KitsView() {
                       }}
                       aria-label={`Use template ${t.name}`}
                       className={cn(
-                        "flex items-center gap-3 rounded-lg border p-3 text-left transition hover:border-emerald-500/40 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-border disabled:hover:bg-transparent",
+                        "flex min-h-11 items-center gap-3 rounded-lg border p-3 text-left transition hover:border-emerald-500/40 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-border disabled:hover:bg-transparent",
                         wizardTemplateId === t.id && "border-emerald-500/50 bg-emerald-500/10"
                       )}
                     >
@@ -1204,23 +1536,25 @@ export default function KitsView() {
         ) : (
           <>
             <FormSection title="Batch details" description="Each unit gets a unique QR code generated by the server.">
-              <TextField
-                label="Batch name"
-                required
-                value={wizardName}
-                onChange={setWizardName}
-                placeholder="Diwali drive — Nov 2026"
-              />
-              <TextField
-                label="Total units (1–500)"
-                required
-                type="number"
-                min="1"
-                max="500"
-                value={wizardUnits}
-                onChange={setWizardUnits}
-                hint={`Unit codes become ${prefixFor(tplMap.get(wizardTemplateId) ?? {})}-YYYY-NNNNNN`}
-              />
+              <FieldGrid>
+                <TextField
+                  label="Batch name"
+                  required
+                  value={wizardName}
+                  onChange={setWizardName}
+                  placeholder="Diwali drive — Nov 2026"
+                />
+                <TextField
+                  label="Total units (1–500)"
+                  required
+                  type="number"
+                  min="1"
+                  max="500"
+                  value={wizardUnits}
+                  onChange={setWizardUnits}
+                  hint={`Unit codes become ${prefixFor(tplMap.get(wizardTemplateId) ?? {})}-YYYY-NNNNNN`}
+                />
+              </FieldGrid>
               <TextareaField
                 label="Instructions (optional)"
                 value={wizardInstructions}
@@ -1246,14 +1580,17 @@ export default function KitsView() {
       {/* ========================== TEMPLATE FORM SHEET ========================== */}
       <FormSheet
         open={tplSheetOpen}
-        onOpenChange={setTplSheetOpen}
+        onOpenChange={(o) => {
+          if (!o && !savingTpl) setTplSheetOpen(false);
+        }}
         title={editingTpl ? `Edit ${editingTpl.name}` : "New kit template"}
         description="Standard contents of one aid kit. Batches assemble QR-coded units from a template."
         onSubmit={saveTpl}
         submitLabel={editingTpl ? "Save changes" : "Create template"}
         loading={savingTpl}
         dirty={tplTouched}
-        size="md"
+        size="xl"
+        badge={editingTpl ? <StatusBadge status={editingTpl.status ?? "ACTIVE"} /> : undefined}
       >
         <FormSection title="Identity" description="What this kit is and how it appears across the app.">
           <FieldGrid>
@@ -1287,14 +1624,6 @@ export default function KitsView() {
                 </SelectContent>
               </Select>
             </Field>
-          </FieldGrid>
-          <TextField
-            label="Description"
-            value={tplForm.description}
-            onChange={(v) => setTpl({ description: v })}
-            placeholder="Feeds a family of four for two weeks"
-          />
-          <FieldGrid>
             <Field label="Status" hint="Retired templates can't start new batches.">
               <Select
                 value={tplForm.status}
@@ -1317,6 +1646,12 @@ export default function KitsView() {
               hint="Shown on template cards (optional)."
             />
           </FieldGrid>
+          <TextField
+            label="Description"
+            value={tplForm.description}
+            onChange={(v) => setTpl({ description: v })}
+            placeholder="Feeds a family of four for two weeks"
+          />
         </FormSection>
 
         <FormSection title="Contents & cost" description="Items that go into one kit, and its unit cost.">
@@ -1327,6 +1662,7 @@ export default function KitsView() {
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="min-h-9"
                 onClick={() =>
                   setTpl({ items: [...tplForm.items, { name: "", qty: "1", unit: "kg" }] })
                 }
@@ -1336,7 +1672,7 @@ export default function KitsView() {
               </Button>
             </div>
             {tplForm.items.map((item, i) => (
-              <div key={i} className="grid grid-cols-[1fr_64px_92px_36px] items-center gap-2">
+              <div key={i} className="grid grid-cols-[1fr_72px_100px_44px] items-center gap-2">
                 <Input
                   value={item.name}
                   onChange={(e) =>
@@ -1347,6 +1683,7 @@ export default function KitsView() {
                   }
                   placeholder="Rice"
                   aria-label={`Item ${i + 1} name`}
+                  className="min-h-9"
                 />
                 <Input
                   type="number"
@@ -1359,6 +1696,7 @@ export default function KitsView() {
                     }))
                   }
                   aria-label={`Item ${i + 1} quantity`}
+                  className="min-h-9"
                 />
                 <Select
                   value={item.unit}
@@ -1369,7 +1707,7 @@ export default function KitsView() {
                     }))
                   }
                 >
-                  <SelectTrigger aria-label={`Item ${i + 1} unit`}>
+                  <SelectTrigger aria-label={`Item ${i + 1} unit`} className="min-h-9">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1384,6 +1722,7 @@ export default function KitsView() {
                   type="button"
                   variant="ghost"
                   size="icon"
+                  className="size-11 md:size-9"
                   onClick={() => setTpl({ items: tplForm.items.filter((_, j) => j !== i) })}
                   aria-label={`Remove item ${i + 1}`}
                   disabled={tplForm.items.length <= 1}
@@ -1431,7 +1770,6 @@ export default function KitsView() {
         recordName={deleteTpl?.name ?? null}
         description="Templates with existing batches cannot be deleted — the server will block it."
         confirmLabel="Delete template"
-        loading={false}
         onConfirm={removeTpl}
       />
 
@@ -1442,7 +1780,6 @@ export default function KitsView() {
         recordName={deleteBatch ? `${deleteBatch.name} · ${deleteBatch.totalUnits} units` : null}
         description="All QR-coded units are removed with the batch. Volunteers will no longer be able to scan its codes."
         confirmLabel="Delete batch"
-        loading={false}
         onConfirm={removeBatch}
       />
     </div>

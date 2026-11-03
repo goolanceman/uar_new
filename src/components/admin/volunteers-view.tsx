@@ -1,17 +1,23 @@
 "use client";
 
+/**
+ * Volunteers — round-5: DataTable for applications and the roster (fill
+ * height, skeleton rows, built-in pagination), full-screen DetailSheet with
+ * profile, skills, availability, area, status, tasks, distributions
+ * participated and the linked application, lg FormSheet for edits, polished
+ * approvals workflow (review note → ConfirmDialog → copyable temp creds),
+ * status chips + clear filters and CSV exports.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   BadgeCheck,
   CalendarClock,
   Check,
   ClipboardList,
-  Eye,
-  Mail,
   MapPin,
   Pencil,
-  Phone,
+  Package,
   Plus,
   Search,
   UserCheck,
@@ -21,14 +27,18 @@ import {
 import { toast } from "sonner";
 import { get, patch, post } from "@/lib/api-client";
 import { useMasters } from "@/hooks/use-masters";
-import { formatDate, formatDateTime, initials, titleCase } from "@/lib/format";
+import { formatDate, formatDateTime, formatINR, initials, titleCase } from "@/lib/format";
 import { required } from "@/lib/validators";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
-import { SectionCard } from "@/components/shared/section-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
 import {
   FieldGrid,
   FormSection,
@@ -39,7 +49,16 @@ import {
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
-import { ViewSwitcher, useViewPref } from "@/components/shared/view-switcher";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
+import {
+  PaginationBar,
+  ViewSwitcher,
+  useViewPref,
+  type DataViewMode,
+} from "@/components/shared/view-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -53,21 +72,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 /* ---------------------------------- types ---------------------------------- */
 
@@ -118,6 +122,7 @@ interface TaskRow {
   id: string;
   volunteerId: string;
   title: string;
+  description?: string | null;
   type: string;
   priority: string;
   status: string;
@@ -133,6 +138,16 @@ interface AttendanceRow {
   hours?: number | null;
   location?: string | null;
   notes?: string | null;
+}
+
+interface DistributionRow {
+  id: string;
+  type: string;
+  quantity: number;
+  value?: number | null;
+  location?: string | null;
+  distributedAt: string;
+  beneficiary?: { name: string } | null;
 }
 
 interface VolunteerDetail extends VolunteerRow {
@@ -244,7 +259,7 @@ function StatTile({ label, value }: { label: string; value: React.ReactNode }) {
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
-      <p className="mt-0.5 text-lg font-bold leading-tight">{value ?? "—"}</p>
+      <p className="mt-0.5 text-lg font-bold leading-tight tabular-nums">{value ?? "—"}</p>
     </div>
   );
 }
@@ -309,6 +324,10 @@ function ApplicationsTab() {
 
   const [approvedCreds, setApprovedCreds] = useState<TempCreds | null>(null);
 
+  /* table pagination */
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -333,6 +352,17 @@ function ApplicationsTab() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, pageSize]);
+
+  const pages = Math.max(1, Math.ceil(apps.length / pageSize));
+  const pageSafe = Math.min(page, pages);
+  const paged = useMemo(
+    () => apps.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [apps, pageSafe, pageSize]
+  );
 
   const runApprove = async () => {
     if (!approvePending?.id) return;
@@ -380,6 +410,75 @@ function ApplicationsTab() {
 
   const busy = approving || rejecting;
 
+  const appActions = (a: Application) => (
+    <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {a.status === "PENDING" ? (
+        <>
+          <Button
+            size="sm"
+            className="min-h-9"
+            onClick={() => {
+              setApproveTarget(a);
+              setApproveNote("");
+            }}
+            aria-label={`Approve ${a.fullName}`}
+          >
+            <Check className="size-4" /> Approve
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="min-h-9 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+            onClick={() => {
+              setRejectTarget(a);
+              setRejectNote("");
+            }}
+            aria-label={`Reject ${a.fullName}`}
+          >
+            <X className="size-4" /> Reject
+          </Button>
+        </>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          className="min-h-9"
+          onClick={() => setViewTarget(a)}
+          aria-label={`View application from ${a.fullName}`}
+        >
+          View
+        </Button>
+      )}
+    </div>
+  );
+
+  const appCsv: CsvColumn<Application>[] = useMemo(
+    () => [
+      { header: "Name", value: (a) => a.fullName },
+      { header: "Email", value: (a) => a.email },
+      { header: "Phone", value: (a) => a.phone },
+      { header: "City", value: (a) => a.city },
+      { header: "Occupation", value: (a) => a.occupation ?? "" },
+      { header: "Skills", value: (a) => parseList(a.skills).join("; ") },
+      { header: "Availability", value: (a) => a.availability ?? "" },
+      { header: "Status", value: (a) => a.status },
+      { header: "Applied", value: (a) => a.createdAt },
+      { header: "Review note", value: (a) => a.reviewNote ?? "" },
+    ],
+    []
+  );
+
+  const columns: DataTableColumn<Application>[] = [
+    { key: "name", header: "Applicant" },
+    { key: "contact", header: "Contact", hideBelow: "md" },
+    { key: "city", header: "City", hideBelow: "sm" },
+    { key: "availability", header: "Availability", hideBelow: "lg" },
+    { key: "skills", header: "Skills", hideBelow: "lg" },
+    { key: "status", header: "Status" },
+    { key: "applied", header: "Applied", hideBelow: "md" },
+    { key: "actions", header: "", align: "right", className: "w-44" },
+  ];
+
   return (
     <div className="space-y-4">
       {/* status filter */}
@@ -404,151 +503,163 @@ function ApplicationsTab() {
         </span>
       </div>
 
-      {loading ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-52 rounded-xl" />
-          ))}
-        </div>
-      ) : apps.length === 0 ? (
-        <EmptyState
-          icon={<UserCheck className="size-6" aria-hidden="true" />}
-          title={`No ${filter === "ALL" ? "" : filter.toLowerCase()} applications`}
-          hint="New volunteer applications from the public site will appear here for review."
+      <DataTable
+        columns={columns}
+        rows={paged}
+        rowKey={(a) => a.id}
+        loading={loading}
+        skeletonRows={6}
+        height="fill"
+        fillOffset={300}
+        onRowClick={(a) => setViewTarget(a)}
+        page={pageSafe}
+        pages={pages}
+        total={apps.length}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={setPageSize}
+        itemLabel="applications"
+        empty={
+          <EmptyState
+            icon={<UserCheck className="size-6" aria-hidden="true" />}
+            title={`No ${filter === "ALL" ? "" : `${filter.toLowerCase()} `}applications`}
+            hint="New volunteer applications from the public site will appear here for review."
+          />
+        }
+      >
+        {(a, col) => {
+          switch (col.key) {
+            case "name":
+              return (
+                <div className="flex items-center gap-2.5">
+                  <Avatar className="size-8">
+                    <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+                      {initials(a.fullName)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{a.fullName}</p>
+                    {a.occupation ? (
+                      <p className="truncate text-xs text-muted-foreground">{a.occupation}</p>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            case "contact":
+              return (
+                <div className="min-w-0">
+                  <p className="truncate text-xs text-muted-foreground">{a.email}</p>
+                  <p className="truncate font-mono text-xs text-muted-foreground">{a.phone}</p>
+                </div>
+              );
+            case "city":
+              return <span className="text-sm">{a.city || "—"}</span>;
+            case "availability":
+              return <span className="text-sm text-muted-foreground">{a.availability || "—"}</span>;
+            case "skills": {
+              const skills = parseList(a.skills);
+              return skills.length > 0 ? (
+                <div className="flex max-w-56 flex-wrap gap-1">
+                  {skills.slice(0, 3).map((s) => (
+                    <Chip key={s}>{s}</Chip>
+                  ))}
+                  {skills.length > 3 && (
+                    <span className="text-[11px] text-muted-foreground">+{skills.length - 3}</span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs text-muted-foreground">—</span>
+              );
+            }
+            case "status":
+              return <StatusBadge status={a.status} />;
+            case "applied":
+              return <span className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(a.createdAt)}</span>;
+            case "actions":
+              return appActions(a);
+            default:
+              return null;
+          }
+        }}
+      </DataTable>
+
+      <div className="flex justify-end">
+        <ExportMenu
+          columns={appCsv}
+          rows={apps}
+          filename={`uar-volunteer-applications-${filter.toLowerCase()}`}
+          disabled={apps.length === 0}
         />
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {apps.map((a) => {
-            const skills = parseList(a.skills);
-            return (
-              <article key={a.id} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-start gap-2.5">
-                    <Avatar className="size-9">
-                      <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                        {initials(a.fullName)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="min-w-0">
-                      <h3 className="truncate text-sm font-semibold">{a.fullName}</h3>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {a.occupation ? `${a.occupation} · ` : ""}
-                        {a.city}
-                      </p>
-                    </div>
-                  </div>
-                  <StatusBadge status={a.status} className="shrink-0" />
-                </div>
-
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span className="flex min-w-0 items-center gap-1">
-                    <Mail className="size-3.5 shrink-0" aria-hidden="true" />
-                    <span className="truncate">{a.email}</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Phone className="size-3.5 shrink-0" aria-hidden="true" /> {a.phone}
-                  </span>
-                  {a.availability && (
-                    <span className="flex items-center gap-1">
-                      <CalendarClock className="size-3.5 shrink-0" aria-hidden="true" />{" "}
-                      {a.availability}
-                    </span>
-                  )}
-                </div>
-
-                {skills.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {skills.map((s) => (
-                      <Chip key={s}>{s}</Chip>
-                    ))}
-                  </div>
-                )}
-
-                <blockquote className="border-l-2 border-primary/40 pl-3 text-xs italic text-muted-foreground">
-                  “{a.motivation}”
-                </blockquote>
-
-                {a.reviewNote && (
-                  <p className="rounded-md bg-muted px-2.5 py-1.5 text-xs text-muted-foreground">
-                    <span className="font-semibold text-foreground">Review note:</span>{" "}
-                    {a.reviewNote}
-                  </p>
-                )}
-
-                <div className="mt-auto flex flex-wrap items-center gap-2 border-t pt-3">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setViewTarget(a)}
-                    aria-label={`View application from ${a.fullName}`}
-                  >
-                    <Eye className="size-4" /> View
-                  </Button>
-                  {a.status === "PENDING" && (
-                    <>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setApproveTarget(a);
-                          setApproveNote("");
-                        }}
-                        aria-label={`Approve ${a.fullName}`}
-                      >
-                        <Check className="size-4" /> Approve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600 hover:bg-red-500/10 hover:text-red-700"
-                        onClick={() => {
-                          setRejectTarget(a);
-                          setRejectNote("");
-                        }}
-                        aria-label={`Reject ${a.fullName}`}
-                      >
-                        <X className="size-4" /> Reject
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
+      </div>
 
       {/* Application detail sheet */}
-      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg">
-          <SheetHeader className="text-left">
-            <SheetTitle className="flex items-center gap-2">
-              <UserCheck className="size-4 text-primary" aria-hidden="true" />
-              {viewTarget?.fullName ?? "Application"}
-            </SheetTitle>
-            <SheetDescription>
-              {viewTarget
-                ? `${titleCase(viewTarget.status)} · applied ${formatDateTime(viewTarget.createdAt)}`
-                : ""}
-            </SheetDescription>
-          </SheetHeader>
-          {viewTarget && (
-            <div className="flex-1 space-y-4 px-4 pb-6">
-              <SectionCard title="Applicant" icon={<UserCheck className="size-4" aria-hidden="true" />}>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                  <DataField label="Full name" value={viewTarget.fullName} />
-                  <DataField label="Email" value={viewTarget.email} copy />
-                  <DataField label="Phone" value={viewTarget.phone} copy />
-                  <DataField label="City" value={viewTarget.city} />
-                  <DataField label="Occupation" value={viewTarget.occupation} />
-                  <DataField label="Linked user ID" value={viewTarget.userId} mono />
-                  <DataField label="Availability" value={viewTarget.availability} />
-                  <DataField
-                    label="Reviewed at"
-                    value={viewTarget.reviewedAt ? formatDateTime(viewTarget.reviewedAt) : "Not reviewed"}
-                  />
-                </div>
-                <div className="mt-4 space-y-2">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <DetailSheet
+        open={!!viewTarget}
+        onOpenChange={(o) => !o && setViewTarget(null)}
+        eyebrow="Volunteer application"
+        title={viewTarget?.fullName ?? "Application"}
+        description={
+          viewTarget
+            ? `${viewTarget.occupation ? `${viewTarget.occupation} · ` : ""}${viewTarget.city || "No city"} · applied ${formatDateTime(viewTarget.createdAt)}`
+            : ""
+        }
+        status={viewTarget ? <StatusBadge status={viewTarget.status} /> : undefined}
+        footer={
+          viewTarget && viewTarget.status === "PENDING" ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Approving creates a VOLUNTEER account with temporary credentials.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setApproveTarget(viewTarget);
+                    setApproveNote("");
+                  }}
+                  aria-label={`Approve ${viewTarget.fullName}`}
+                >
+                  <Check className="size-4" /> Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                  onClick={() => {
+                    setRejectTarget(viewTarget);
+                    setRejectNote("");
+                  }}
+                  aria-label={`Reject ${viewTarget.fullName}`}
+                >
+                  <X className="size-4" /> Reject
+                </Button>
+              </div>
+            </>
+          ) : undefined
+        }
+      >
+        {viewTarget ? (
+          <>
+            <DetailSection title="Applicant" description="Identity and contact details from the public form.">
+              <DetailGrid cols={2}>
+                <DataField label="Full name" value={viewTarget.fullName} />
+                <DataField label="Email" value={viewTarget.email} copy />
+                <DataField label="Phone" value={viewTarget.phone} copy mono />
+                <DataField label="City" value={viewTarget.city} />
+                <DataField label="Occupation" value={viewTarget.occupation} />
+                <DataField label="Linked user ID" value={viewTarget.userId} mono />
+                <DataField label="Applied" value={formatDateTime(viewTarget.createdAt)} />
+                <DataField
+                  label="Reviewed at"
+                  value={viewTarget.reviewedAt ? formatDateTime(viewTarget.reviewedAt) : "Not reviewed"}
+                />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection title="Skills & availability" description="What the applicant offers and when.">
+              <div className="space-y-3">
+                <div>
+                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     Skills
                   </p>
                   <div className="flex flex-wrap gap-1.5">
@@ -557,49 +668,31 @@ function ApplicationsTab() {
                       : <span className="text-sm text-muted-foreground">—</span>}
                   </div>
                 </div>
-                <p className="mt-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Motivation
-                </p>
-                <blockquote className="mt-1 rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-xs italic text-muted-foreground">
-                  “{viewTarget.motivation}”
-                </blockquote>
-                {viewTarget.reviewNote && (
-                  <p className="mt-4 rounded-md bg-muted px-2.5 py-1.5 text-xs text-muted-foreground">
-                    <span className="font-semibold text-foreground">Review note:</span>{" "}
-                    {viewTarget.reviewNote}
+                <div>
+                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Availability
                   </p>
-                )}
-              </SectionCard>
-              {viewTarget.status === "PENDING" && (
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setApproveTarget(viewTarget);
-                      setApproveNote("");
-                    }}
-                    aria-label={`Approve ${viewTarget.fullName}`}
-                  >
-                    <Check className="size-4" /> Approve
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-red-600 hover:bg-red-500/10 hover:text-red-700"
-                    onClick={() => {
-                      setRejectTarget(viewTarget);
-                      setRejectNote("");
-                    }}
-                    aria-label={`Reject ${viewTarget.fullName}`}
-                  >
-                    <X className="size-4" /> Reject
-                  </Button>
+                  <p className="text-sm">{viewTarget.availability || "—"}</p>
                 </div>
-              )}
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Motivation" description="Why the applicant wants to join.">
+              <blockquote className="rounded-md border-l-2 border-primary/40 bg-muted/40 px-3 py-2 text-sm italic text-muted-foreground">
+                “{viewTarget.motivation}”
+              </blockquote>
+            </DetailSection>
+
+            {viewTarget.reviewNote ? (
+              <DetailSection title="Review" description="Note recorded during review.">
+                <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  {viewTarget.reviewNote}
+                </p>
+              </DetailSection>
+            ) : null}
+          </>
+        ) : null}
+      </DetailSheet>
 
       {/* Approve: review-note FormSheet */}
       <FormSheet
@@ -616,14 +709,14 @@ function ApplicationsTab() {
         onSubmit={() => setApprovePending(approveTarget)}
         size="sm"
       >
-        <SectionCard title="Applicant snapshot" icon={<UserCheck className="size-4" aria-hidden="true" />}>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <DetailGrid cols={2}>
             <DataField label="Name" value={approveTarget?.fullName} />
             <DataField label="Email" value={approveTarget?.email} />
             <DataField label="Phone" value={approveTarget?.phone} />
             <DataField label="City" value={approveTarget?.city} />
-          </div>
-        </SectionCard>
+          </DetailGrid>
+        </div>
         <TextareaField
           label="Review note (optional)"
           value={approveNote}
@@ -697,8 +790,8 @@ function ApplicationsTab() {
           </DialogHeader>
           <div className="grid gap-3">
             <div className="grid gap-2 rounded-lg border p-3">
-              <DataField label="Login email" value={approvedCreds?.email ?? "—"} mono copy />
-              <DataField label="Temporary password" value={approvedCreds?.password ?? "—"} mono copy />
+              <DataField label="Login email" value={approvedCreds?.email ?? ""} mono copy />
+              <DataField label="Temporary password" value={approvedCreds?.password ?? ""} mono copy />
             </div>
             <p className="text-xs text-muted-foreground">
               Credentials are shown once from the application record — copy them now.
@@ -752,6 +845,8 @@ function VolunteersTab() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [view, setView] = useViewPref("volunteers");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /* edit sheet */
   const [editOpen, setEditOpen] = useState(false);
@@ -780,6 +875,8 @@ function VolunteersTab() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [attRows, setAttRows] = useState<AttendanceRow[] | null>(null);
   const [attLoading, setAttLoading] = useState(false);
+  const [distRows, setDistRows] = useState<DistributionRow[] | null>(null);
+  const [appLink, setAppLink] = useState<Application | null>(null);
 
   /* assign task sheet */
   const [taskOpen, setTaskOpen] = useState(false);
@@ -824,6 +921,23 @@ function VolunteersTab() {
     });
   }, [vols, q, filter]);
 
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  useEffect(() => {
+    setPage(1);
+  }, [q, filter, pageSize]);
+  const pageSafe = Math.min(page, pages);
+  const paged = useMemo(
+    () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [filtered, pageSafe, pageSize]
+  );
+
+  const hasFilters = filter !== "ALL" || q.trim() !== "";
+
+  const clearFilters = () => {
+    setQ("");
+    setFilter("ALL");
+  };
+
   const volName = (v: VolunteerRow | VolunteerDetail) => v.user?.name ?? "Volunteer";
 
   const loadAttendance = useCallback(async (volId: string) => {
@@ -852,11 +966,30 @@ function VolunteersTab() {
   const openDetail = (v: VolunteerRow) => {
     setDetail({ ...v });
     setDetailLoading(true);
+    setAttRows(null);
+    setDistRows(null);
+    setAppLink(null);
     loadAttendance(v.id);
     get<VolunteerDetail>(`/api/volunteers/${v.id}`)
       .then((d) => setDetail(d))
       .catch(() => toast.error("Failed to load volunteer profile"))
       .finally(() => setDetailLoading(false));
+    // distributions participated (shared pool, filtered client-side)
+    get<DistributionRow[] | { items?: DistributionRow[] }>("/api/distributions?limit=200")
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (data.items ?? []);
+        setDistRows(list.filter((d) => (d as unknown as { volunteerId?: string }).volunteerId === v.id));
+      })
+      .catch(() => setDistRows([]));
+    // linked volunteer application, matched by email
+    if (v.user?.email) {
+      get<Application[] | { items?: Application[] }>("/api/volunteer-applications")
+        .then((data) => {
+          const list = Array.isArray(data) ? data : (data.items ?? []);
+          setAppLink(list.find((a) => a.email.toLowerCase() === (v.user?.email ?? "").toLowerCase()) ?? null);
+        })
+        .catch(() => setAppLink(null));
+    }
   };
 
   /* -------------------------------- edit ---------------------------------- */
@@ -1033,9 +1166,12 @@ function VolunteersTab() {
       <Button
         size="sm"
         variant="outline"
-        className="text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+        className="min-h-9 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
         disabled={runningStatus}
-        onClick={() => setStatusTarget({ vol: v, next: "SUSPENDED" })}
+        onClick={(e) => {
+          e.stopPropagation();
+          setStatusTarget({ vol: v, next: "SUSPENDED" });
+        }}
         aria-label={`Suspend volunteer ${volName(v)}`}
       >
         Suspend
@@ -1044,8 +1180,12 @@ function VolunteersTab() {
       <Button
         size="sm"
         variant="outline"
+        className="min-h-9"
         disabled={runningStatus}
-        onClick={() => setStatusTarget({ vol: v, next: "ACTIVE" })}
+        onClick={(e) => {
+          e.stopPropagation();
+          setStatusTarget({ vol: v, next: "ACTIVE" });
+        }}
         aria-label={`Activate volunteer ${volName(v)}`}
       >
         Activate
@@ -1059,16 +1199,22 @@ function VolunteersTab() {
         variant="ghost"
         className="size-11 md:size-8"
         aria-label={`View volunteer ${volName(v)}`}
-        onClick={() => openDetail(v)}
+        onClick={(e) => {
+          e.stopPropagation();
+          openDetail(v);
+        }}
       >
-        <Eye className="size-4" />
+        <UserCheck className="size-4" />
       </Button>
       <Button
         size="icon"
         variant="ghost"
         className="size-11 md:size-8"
         aria-label={`Edit volunteer ${volName(v)}`}
-        onClick={() => openEdit(v)}
+        onClick={(e) => {
+          e.stopPropagation();
+          openEdit(v);
+        }}
       >
         <Pencil className="size-4" />
       </Button>
@@ -1076,28 +1222,63 @@ function VolunteersTab() {
     </>
   );
 
+  /* ------------------------------- table columns ----------------------------- */
+
+  const columns: DataTableColumn<VolunteerRow>[] = [
+    { key: "name", header: "Volunteer" },
+    { key: "status", header: "Status" },
+    { key: "area", header: "Assigned area", hideBelow: "lg" },
+    { key: "skills", header: "Skills", hideBelow: "lg" },
+    { key: "joined", header: "Joined", hideBelow: "sm" },
+    { key: "actions", header: "", align: "right", className: "w-40" },
+  ];
+
   return (
     <div className="space-y-4">
-      <SectionCard
-        title="Volunteer roster"
-        description="Active volunteers, their areas and engagement."
-        icon={<Users className="size-4" aria-hidden="true" />}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search
-                className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search name, email, area…"
-                className="h-9 w-full pl-8 sm:w-48"
-                aria-label="Search volunteers"
-              />
-            </div>
-            <ViewSwitcher value={view} onChange={setView} />
+      {/* toolbar */}
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-64">
+            <Search
+              className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search name, email, area…"
+              className="pl-8"
+              aria-label="Search volunteers"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter volunteers by status">
+            {VOL_FILTERS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setFilter(t)}
+                aria-pressed={filter === t}
+                className={cn(
+                  "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
+                  filter === t
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border text-muted-foreground hover:bg-accent"
+                )}
+              >
+                {t === "ALL" ? "All" : titleCase(t)}
+              </button>
+            ))}
+          </div>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" className="min-h-9" onClick={clearFilters} aria-label="Clear filters">
+              Clear
+            </Button>
+          )}
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            <span className="text-xs text-muted-foreground" aria-live="polite">
+              {loading ? "Loading…" : `${filtered.length} volunteer${filtered.length === 1 ? "" : "s"}`}
+            </span>
+            <ViewSwitcher value={view} onChange={setView} options={["table", "grid", "list"]} />
             <ExportMenu
               columns={volunteerCsv}
               rows={filtered}
@@ -1105,171 +1286,202 @@ function VolunteersTab() {
               disabled={filtered.length === 0}
             />
           </div>
-        }
-      >
-        {/* status pills */}
-        <div className="mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Filter volunteers by status">
-          {VOL_FILTERS.map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setFilter(t)}
-              aria-pressed={filter === t}
-              className={cn(
-                "min-h-9 rounded-full border px-3 text-xs font-semibold transition",
-                filter === t
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border text-muted-foreground hover:bg-accent"
-              )}
-            >
-              {t === "ALL" ? "All" : titleCase(t)}
-            </button>
-          ))}
-          <span className="ml-auto self-center text-xs text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `${filtered.length} volunteer${filtered.length === 1 ? "" : "s"}`}
-          </span>
         </div>
+      </div>
 
-        {loading ? (
-          <div className="space-y-2" aria-busy="true">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-11 w-full rounded-lg" />
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={<Users className="size-6" aria-hidden="true" />}
-            title="No volunteers found"
-            hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
-          />
-        ) : view === "table" ? (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Volunteer</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden lg:table-cell">Assigned area</TableHead>
-                  <TableHead className="hidden xl:table-cell">Skills</TableHead>
-                  <TableHead className="hidden sm:table-cell">Joined</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2.5">
-                        <span
-                          aria-hidden="true"
-                          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                        >
-                          {initials(volName(v))}
-                        </span>
-                        <div className="min-w-0">
-                          <p className="truncate font-medium">{volName(v)}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {v.user?.email ?? "—"}
-                          </p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={v.status} />
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">{v.assignedArea || "—"}</TableCell>
-                    <TableCell className="hidden max-w-48 xl:table-cell">
-                      <div className="flex flex-wrap gap-1">
-                        {parseList(v.skills).slice(0, 3).map((s) => (
-                          <Chip key={s}>{s}</Chip>
-                        ))}
-                        {parseList(v.skills).length > 3 && (
-                          <span className="text-[11px] text-muted-foreground">
-                            +{parseList(v.skills).length - 3}
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden whitespace-nowrap text-sm sm:table-cell">
-                      {formatDate(v.joinedAt)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">{rowButtons(v)}</div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : view === "grid" ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((v) => (
-              <article key={v.id} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <Avatar className="size-9">
-                      <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                        {initials(volName(v))}
-                      </AvatarFallback>
-                    </Avatar>
+      {view === "table" ? (
+        <DataTable
+          columns={columns}
+          rows={paged}
+          rowKey={(v) => v.id}
+          loading={loading}
+          skeletonRows={8}
+          height="fill"
+          fillOffset={330}
+          onRowClick={openDetail}
+          page={pageSafe}
+          pages={pages}
+          total={filtered.length}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={setPageSize}
+          itemLabel="volunteers"
+          empty={
+            <EmptyState
+              icon={<Users className="size-6" aria-hidden="true" />}
+              title="No volunteers found"
+              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
+            >
+              {hasFilters && (
+                <Button size="sm" variant="outline" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              )}
+            </EmptyState>
+          }
+        >
+          {(v, col) => {
+            switch (col.key) {
+              case "name":
+                return (
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                    >
+                      {initials(volName(v))}
+                    </span>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold">{volName(v)}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {v.user?.email ?? "—"}
-                      </p>
+                      <p className="truncate font-medium">{volName(v)}</p>
+                      <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
                     </div>
                   </div>
-                  <StatusBadge status={v.status} className="shrink-0" />
-                </div>
-                {v.assignedArea && (
-                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <MapPin className="size-3.5" aria-hidden="true" /> {v.assignedArea}
-                  </p>
-                )}
-                {parseList(v.skills).length > 0 && (
+                );
+              case "status":
+                return <StatusBadge status={v.status} />;
+              case "area":
+                return <span className="text-sm">{v.assignedArea || "—"}</span>;
+              case "skills": {
+                const skills = parseList(v.skills);
+                return skills.length > 0 ? (
                   <div className="flex flex-wrap gap-1">
-                    {parseList(v.skills).slice(0, 3).map((s) => (
+                    {skills.slice(0, 3).map((s) => (
                       <Chip key={s}>{s}</Chip>
                     ))}
+                    {skills.length > 3 && (
+                      <span className="text-[11px] text-muted-foreground">+{skills.length - 3}</span>
+                    )}
                   </div>
-                )}
-                <div className="mt-auto flex flex-wrap items-center gap-1 border-t pt-3">
-                  {rowButtons(v)}
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <ul className="space-y-2" aria-label="Volunteers list">
-            {filtered.map((v) => (
-              <li key={v.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
-                <button
-                  type="button"
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                );
+              }
+              case "joined":
+                return <span className="whitespace-nowrap text-sm">{formatDate(v.joinedAt)}</span>;
+              case "actions":
+                return (
+                  <div className="flex justify-end gap-1">
+                    {rowButtons(v)}
+                  </div>
+                );
+              default:
+                return null;
+            }
+          }}
+        </DataTable>
+      ) : view === "grid" ? (
+        <>
+          {loading ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-44 rounded-xl" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={<Users className="size-6" aria-hidden="true" />}
+              title="No volunteers found"
+              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
+            />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {paged.map((v) => (
+                <article
+                  key={v.id}
+                  className="card-hover flex cursor-pointer flex-col gap-3 rounded-xl border bg-card p-4"
                   onClick={() => openDetail(v)}
-                  className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
-                  aria-label={`View volunteer ${volName(v)}`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <Avatar className="size-9">
+                        <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+                          {initials(volName(v))}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{volName(v)}</p>
+                        <p className="truncate text-xs text-muted-foreground">{v.user?.email ?? "—"}</p>
+                      </div>
+                    </div>
+                    <StatusBadge status={v.status} className="shrink-0" />
+                  </div>
+                  {v.assignedArea && (
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <MapPin className="size-3.5" aria-hidden="true" /> {v.assignedArea}
+                    </p>
+                  )}
+                  {parseList(v.skills).length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {parseList(v.skills).slice(0, 3).map((s) => (
+                        <Chip key={s}>{s}</Chip>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-auto flex flex-wrap items-center gap-1 border-t pt-3">
+                    {rowButtons(v)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {loading ? (
+            <div className="space-y-2" aria-busy="true">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full rounded-lg" />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={<Users className="size-6" aria-hidden="true" />}
+              title="No volunteers found"
+              hint="Approve applications in the first tab to onboard volunteers, or clear the search/status filters."
+            />
+          ) : (
+            <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Volunteers list">
+              {paged.map((v) => (
+                <li key={v.id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => openDetail(v)}
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left"
+                    aria-label={`View volunteer ${volName(v)}`}
                   >
-                    {initials(volName(v))}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{volName(v)}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {v.assignedArea ? `${v.assignedArea} · ` : ""}
-                      {v.user?.email ?? "—"}
+                    <span
+                      aria-hidden="true"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                    >
+                      {initials(volName(v))}
                     </span>
-                  </span>
-                  <StatusBadge status={v.status} className="shrink-0" />
-                </button>
-                <div className="flex shrink-0 gap-0.5">{rowButtons(v)}</div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </SectionCard>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{volName(v)}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {v.assignedArea ? `${v.assignedArea} · ` : ""}
+                        {v.user?.email ?? "—"}
+                      </span>
+                    </span>
+                    <StatusBadge status={v.status} className="shrink-0" />
+                  </button>
+                  <div className="flex shrink-0 gap-0.5">{rowButtons(v)}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
+      {/* pagination for grid/list (table paginates inside DataTable) */}
+      {view !== "table" && !loading && filtered.length > 0 ? (
+        <PaginationBar
+          page={pageSafe}
+          pages={pages}
+          total={filtered.length}
+          onPage={setPage}
+          itemLabel="volunteers"
+        />
+      ) : null}
 
       {/* ------------------------------ edit sheet ------------------------------ */}
       <FormSheet
@@ -1283,56 +1495,62 @@ function VolunteersTab() {
         onSubmit={saveEdit}
         loading={saving}
         dirty={JSON.stringify(form) !== JSON.stringify(initialForm)}
-        size="md"
+        size="lg"
       >
-        <FormSection title="Status">
-          <SelectField
-            label="Volunteer status"
-            required
-            value={form.status}
-            onChange={(v) => setForm({ ...form, status: v })}
-            options={VOL_STATUS_OPTIONS}
-            hint="Mirrors to the linked account (sign-in access follows this status)."
-          />
-          <TextField
-            label="Assigned area"
-            value={form.assignedArea}
-            onChange={(v) => setForm({ ...form, assignedArea: v })}
-            placeholder="Yelahanka zone, Bengaluru"
-          />
+        <FormSection title="Status" description="Roster state — mirrors to the linked account.">
+          <FieldGrid>
+            <SelectField
+              label="Volunteer status"
+              required
+              value={form.status}
+              onChange={(v) => setForm({ ...form, status: v })}
+              options={VOL_STATUS_OPTIONS}
+              hint="Mirrors to the linked account (sign-in access follows this status)."
+            />
+            <TextField
+              label="Assigned area"
+              value={form.assignedArea}
+              onChange={(v) => setForm({ ...form, assignedArea: v })}
+              placeholder="Yelahanka zone, Bengaluru"
+            />
+          </FieldGrid>
         </FormSection>
         <FormSection
           title="Skills & availability"
           description="Comma-separated lists, e.g. First aid, Teaching, Driving."
         >
-          <TextField
-            label="Skills"
-            value={form.skills}
-            onChange={(v) => setForm({ ...form, skills: v })}
-            placeholder="First aid, Teaching, Driving"
-            hint="Separate skills with commas."
-          />
-          <TextField
-            label="Availability"
-            value={form.availability}
-            onChange={(v) => setForm({ ...form, availability: v })}
-            placeholder="Weekends, Weekday evenings"
-            hint="Separate slots with commas."
-          />
+          <FieldGrid>
+            <TextField
+              label="Skills"
+              value={form.skills}
+              onChange={(v) => setForm({ ...form, skills: v })}
+              placeholder="First aid, Teaching, Driving"
+              hint="Separate skills with commas."
+            />
+            <TextField
+              label="Availability"
+              value={form.availability}
+              onChange={(v) => setForm({ ...form, availability: v })}
+              placeholder="Weekends, Weekday evenings"
+              hint="Separate slots with commas."
+            />
+          </FieldGrid>
         </FormSection>
-        <FormSection title="Emergency & identity">
-          <TextField
-            label="Emergency contact"
-            value={form.emergencyContact}
-            onChange={(v) => setForm({ ...form, emergencyContact: v })}
-            placeholder="Sunita — +91 98xxxxxx01"
-          />
-          <TextField
-            label="ID proof"
-            value={form.idProof}
-            onChange={(v) => setForm({ ...form, idProof: v })}
-            placeholder="Aadhaar last 4 / DL number"
-          />
+        <FormSection title="Emergency & identity" description="On-ground contact and ID reference.">
+          <FieldGrid>
+            <TextField
+              label="Emergency contact"
+              value={form.emergencyContact}
+              onChange={(v) => setForm({ ...form, emergencyContact: v })}
+              placeholder="Sunita — +91 98xxxxxx01"
+            />
+            <TextField
+              label="ID proof"
+              value={form.idProof}
+              onChange={(v) => setForm({ ...form, idProof: v })}
+              placeholder="Aadhaar last 4 / DL number"
+            />
+          </FieldGrid>
         </FormSection>
       </FormSheet>
 
@@ -1357,33 +1575,46 @@ function VolunteersTab() {
       />
 
       {/* ---------------------------- detail sheet ------------------------------ */}
-      <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-xl">
-          <SheetHeader className="text-left">
-            <SheetTitle className="flex items-center gap-2">
-              <Users className="size-4 text-primary" aria-hidden="true" />
-              {detail ? volName(detail) : "Volunteer"}
-              {detail && <StatusBadge status={detail.status} className="ml-2" />}
-            </SheetTitle>
-            <SheetDescription>
-              {detail
-                ? `${detail.user?.email ?? ""} · joined ${formatDate(detail.joinedAt)}`
-                : "Loading…"}
-            </SheetDescription>
-          </SheetHeader>
-
-          {!detail ? (
-            <div className="space-y-3 p-4" aria-busy="true">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[0, 1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-16 rounded-lg" />
-                ))}
-              </div>
-              <Skeleton className="h-40 rounded-xl" />
+      <DetailSheet
+        open={!!detail}
+        onOpenChange={(o) => !o && setDetail(null)}
+        eyebrow="Volunteer"
+        title={detail ? volName(detail) : "Volunteer"}
+        description={
+          detail
+            ? `${detail.user?.email ?? ""} · joined ${formatDate(detail.joinedAt)}${detail.assignedArea ? ` · ${detail.assignedArea}` : ""}`
+            : "Loading…"
+        }
+        status={detail ? <StatusBadge status={detail.status} /> : undefined}
+        actions={
+          detail ? (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openEdit(detail)}
+                aria-label="Edit volunteer profile"
+              >
+                <Pencil className="size-3.5" aria-hidden="true" /> Edit
+              </Button>
+              {quickStatusButton(detail)}
+            </>
+          ) : undefined
+        }
+      >
+        {!detail ? (
+          <div className="space-y-3" aria-busy="true">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-16 rounded-lg" />
+              ))}
             </div>
-          ) : (
-            <div className="flex-1 space-y-4 px-4 pb-6">
-              {/* stats strip */}
+            <Skeleton className="h-40 rounded-xl" />
+          </div>
+        ) : (
+          <>
+            {/* engagement strip */}
+            <DetailSection title="Engagement" description="Tasks and attendance summary.">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <StatTile
                   label="Tasks assigned"
@@ -1402,214 +1633,231 @@ function VolunteersTab() {
                   value={detail.stats ? `${detail.stats.totalHours} h` : "—"}
                 />
               </div>
+            </DetailSection>
 
-              <Tabs defaultValue="profile">
-                <TabsList>
-                  <TabsTrigger value="profile">Profile</TabsTrigger>
-                  <TabsTrigger value="tasks">Tasks</TabsTrigger>
-                  <TabsTrigger value="attendance">Attendance</TabsTrigger>
-                </TabsList>
+            <DetailSection title="Profile" description="Identity and roster fields.">
+              <DetailGrid cols={2}>
+                <DataField label="Full name" value={detail.user?.name} />
+                <DataField label="Email" value={detail.user?.email} copy />
+                <DataField label="Phone" value={detail.user?.phone} copy mono />
+                <DataField label="City" value={detail.user?.city} />
+                <DataField
+                  label="Account status"
+                  value={detail.user?.status ? <StatusBadge status={detail.user.status} /> : ""}
+                />
+                <DataField
+                  label="Volunteer status"
+                  value={<StatusBadge status={detail.status} />}
+                />
+                <DataField label="Assigned area" value={detail.assignedArea} />
+                <DataField label="Emergency contact" value={detail.emergencyContact} copy />
+                <DataField label="ID proof" value={detail.idProof} />
+                <DataField label="Joined" value={formatDate(detail.joinedAt)} />
+              </DetailGrid>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Skills
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {parseList(detail.skills).length > 0
+                      ? parseList(detail.skills).map((s) => <Chip key={s}>{s}</Chip>)
+                      : <span className="text-sm text-muted-foreground">—</span>}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Availability
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {parseList(detail.availability).length > 0
+                      ? parseList(detail.availability).map((s) => (
+                          <Chip key={s}>{titleCase(s)}</Chip>
+                        ))
+                      : <span className="text-sm text-muted-foreground">—</span>}
+                  </div>
+                </div>
+              </div>
+            </DetailSection>
 
-                {/* ------------------------------ profile ------------------------------ */}
-                <TabsContent value="profile" className="mt-3 space-y-4">
-                  <SectionCard title="Profile" icon={<UserCheck className="size-4" aria-hidden="true" />}>
-                    {detailLoading ? (
-                      <div className="space-y-2" aria-busy="true">
-                        <Skeleton className="h-24 w-full rounded-lg" />
+            {/* tasks */}
+            <DetailSection
+              title="Tasks"
+              description="All tasks linked to this volunteer."
+              actions={
+                <Button size="sm" onClick={openTaskForm}>
+                  <Plus className="size-4" aria-hidden="true" /> Assign task
+                </Button>
+              }
+            >
+              {!detail.tasks ? (
+                <div className="space-y-2" aria-busy="true">
+                  {[0, 1].map((i) => (
+                    <Skeleton key={i} className="h-16 rounded-lg" />
+                  ))}
+                </div>
+              ) : detail.tasks.length === 0 ? (
+                <EmptyState
+                  icon={<ClipboardList className="size-6" aria-hidden="true" />}
+                  title="No tasks yet"
+                  hint="Assign the first task — it will appear in the volunteer's portal."
+                />
+              ) : (
+                <ul
+                  className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
+                  aria-label="Volunteer tasks"
+                >
+                  {detail.tasks.map((t) => (
+                    <li key={t.id} className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 truncate text-sm font-medium">{t.title}</p>
+                        <StatusBadge
+                          status={t.priority}
+                          tone={PRIORITY_TONE[t.priority] ?? "neutral"}
+                          className="shrink-0"
+                        />
                       </div>
-                    ) : (
-                      <>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                          <DataField label="Full name" value={detail.user?.name} />
-                          <DataField label="Email" value={detail.user?.email} copy />
-                          <DataField label="Phone" value={detail.user?.phone} copy />
-                          <DataField label="City" value={detail.user?.city} />
-                          <DataField
-                            label="Account status"
-                            value={
-                              detail.user?.status ? (
-                                <StatusBadge status={detail.user.status} />
-                              ) : (
-                                "—"
-                              )
-                            }
-                          />
-                          <DataField
-                            label="Volunteer status"
-                            value={<StatusBadge status={detail.status} />}
-                          />
-                          <DataField label="Assigned area" value={detail.assignedArea} />
-                          <DataField label="Emergency contact" value={detail.emergencyContact} copy />
-                          <DataField label="ID proof" value={detail.idProof} />
-                          <DataField label="Joined" value={formatDate(detail.joinedAt)} />
-                        </div>
-                        <div className="mt-4 grid gap-3">
-                          <div>
-                            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                              Skills
-                            </p>
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
-                              {parseList(detail.skills).length > 0
-                                ? parseList(detail.skills).map((s) => <Chip key={s}>{s}</Chip>)
-                                : <span className="text-sm text-muted-foreground">—</span>}
-                            </div>
-                          </div>
-                          <div>
-                            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                              Availability
-                            </p>
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
-                              {parseList(detail.availability).length > 0
-                                ? parseList(detail.availability).map((s) => (
-                                    <Chip key={s}>{titleCase(s)}</Chip>
-                                  ))
-                                : <span className="text-sm text-muted-foreground">—</span>}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2 border-t pt-3">
-                          <Button size="sm" variant="outline" onClick={() => openEdit(detail)}>
-                            <Pencil className="size-3.5" aria-hidden="true" /> Edit profile
-                          </Button>
-                          {quickStatusButton(detail)}
-                        </div>
-                      </>
-                    )}
-                  </SectionCard>
-                </TabsContent>
+                      <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <CalendarClock className="size-3" aria-hidden="true" />{" "}
+                          {formatDateTime(t.scheduledDate)}
+                        </span>
+                        {t.location && (
+                          <span className="flex items-center gap-1">
+                            <MapPin className="size-3" aria-hidden="true" /> {t.location}
+                          </span>
+                        )}
+                        <span>{titleCase(t.type)}</span>
+                      </p>
+                      <div className="mt-1.5">
+                        <StatusBadge status={t.status} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DetailSection>
 
-                {/* ------------------------------- tasks ------------------------------- */}
-                <TabsContent value="tasks" className="mt-3 space-y-4">
-                  <SectionCard
-                    title="Assigned tasks"
-                    description="All tasks linked to this volunteer"
-                    icon={<ClipboardList className="size-4" aria-hidden="true" />}
-                    actions={
-                      <Button size="sm" onClick={openTaskForm}>
-                        <Plus className="size-4" aria-hidden="true" /> Assign task
-                      </Button>
-                    }
-                  >
-                    {!detail.tasks ? (
-                      <div className="space-y-2" aria-busy="true">
-                        {[0, 1].map((i) => (
-                          <Skeleton key={i} className="h-16 rounded-lg" />
-                        ))}
-                      </div>
-                    ) : detail.tasks.length === 0 ? (
-                      <EmptyState
-                        icon={<ClipboardList className="size-6" aria-hidden="true" />}
-                        title="No tasks yet"
-                        hint="Assign the first task — it will appear in the volunteer's portal."
-                      >
-                        <Button size="sm" variant="outline" onClick={openTaskForm}>
-                          <Plus className="size-4" aria-hidden="true" /> Assign task
-                        </Button>
-                      </EmptyState>
-                    ) : (
-                      <ul
-                        className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin"
-                        aria-label="Volunteer tasks"
-                      >
-                        {detail.tasks.map((t) => (
-                          <li key={t.id} className="rounded-lg border p-3">
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="min-w-0 truncate text-sm font-medium">{t.title}</p>
-                              <StatusBadge
-                                status={t.priority}
-                                tone={PRIORITY_TONE[t.priority] ?? "neutral"}
-                                className="shrink-0"
-                              />
-                            </div>
-                            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                              <span className="flex items-center gap-1">
-                                <CalendarClock className="size-3" aria-hidden="true" />{" "}
-                                {formatDateTime(t.scheduledDate)}
-                              </span>
-                              {t.location && (
-                                <span className="flex items-center gap-1">
-                                  <MapPin className="size-3" aria-hidden="true" /> {t.location}
-                                </span>
-                              )}
-                              <span>{titleCase(t.type)}</span>
-                            </p>
-                            <div className="mt-1.5">
-                              <StatusBadge status={t.status} />
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </SectionCard>
-                </TabsContent>
+            {/* distributions participated */}
+            <DetailSection
+              title="Distributions participated"
+              description="Aid hand-outs recorded against this volunteer."
+            >
+              {distRows === null ? (
+                <div className="space-y-2" aria-busy="true">
+                  {[0, 1].map((i) => (
+                    <Skeleton key={i} className="h-12 rounded-lg" />
+                  ))}
+                </div>
+              ) : distRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No distributions recorded for this volunteer yet.
+                </p>
+              ) : (
+                <ul
+                  className="max-h-80 space-y-1.5 overflow-y-auto scrollbar-thin"
+                  aria-label="Distributions participated"
+                >
+                  {distRows.map((d) => (
+                    <li key={d.id} className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm">
+                      <Package className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">
+                          {titleCase(d.type)}
+                          {d.beneficiary?.name ? ` → ${d.beneficiary.name}` : ""}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {d.location || "No location"} · {formatDateTime(d.distributedAt)}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-right text-xs tabular-nums">
+                        <span className="block font-medium">×{d.quantity}</span>
+                        {d.value ? (
+                          <span className="block text-muted-foreground">{formatINR(d.value)}</span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DetailSection>
 
-                {/* ----------------------------- attendance ----------------------------- */}
-                <TabsContent value="attendance" className="mt-3 space-y-4">
-                  <SectionCard
-                    title="Attendance"
-                    description="Recorded days, check-ins and hours"
-                    icon={<Activity className="size-4" aria-hidden="true" />}
-                    actions={
-                      <Button size="sm" onClick={openAttForm}>
-                        <Plus className="size-4" aria-hidden="true" /> Record attendance
-                      </Button>
-                    }
-                  >
-                    {attLoading || attRows === null ? (
-                      <div className="space-y-2" aria-busy="true">
-                        {[0, 1, 2].map((i) => (
-                          <Skeleton key={i} className="h-10 rounded-lg" />
-                        ))}
-                      </div>
-                    ) : attRows.length === 0 ? (
-                      <EmptyState
-                        icon={<Activity className="size-6" aria-hidden="true" />}
-                        title="No attendance recorded"
-                        hint="Record the volunteer's first day — rows upsert per date."
-                      >
-                        <Button size="sm" variant="outline" onClick={openAttForm}>
-                          <Plus className="size-4" aria-hidden="true" /> Record attendance
-                        </Button>
-                      </EmptyState>
-                    ) : (
-                      <div className="max-h-96 overflow-y-auto rounded-lg border scrollbar-thin">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Date</TableHead>
-                              <TableHead>Check-in</TableHead>
-                              <TableHead>Check-out</TableHead>
-                              <TableHead className="text-right">Hours</TableHead>
-                              <TableHead className="hidden sm:table-cell">Location</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {attRows.map((r) => (
-                              <TableRow key={r.id}>
-                                <TableCell className="whitespace-nowrap text-sm">
-                                  {formatDate(r.date)}
-                                </TableCell>
-                                <TableCell className="text-sm">{fmtTime(r.checkIn)}</TableCell>
-                                <TableCell className="text-sm">{fmtTime(r.checkOut)}</TableCell>
-                                <TableCell className="text-right text-sm font-medium">
-                                  {r.hours !== null && r.hours !== undefined ? r.hours : "—"}
-                                </TableCell>
-                                <TableCell className="hidden max-w-40 truncate text-sm sm:table-cell">
-                                  {r.location || "—"}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </SectionCard>
-                </TabsContent>
-              </Tabs>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+            {/* attendance */}
+            <DetailSection
+              title="Attendance"
+              description="Recorded days, check-ins and hours."
+              actions={
+                <Button size="sm" variant="outline" onClick={openAttForm}>
+                  <Plus className="size-4" aria-hidden="true" /> Record
+                </Button>
+              }
+            >
+              {attLoading || attRows === null ? (
+                <div className="space-y-2" aria-busy="true">
+                  {[0, 1, 2].map((i) => (
+                    <Skeleton key={i} className="h-10 rounded-lg" />
+                  ))}
+                </div>
+              ) : attRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No attendance recorded yet.</p>
+              ) : (
+                <div className="max-h-80 overflow-y-auto rounded-lg border scrollbar-thin">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-card">
+                      <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-3 py-2 font-semibold">Date</th>
+                        <th scope="col" className="px-3 py-2 font-semibold">In</th>
+                        <th scope="col" className="px-3 py-2 font-semibold">Out</th>
+                        <th scope="col" className="px-3 py-2 text-right font-semibold">Hours</th>
+                        <th scope="col" className="hidden px-3 py-2 font-semibold sm:table-cell">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attRows.map((r) => (
+                        <tr key={r.id} className="border-b last:border-b-0">
+                          <td className="whitespace-nowrap px-3 py-2">{formatDate(r.date)}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{fmtTime(r.checkIn)}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{fmtTime(r.checkOut)}</td>
+                          <td className="px-3 py-2 text-right font-medium tabular-nums">
+                            {r.hours !== null && r.hours !== undefined ? r.hours : "—"}
+                          </td>
+                          <td className="hidden max-w-40 truncate px-3 py-2 sm:table-cell">
+                            {r.location || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </DetailSection>
+
+            {/* application link */}
+            <DetailSection
+              title="Application"
+              description="The volunteer application this roster entry came from."
+            >
+              {appLink === null ? (
+                <p className="text-sm text-muted-foreground">
+                  No matching application on file — this volunteer may have been onboarded directly.
+                </p>
+              ) : (
+                <DetailGrid cols={2}>
+                  <DataField label="Applied as" value={appLink.fullName} />
+                  <DataField label="Application status" value={<StatusBadge status={appLink.status} />} />
+                  <DataField label="Applied on" value={formatDateTime(appLink.createdAt)} />
+                  <DataField
+                    label="Reviewed at"
+                    value={appLink.reviewedAt ? formatDateTime(appLink.reviewedAt) : "Not reviewed"}
+                  />
+                  <DataField label="Review note" value={appLink.reviewNote} className="sm:col-span-2" />
+                  <DataField label="Motivation" value={appLink.motivation} className="sm:col-span-2" />
+                </DetailGrid>
+              )}
+            </DetailSection>
+          </>
+        )}
+      </DetailSheet>
 
       {/* --------------------------- assign task sheet --------------------------- */}
       <FormSheet

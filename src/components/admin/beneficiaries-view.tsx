@@ -1,9 +1,11 @@
 "use client";
 
 /**
- * Beneficiaries — case management directory (ADMIN / VOLUNTEER).
- * Directory table/grid/list + case workflow: intake → verification → active,
- * verification tracking, case notes timeline, assistance history, requests.
+ * Beneficiaries — round-5: DataTable (fill height, skeleton rows, built-in
+ * pagination), full-screen DetailSheet with every case field + distribution
+ * history table, `full` FormSheet organised into identity → household &
+ * economy → needs & urgency → notes & consent (+ case workflow), grid/list
+ * views, filter chips and CSV export.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,11 +41,15 @@ import {
 } from "@/lib/validators";
 import { labelOf, useMasters } from "@/hooks/use-masters";
 import { PageHeader } from "@/components/shared/page-header";
-import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FormSheet } from "@/components/shared/form-sheet";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
 import {
   FieldGrid,
   FormSection,
@@ -56,25 +62,20 @@ import { StatusBadge, humanize } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
 import {
-  PageSizeSelect,
   PaginationBar,
   ViewSwitcher,
   useViewPref,
   type DataViewMode,
 } from "@/components/shared/view-switcher";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -83,13 +84,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -411,6 +405,16 @@ export default function BeneficiariesView() {
     [rows]
   );
 
+  const hasFilters =
+    categoryFilter !== "ALL" || caseFilter !== "ALL" || verFilter !== "ALL" || search.trim() !== "";
+
+  const clearFilters = () => {
+    setQ("");
+    setCategoryFilter("ALL");
+    setCaseFilter("ALL");
+    setVerFilter("ALL");
+  };
+
   /* ------------------------------ create / edit ----------------------------- */
 
   const openCreate = () => {
@@ -487,6 +491,7 @@ export default function BeneficiariesView() {
       if (editing) {
         const updated = await patch<Beneficiary>(`/api/beneficiaries/${editing.id}`, payload);
         setRows((r) => r.map((x) => (x.id === editing.id ? { ...x, ...updated } : x)));
+        setViewTarget((v) => (v && v.id === editing.id ? { ...v, ...updated } : v));
         toast.success(`${payload.name} updated`);
       } else {
         await post("/api/beneficiaries", payload);
@@ -724,6 +729,19 @@ export default function BeneficiariesView() {
     [categoryOptions]
   );
 
+  /* ------------------------------- table columns ----------------------------- */
+
+  const columns: DataTableColumn<Beneficiary>[] = [
+    { key: "name", header: "Beneficiary" },
+    { key: "category", header: "Category", hideBelow: "md" },
+    { key: "urgency", header: "Urgency" },
+    { key: "case", header: "Case" },
+    { key: "verification", header: "Verification", hideBelow: "sm" },
+    { key: "city", header: "City", hideBelow: "md" },
+    { key: "worker", header: "Case worker", hideBelow: "lg" },
+    { key: "actions", header: "", align: "right", className: "w-14" },
+  ];
+
   /* --------------------------------- render --------------------------------- */
 
   return (
@@ -781,65 +799,93 @@ export default function BeneficiariesView() {
       </div>
 
       {/* Toolbar */}
-      <SectionCard title="Case directory" description={`${filtered.length} of ${rows.length} cases`}>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="relative flex-1">
-              <UserRound
-                className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Search name, guardian, phone, city or caseworker…"
-                className="pl-9"
-                aria-label="Search beneficiaries"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-full sm:w-44" aria-label="Filter by category">
-                  <SelectValue placeholder="All categories" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All categories</SelectItem>
-                  {categoryOptions.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={caseFilter} onValueChange={setCaseFilter}>
-                <SelectTrigger className="w-full sm:w-40" aria-label="Filter by case status">
-                  <SelectValue placeholder="Case status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All case statuses</SelectItem>
-                  {CASE_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {humanize(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={verFilter} onValueChange={setVerFilter}>
-                <SelectTrigger className="w-full sm:w-44" aria-label="Filter by verification">
-                  <SelectValue placeholder="Verification" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All verification</SelectItem>
-                  {VERIFICATION_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {humanize(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative flex-1">
+            <UserRound
+              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search name, guardian, phone, city or caseworker…"
+              className="pl-9"
+              aria-label="Search beneficiaries"
+            />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-full sm:w-44" aria-label="Filter by category">
+                <SelectValue placeholder="All categories" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All categories</SelectItem>
+                {categoryOptions.map((c) => (
+                  <SelectItem key={c.value} value={c.value}>
+                    {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={caseFilter} onValueChange={setCaseFilter}>
+              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by case status">
+                <SelectValue placeholder="Case status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All case statuses</SelectItem>
+                {CASE_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {humanize(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={verFilter} onValueChange={setVerFilter}>
+              <SelectTrigger className="w-full sm:w-44" aria-label="Filter by verification">
+                <SelectValue placeholder="Verification" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All verification</SelectItem>
+                {VERIFICATION_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {humanize(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* active filter chips */}
+          {hasFilters ? (
+            <div className="flex flex-wrap items-center gap-1.5" aria-label="Active filters">
+              {search.trim() !== "" && (
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  Search: <strong className="font-semibold text-foreground">{search.trim()}</strong>
+                </span>
+              )}
+              {categoryFilter !== "ALL" && (
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  Category: <strong className="font-semibold text-foreground">{labelOf(categoryOptions, categoryFilter)}</strong>
+                </span>
+              )}
+              {caseFilter !== "ALL" && (
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  Case: <strong className="font-semibold text-foreground">{humanize(caseFilter)}</strong>
+                </span>
+              )}
+              {verFilter !== "ALL" && (
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                  Verification: <strong className="font-semibold text-foreground">{humanize(verFilter)}</strong>
+                </span>
+              )}
+              <Button variant="ghost" size="sm" className="min-h-9" onClick={clearFilters} aria-label="Clear filters">
+                Clear
+              </Button>
+            </div>
+          ) : null}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <ViewSwitcher value={mode} onChange={(m: DataViewMode) => setMode(m)} />
             <ExportMenu
               columns={csvColumns}
@@ -847,119 +893,90 @@ export default function BeneficiariesView() {
               filename="uar-beneficiary-cases"
               disabled={filtered.length === 0}
             />
-            <span className="ml-auto hidden text-xs text-muted-foreground sm:inline" aria-live="polite">
-              {loading ? "Loading…" : `${filtered.length} cases`}
-            </span>
           </div>
+          <span className="hidden text-xs text-muted-foreground sm:inline" aria-live="polite">
+            {loading ? "Loading…" : `${filtered.length} of ${rows.length} cases`}
+          </span>
         </div>
-      </SectionCard>
+      </div>
 
       {/* Table view */}
       {mode === "table" ? (
-        <div className="rounded-xl border bg-card">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Urgency</TableHead>
-                  <TableHead className="hidden md:table-cell">City</TableHead>
-                  <TableHead>Case</TableHead>
-                  <TableHead className="hidden sm:table-cell">Verification</TableHead>
-                  <TableHead className="hidden lg:table-cell">Case worker</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading
-                  ? Array.from({ length: 6 }).map((_, i) => (
-                      <TableRow key={i}>
-                        {Array.from({ length: 8 }).map((__, j) => (
-                          <TableCell key={j}>
-                            <Skeleton className="h-5 w-full" />
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    ))
-                  : paged.map((b) => (
-                      <TableRow
-                        key={b.id}
-                        className="cursor-pointer"
-                        onClick={() => openView(b)}
-                      >
-                        <TableCell>
-                          <div className="flex items-center gap-2.5">
-                            <span
-                              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                              aria-hidden="true"
-                            >
-                              {b.name.charAt(0).toUpperCase()}
-                            </span>
-                            <div className="min-w-0">
-                              <p className="truncate font-medium">{b.name}</p>
-                              {b.guardian ? (
-                                <p className="truncate text-xs text-muted-foreground">
-                                  Guardian: {b.guardian}
-                                </p>
-                              ) : (
-                                <p className="truncate text-xs text-muted-foreground">
-                                  {b.phone || "—"}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm">{labelOf(categoryOptions, b.category)}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={b.urgencyLevel} tone={urgencyTone(b.urgencyLevel)} />
-                        </TableCell>
-                        <TableCell className="hidden text-sm md:table-cell">{b.city || "—"}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={b.caseStatus ?? "INTAKE"} />
-                        </TableCell>
-                        <TableCell className="hidden sm:table-cell">
-                          <StatusBadge status={b.verificationStatus ?? "PENDING"} />
-                        </TableCell>
-                        <TableCell className="hidden text-sm lg:table-cell">
-                          {b.caseWorker || "—"}
-                        </TableCell>
-                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                          {rowActions(b)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-              </TableBody>
-            </Table>
-          </div>
-          {!loading && paged.length === 0 ? (
-            <div className="p-6">
-              <EmptyState
-                icon={<HeartHandshake className="size-6" aria-hidden="true" />}
-                title="No cases found"
-                hint="Adjust the filters or register a new beneficiary case."
-              >
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setQ("");
-                      setCategoryFilter("ALL");
-                      setCaseFilter("ALL");
-                      setVerFilter("ALL");
-                    }}
-                  >
+        <DataTable
+          columns={columns}
+          rows={paged}
+          rowKey={(b) => b.id}
+          loading={loading}
+          skeletonRows={8}
+          height="fill"
+          fillOffset={330}
+          onRowClick={openView}
+          page={page}
+          pages={pages}
+          total={filtered.length}
+          pageSize={pageSize}
+          onPage={setPage}
+          onPageSize={setPageSize}
+          itemLabel="cases"
+          empty={
+            <EmptyState
+              icon={<HeartHandshake className="size-6" aria-hidden="true" />}
+              title="No cases found"
+              hint="Adjust the filters or register a new beneficiary case."
+            >
+              <div className="flex gap-2">
+                {hasFilters && (
+                  <Button size="sm" variant="outline" onClick={clearFilters}>
                     Clear filters
                   </Button>
-                  <Button size="sm" onClick={openCreate}>
-                    <Plus className="size-4" /> New case
-                  </Button>
-                </div>
-              </EmptyState>
-            </div>
-          ) : null}
-        </div>
+                )}
+                <Button size="sm" onClick={openCreate}>
+                  <Plus className="size-4" /> New case
+                </Button>
+              </div>
+            </EmptyState>
+          }
+        >
+          {(b, col) => {
+            switch (col.key) {
+              case "name":
+                return (
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                      aria-hidden="true"
+                    >
+                      {b.name.charAt(0).toUpperCase()}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{b.name}</p>
+                      {b.guardian ? (
+                        <p className="truncate text-xs text-muted-foreground">Guardian: {b.guardian}</p>
+                      ) : (
+                        <p className="truncate font-mono text-xs text-muted-foreground">{b.phone || "—"}</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              case "category":
+                return <span className="text-sm">{labelOf(categoryOptions, b.category)}</span>;
+              case "urgency":
+                return <StatusBadge status={b.urgencyLevel} tone={urgencyTone(b.urgencyLevel)} />;
+              case "case":
+                return <StatusBadge status={b.caseStatus ?? "INTAKE"} />;
+              case "verification":
+                return <StatusBadge status={b.verificationStatus ?? "PENDING"} />;
+              case "city":
+                return <span className="text-sm">{b.city || "—"}</span>;
+              case "worker":
+                return <span className="text-sm">{b.caseWorker || "—"}</span>;
+              case "actions":
+                return <div className="flex justify-end">{rowActions(b)}</div>;
+              default:
+                return null;
+            }
+          }}
+        </DataTable>
       ) : null}
 
       {/* Grid view */}
@@ -1013,7 +1030,7 @@ export default function BeneficiariesView() {
                       <MapPin className="size-3.5" aria-hidden="true" /> {b.city || "—"}
                     </span>
                     <span className="inline-flex items-center gap-1">
-                      <Phone className="size-3.5" aria-hidden="true" /> {b.phone || "—"}
+                      <Phone className="size-3.5" aria-hidden="true" /> <span className="font-mono">{b.phone || "—"}</span>
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <UserRound className="size-3.5" aria-hidden="true" />
@@ -1095,8 +1112,8 @@ export default function BeneficiariesView() {
         </div>
       ) : null}
 
-      {/* Pagination */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Pagination for grid/list (table paginates inside DataTable) */}
+      {mode !== "table" ? (
         <PaginationBar
           page={page}
           pages={pages}
@@ -1104,26 +1121,32 @@ export default function BeneficiariesView() {
           onPage={setPage}
           itemLabel="cases"
         />
-        <PageSizeSelect value={pageSize} onChange={setPageSize} />
-      </div>
+      ) : null}
 
       {/* ------------------------------ Add / Edit ------------------------------ */}
       <FormSheet
         open={formOpen}
-        onOpenChange={setFormOpen}
+        onOpenChange={(o) => {
+          if (!o && !saving) setFormOpen(false);
+        }}
         title={editing ? `Edit case — ${editing.name}` : "Register beneficiary case"}
         description={
           editing
-            ? "Update identity, address, case workflow and need details."
+            ? "Update identity, household, need and consent details."
             : "Add a beneficiary to the case register. Case status starts at Intake."
         }
         onSubmit={submitForm}
         submitLabel={editing ? "Save changes" : "Register case"}
         loading={saving}
         dirty={dirty}
-        size="lg"
+        size="full"
+        badge={
+          editing ? (
+            <StatusBadge status={editing.caseStatus ?? "INTAKE"} />
+          ) : undefined
+        }
       >
-        <FormSection title="Identity" description="Who the case is for.">
+        <FormSection title="Identity" description="Who the case is for, and where the family lives.">
           <FieldGrid>
             <TextField
               label="Full name"
@@ -1167,11 +1190,6 @@ export default function BeneficiariesView() {
               onChange={(v) => setForm({ ...form, email: v })}
               placeholder="Optional"
             />
-          </FieldGrid>
-        </FormSection>
-
-        <FormSection title="Address" description="Where the family lives.">
-          <FieldGrid>
             <TextField
               label="Address"
               value={form.address}
@@ -1203,7 +1221,41 @@ export default function BeneficiariesView() {
           </FieldGrid>
         </FormSection>
 
-        <FormSection title="Case" description="Workflow, verification and ownership.">
+        <FormSection
+          title="Household & economy"
+          description="Family size and the monthly money picture used to size support."
+        >
+          <FieldGrid>
+            <TextField
+              label="Family members"
+              inputMode="numeric"
+              value={form.familyMembers}
+              onChange={(v) => setForm({ ...form, familyMembers: v })}
+              placeholder="e.g. 4"
+            />
+            <TextField
+              label="Monthly income"
+              prefix="₹"
+              inputMode="decimal"
+              value={form.monthlyIncome}
+              onChange={(v) => setForm({ ...form, monthlyIncome: v })}
+              placeholder="e.g. 3500"
+            />
+            <TextField
+              label="Monthly need"
+              prefix="₹"
+              inputMode="decimal"
+              value={form.monthlyNeed}
+              onChange={(v) => setForm({ ...form, monthlyNeed: v })}
+              placeholder="e.g. 6000"
+            />
+          </FieldGrid>
+        </FormSection>
+
+        <FormSection
+          title="Needs & urgency"
+          description="What kind of support is required and how urgent it is."
+        >
           <FieldGrid>
             <SelectField
               label="Category"
@@ -1219,6 +1271,27 @@ export default function BeneficiariesView() {
               onChange={(v) => setForm({ ...form, urgencyLevel: v })}
               options={URGENCIES.map((u) => ({ value: u, label: titleCase(u) }))}
             />
+          </FieldGrid>
+          <TextareaField
+            label="Needs"
+            value={form.needs}
+            onChange={(v) => setForm({ ...form, needs: v })}
+            placeholder="What support does this family need?"
+          />
+          <TextareaField
+            label="Documents"
+            hint="comma-separated document refs"
+            value={form.documents}
+            onChange={(v) => setForm({ ...form, documents: v })}
+            placeholder="AADHAAR-XXXX, RATION-XXXX, DISABILITY-CARD"
+          />
+        </FormSection>
+
+        <FormSection
+          title="Case workflow"
+          description="Workflow stage, verification and ownership of the case."
+        >
+          <FieldGrid>
             <SelectField
               label="Case status"
               required
@@ -1245,319 +1318,280 @@ export default function BeneficiariesView() {
               value={form.intakeDate}
               onChange={(v) => setForm({ ...form, intakeDate: v })}
             />
-            <SwitchField
-              label="Photo consent"
-              hint="Family agrees to photos being used in campaigns and reports."
-              checked={form.photoConsent}
-              onChange={(v) => setForm({ ...form, photoConsent: v })}
-            />
           </FieldGrid>
         </FormSection>
 
-        <FormSection title="Need" description="Household situation and requested support.">
-          <FieldGrid>
-            <TextField
-              label="Family members"
-              inputMode="numeric"
-              value={form.familyMembers}
-              onChange={(v) => setForm({ ...form, familyMembers: v })}
-              placeholder="e.g. 4"
-            />
-            <TextField
-              label="Monthly income"
-              prefix="₹"
-              inputMode="decimal"
-              value={form.monthlyIncome}
-              onChange={(v) => setForm({ ...form, monthlyIncome: v })}
-              placeholder="e.g. 3500"
-            />
-            <TextField
-              label="Monthly need"
-              prefix="₹"
-              inputMode="decimal"
-              value={form.monthlyNeed}
-              onChange={(v) => setForm({ ...form, monthlyNeed: v })}
-              placeholder="e.g. 6000"
-            />
-            <div className="hidden sm:block" />
-            <TextareaField
-              label="Needs"
-              value={form.needs}
-              onChange={(v) => setForm({ ...form, needs: v })}
-              placeholder="What support does this family need?"
-              className="sm:col-span-2"
-            />
-            <TextareaField
-              label="Documents"
-              hint="comma-separated document refs"
-              value={form.documents}
-              onChange={(v) => setForm({ ...form, documents: v })}
-              placeholder="AADHAAR-XXXX, RATION-XXXX, DISABILITY-CARD"
-              className="sm:col-span-2"
-            />
-            <TextareaField
-              label="Notes"
-              value={form.notes}
-              onChange={(v) => setForm({ ...form, notes: v })}
-              placeholder="Internal remarks"
-              className="sm:col-span-2"
-            />
-          </FieldGrid>
+        <FormSection title="Notes & consent" description="Internal remarks and family consent.">
+          <TextareaField
+            label="Notes"
+            value={form.notes}
+            onChange={(v) => setForm({ ...form, notes: v })}
+            placeholder="Internal remarks"
+          />
+          <SwitchField
+            label="Photo consent"
+            hint="Family agrees to photos being used in campaigns and reports."
+            checked={form.photoConsent}
+            onChange={(v) => setForm({ ...form, photoConsent: v })}
+          />
         </FormSection>
       </FormSheet>
 
       {/* ------------------------------ Detail sheet ---------------------------- */}
-      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl">
-          <SheetHeader className="sticky top-0 z-10 gap-1 border-b bg-background/95 px-6 py-4 pr-14 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-            <SheetTitle className="flex items-center gap-2 text-base font-semibold">
-              <span
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
-                aria-hidden="true"
-              >
-                {(viewTarget?.name ?? "?").charAt(0).toUpperCase()}
-              </span>
-              {viewTarget?.name ?? "Case"}
-            </SheetTitle>
-            <SheetDescription className="truncate text-xs">
-              {viewTarget
-                ? `${labelOf(categoryOptions, viewTarget.category)} · ${humanize(viewTarget.caseStatus)} · ${viewTarget.city || "No city"}`
-                : ""}
-            </SheetDescription>
-          </SheetHeader>
+      <DetailSheet
+        open={!!viewTarget}
+        onOpenChange={(o) => !o && setViewTarget(null)}
+        eyebrow="Beneficiary case"
+        title={viewTarget?.name ?? "Case"}
+        description={
+          viewTarget
+            ? `${labelOf(categoryOptions, viewTarget.category)} · ${viewTarget.city || "No city"}${
+                viewTarget.caseWorker ? ` · Case worker: ${viewTarget.caseWorker}` : ""
+              }`
+            : ""
+        }
+        status={
+          viewTarget ? (
+            <>
+              <StatusBadge status={viewTarget.urgencyLevel} tone={urgencyTone(viewTarget.urgencyLevel)} />
+              <StatusBadge status={viewTarget.caseStatus ?? "INTAKE"} />
+              <StatusBadge status={viewTarget.verificationStatus ?? "PENDING"} />
+            </>
+          ) : undefined
+        }
+        actions={viewTarget ? rowActions(viewTarget) : undefined}
+      >
+        {viewTarget ? (
+          <Tabs defaultValue="overview" className="gap-0" key={viewTarget.id}>
+            <TabsList className="mb-4 w-full sm:w-auto">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="notes">Case notes</TabsTrigger>
+              <TabsTrigger value="assistance">Assistance</TabsTrigger>
+              <TabsTrigger value="requests">Requests</TabsTrigger>
+            </TabsList>
 
-          {viewTarget ? (
-            <Tabs defaultValue="overview" className="min-h-0 flex-1 gap-0" key={viewTarget.id}>
-              <div className="border-b px-6 py-2">
-                <TabsList className="w-full sm:w-auto">
-                  <TabsTrigger value="overview">Overview</TabsTrigger>
-                  <TabsTrigger value="notes">Case notes</TabsTrigger>
-                  <TabsTrigger value="assistance">Assistance</TabsTrigger>
-                  <TabsTrigger value="requests">Requests</TabsTrigger>
-                </TabsList>
+            {/* Overview */}
+            <TabsContent value="overview" className="mt-0 space-y-6">
+              <DetailSection title="Identity" description="Who the case is for.">
+                <DetailGrid cols={2}>
+                  <DataField label="Full name" value={viewTarget.name} />
+                  <DataField label="Guardian" value={viewTarget.guardian} />
+                  <DataField label="Age" value={viewTarget.age ?? undefined} />
+                  <DataField label="Gender" value={viewTarget.gender ? humanize(viewTarget.gender) : ""} />
+                  <DataField label="Phone" value={viewTarget.phone} copy mono />
+                  <DataField label="Email" value={viewTarget.email} copy />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection title="Address" description="Where the family lives.">
+                <DetailGrid cols={2}>
+                  <DataField label="Address" value={viewTarget.address} className="sm:col-span-2" />
+                  <DataField label="City" value={viewTarget.city} />
+                  <DataField label="State" value={viewTarget.state} />
+                  <DataField label="PIN code" value={viewTarget.pincode} mono />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection title="Household & economy" description="Family size and monthly money picture.">
+                <DetailGrid cols={2}>
+                  <DataField label="Family members" value={String(viewTarget.familyMembers ?? "")} />
+                  <DataField
+                    label="Monthly income"
+                    value={viewTarget.monthlyIncome !== null && viewTarget.monthlyIncome !== undefined ? formatINR(viewTarget.monthlyIncome) : ""}
+                    mono
+                  />
+                  <DataField
+                    label="Monthly need"
+                    value={viewTarget.monthlyNeed !== null && viewTarget.monthlyNeed !== undefined ? formatINR(viewTarget.monthlyNeed) : ""}
+                    mono
+                  />
+                  <DataField
+                    label="Monthly gap"
+                    value={
+                      viewTarget.monthlyIncome != null && viewTarget.monthlyNeed != null
+                        ? formatINR(Math.max(0, viewTarget.monthlyNeed - viewTarget.monthlyIncome))
+                        : ""
+                    }
+                    mono
+                  />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection title="Case" description="Workflow, verification and ownership.">
+                <DetailGrid cols={2}>
+                  <DataField label="Category" value={labelOf(categoryOptions, viewTarget.category)} />
+                  <DataField
+                    label="Urgency"
+                    value={<StatusBadge status={viewTarget.urgencyLevel} tone={urgencyTone(viewTarget.urgencyLevel)} />}
+                  />
+                  <DataField
+                    label="Case status"
+                    value={<StatusBadge status={viewTarget.caseStatus ?? "INTAKE"} />}
+                  />
+                  <DataField
+                    label="Verification"
+                    value={<StatusBadge status={viewTarget.verificationStatus ?? "PENDING"} />}
+                  />
+                  <DataField label="Case worker" value={viewTarget.caseWorker} />
+                  <DataField label="Intake date" value={viewTarget.intakeDate ? toDateInput(viewTarget.intakeDate) : ""} />
+                  <DataField label="Photo consent" value={viewTarget.photoConsent ? "Granted" : "Not granted"} />
+                  <DataField label="Onboarded by" value={viewTarget.onboardedByName} />
+                  <DataField
+                    label="Registered"
+                    value={viewTarget.createdAt ? formatDateTime(viewTarget.createdAt) : ""}
+                  />
+                  <DataField label="Active" value={viewTarget.isActive ? "Yes" : "No — archived"} />
+                </DetailGrid>
+              </DetailSection>
+
+              <DetailSection title="Needs & notes" description="Requested support and internal remarks.">
+                <DetailGrid cols={1}>
+                  <DataField label="Needs" value={viewTarget.needs} />
+                  <DataField label="Documents" value={viewTarget.documents} mono />
+                  <DataField label="Notes" value={viewTarget.notes} />
+                </DetailGrid>
+              </DetailSection>
+            </TabsContent>
+
+            {/* Case notes */}
+            <TabsContent value="notes" className="mt-0 space-y-4">
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <Textarea
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  rows={3}
+                  placeholder="Add a case note — home visit, verification call, follow-up…"
+                  aria-label="New case note"
+                />
+                <div className="mt-2 flex justify-end">
+                  <Button size="sm" onClick={addNote} disabled={noteSaving}>
+                    {noteSaving ? "Adding…" : "Add note"}
+                  </Button>
+                </div>
               </div>
-
-              {/* Overview */}
-              <TabsContent
-                value="overview"
-                className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4 scrollbar-thin"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge status={viewTarget.urgencyLevel} tone={urgencyTone(viewTarget.urgencyLevel)} />
-                  <StatusBadge status={viewTarget.caseStatus ?? "INTAKE"} />
-                  <StatusBadge status={viewTarget.verificationStatus ?? "PENDING"} />
-                  {viewTarget.isActive ? null : (
-                    <StatusBadge status="ARCHIVED" tone="neutral">
-                      Archived
-                    </StatusBadge>
-                  )}
+              {notesLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-16 w-full" />
+                  ))}
                 </div>
-
-                <SectionCard title="Identity" icon={<UserRound className="size-4" aria-hidden="true" />}>
-                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                    <DataField label="Full name" value={viewTarget.name} />
-                    <DataField label="Guardian" value={viewTarget.guardian} />
-                    <DataField label="Age" value={viewTarget.age ?? undefined} />
-                    <DataField label="Gender" value={viewTarget.gender ? humanize(viewTarget.gender) : ""} />
-                    <DataField label="Phone" value={viewTarget.phone} copy />
-                    <DataField label="Email" value={viewTarget.email} copy />
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Address" icon={<MapPin className="size-4" aria-hidden="true" />}>
-                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                    <DataField label="Address" value={viewTarget.address} className="sm:col-span-2" />
-                    <DataField label="City" value={viewTarget.city} />
-                    <DataField label="State" value={viewTarget.state} />
-                    <DataField label="PIN code" value={viewTarget.pincode} mono />
-                  </div>
-                </SectionCard>
-
-                <SectionCard
-                  title="Case"
-                  icon={<ClipboardList className="size-4" aria-hidden="true" />}
-                  actions={rowActions(viewTarget)}
-                >
-                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                    <DataField label="Category" value={labelOf(categoryOptions, viewTarget.category)} />
-                    <DataField
-                      label="Urgency"
-                      value={<StatusBadge status={viewTarget.urgencyLevel} tone={urgencyTone(viewTarget.urgencyLevel)} />}
-                    />
-                    <DataField
-                      label="Case status"
-                      value={<StatusBadge status={viewTarget.caseStatus ?? "INTAKE"} />}
-                    />
-                    <DataField
-                      label="Verification"
-                      value={<StatusBadge status={viewTarget.verificationStatus ?? "PENDING"} />}
-                    />
-                    <DataField label="Case worker" value={viewTarget.caseWorker} />
-                    <DataField label="Intake date" value={viewTarget.intakeDate ? toDateInput(viewTarget.intakeDate) : ""} />
-                    <DataField label="Photo consent" value={viewTarget.photoConsent ? "Granted" : "Not granted"} />
-                    <DataField label="Onboarded by" value={viewTarget.onboardedByName} />
-                    <DataField
-                      label="Registered"
-                      value={viewTarget.createdAt ? formatDateTime(viewTarget.createdAt) : ""}
-                    />
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Need" icon={<HeartHandshake className="size-4" aria-hidden="true" />}>
-                  <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-                    <DataField label="Family members" value={String(viewTarget.familyMembers ?? "")} />
-                    <DataField
-                      label="Monthly income"
-                      value={viewTarget.monthlyIncome !== null && viewTarget.monthlyIncome !== undefined ? formatINR(viewTarget.monthlyIncome) : ""}
-                    />
-                    <DataField
-                      label="Monthly need"
-                      value={viewTarget.monthlyNeed !== null && viewTarget.monthlyNeed !== undefined ? formatINR(viewTarget.monthlyNeed) : ""}
-                    />
-                    <DataField label="Documents" value={viewTarget.documents} mono />
-                    <DataField label="Needs" value={viewTarget.needs} className="sm:col-span-2" />
-                    <DataField label="Notes" value={viewTarget.notes} className="sm:col-span-2" />
-                  </div>
-                </SectionCard>
-              </TabsContent>
-
-              {/* Case notes */}
-              <TabsContent
-                value="notes"
-                className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4 scrollbar-thin"
-              >
-                <div className="rounded-lg border bg-muted/30 p-3">
-                  <Textarea
-                    value={noteText}
-                    onChange={(e) => setNoteText(e.target.value)}
-                    rows={3}
-                    placeholder="Add a case note — home visit, verification call, follow-up…"
-                    aria-label="New case note"
-                  />
-                  <div className="mt-2 flex justify-end">
-                    <Button size="sm" onClick={addNote} disabled={noteSaving}>
-                      {noteSaving ? "Adding…" : "Add note"}
-                    </Button>
-                  </div>
-                </div>
-                {notesLoading ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
-                    ))}
-                  </div>
-                ) : notes.length === 0 ? (
-                  <EmptyState
-                    icon={<FileText className="size-6" aria-hidden="true" />}
-                    title="No case notes yet"
-                    hint="Notes build the case timeline — add the first one above."
-                  />
-                ) : (
-                  <ol className="max-h-96 space-y-0 overflow-y-auto scrollbar-thin" aria-label="Case notes timeline">
-                    {notes.map((n, i) => (
-                      <li key={n.id} className="relative flex gap-3 pb-4 pl-1 last:pb-0">
-                        {i < notes.length - 1 ? (
-                          <span
-                            aria-hidden="true"
-                            className="absolute left-[7px] top-5 h-full w-px bg-border"
-                          />
-                        ) : null}
+              ) : notes.length === 0 ? (
+                <EmptyState
+                  icon={<FileText className="size-6" aria-hidden="true" />}
+                  title="No case notes yet"
+                  hint="Notes build the case timeline — add the first one above."
+                />
+              ) : (
+                <ol className="max-h-96 space-y-0 overflow-y-auto scrollbar-thin" aria-label="Case notes timeline">
+                  {notes.map((n, i) => (
+                    <li key={n.id} className="relative flex gap-3 pb-4 pl-1 last:pb-0">
+                      {i < notes.length - 1 ? (
                         <span
                           aria-hidden="true"
-                          className="relative mt-1.5 size-3.5 shrink-0 rounded-full border-2 border-primary/40 bg-primary/20"
+                          className="absolute left-[7px] top-5 h-full w-px bg-border"
                         />
-                        <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
-                          <p className="whitespace-pre-line text-sm leading-relaxed">{n.note}</p>
-                          <p className="mt-1.5 text-xs text-muted-foreground">
-                            {n.authorName || "Staff"} · {formatDateTime(n.createdAt)}
-                          </p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </TabsContent>
-
-              {/* Assistance history */}
-              <TabsContent
-                value="assistance"
-                className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4 scrollbar-thin"
-              >
-                {assistLoading ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
-                    ))}
-                  </div>
-                ) : assist.length === 0 ? (
-                  <EmptyState
-                    icon={<HeartHandshake className="size-6" aria-hidden="true" />}
-                    title="No assistance recorded"
-                    hint="Distributions linked to this beneficiary will appear here."
-                  />
-                ) : (
-                  <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Assistance history">
-                    {assist.map((d) => (
-                      <li key={d.id} className="rounded-lg border bg-card p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-sm font-medium">{titleCase(d.type)} distribution</span>
-                          <span className="text-xs text-muted-foreground">
-                            {formatDateTime(d.distributedAt)}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Qty {d.quantity}
-                          {d.value ? ` · ${formatINR(d.value)}` : ""}
-                          {d.location ? ` · ${d.location}` : ""}
-                          {d.volunteer?.user?.name ? ` · By ${d.volunteer.user.name}` : ""}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </TabsContent>
-
-              {/* Requests */}
-              <TabsContent
-                value="requests"
-                className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4 scrollbar-thin"
-              >
-                {requestsLoading ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
-                    ))}
-                  </div>
-                ) : requests.length === 0 ? (
-                  <EmptyState
-                    icon={<Inbox className="size-6" aria-hidden="true" />}
-                    title="No help requests"
-                    hint="Requests submitted for this beneficiary will appear here."
-                  />
-                ) : (
-                  <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Help requests">
-                    {requests.map((r) => (
-                      <li key={r.id} className="rounded-lg border bg-card p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-sm font-medium">{r.name}</span>
-                          <span className="flex items-center gap-1.5">
-                            <StatusBadge status={r.urgency} tone={urgencyTone(r.urgency)} />
-                            <StatusBadge status={r.status} />
-                          </span>
-                        </div>
-                        <p className="mt-1 text-sm text-muted-foreground">{r.details}</p>
+                      ) : null}
+                      <span
+                        aria-hidden="true"
+                        className="relative mt-1.5 size-3.5 shrink-0 rounded-full border-2 border-primary/40 bg-primary/20"
+                      />
+                      <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
+                        <p className="whitespace-pre-line text-sm leading-relaxed">{n.note}</p>
                         <p className="mt-1.5 text-xs text-muted-foreground">
-                          {titleCase(r.category)} · {formatDateTime(r.createdAt)}
+                          {n.authorName || "Staff"} · {formatDateTime(n.createdAt)}
                         </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </TabsContent>
-            </Tabs>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </TabsContent>
+
+            {/* Assistance history */}
+            <TabsContent value="assistance" className="mt-0 space-y-3">
+              {assistLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-16 w-full" />
+                  ))}
+                </div>
+              ) : assist.length === 0 ? (
+                <EmptyState
+                  icon={<HeartHandshake className="size-6" aria-hidden="true" />}
+                  title="No assistance recorded"
+                  hint="Distributions linked to this beneficiary will appear here."
+                />
+              ) : (
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-3 py-2 font-semibold">Type</th>
+                        <th scope="col" className="px-3 py-2 text-right font-semibold">Qty</th>
+                        <th scope="col" className="hidden px-3 py-2 text-right font-semibold sm:table-cell">Value</th>
+                        <th scope="col" className="hidden px-3 py-2 font-semibold md:table-cell">Location</th>
+                        <th scope="col" className="hidden px-3 py-2 font-semibold lg:table-cell">By</th>
+                        <th scope="col" className="px-3 py-2 font-semibold">When</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {assist.map((d) => (
+                        <tr key={d.id} className="border-b last:border-b-0">
+                          <td className="px-3 py-2.5 font-medium">{titleCase(d.type)}</td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">{d.quantity}</td>
+                          <td className="hidden px-3 py-2.5 text-right tabular-nums sm:table-cell">
+                            {d.value ? formatINR(d.value) : "—"}
+                          </td>
+                          <td className="hidden max-w-40 truncate px-3 py-2.5 md:table-cell">{d.location || "—"}</td>
+                          <td className="hidden px-3 py-2.5 lg:table-cell">{d.volunteer?.user?.name || "—"}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">
+                            {formatDateTime(d.distributedAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Requests */}
+            <TabsContent value="requests" className="mt-0 space-y-3">
+              {requestsLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-16 w-full" />
+                  ))}
+                </div>
+              ) : requests.length === 0 ? (
+                <EmptyState
+                  icon={<Inbox className="size-6" aria-hidden="true" />}
+                  title="No help requests"
+                  hint="Requests submitted for this beneficiary will appear here."
+                />
+              ) : (
+                <ul className="max-h-96 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Help requests">
+                  {requests.map((r) => (
+                    <li key={r.id} className="rounded-lg border bg-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{r.name}</span>
+                        <span className="flex items-center gap-1.5">
+                          <StatusBadge status={r.urgency} tone={urgencyTone(r.urgency)} />
+                          <StatusBadge status={r.status} />
+                        </span>
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">{r.details}</p>
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        {titleCase(r.category)} · {formatDateTime(r.createdAt)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </TabsContent>
+          </Tabs>
+        ) : null}
+      </DetailSheet>
 
       {/* ------------------------------ Confirmations --------------------------- */}
       <ConfirmDialog
@@ -1567,7 +1601,6 @@ export default function BeneficiariesView() {
         recordName={deleteTarget ? `${deleteTarget.name} · ${labelOf(categoryOptions, deleteTarget.category)}` : ""}
         description="The case, its notes and links to distributions will be permanently removed. This cannot be undone."
         confirmLabel="Delete case"
-        loading={saving}
         onConfirm={confirmDelete}
       />
       <ConfirmDialog
@@ -1577,7 +1610,6 @@ export default function BeneficiariesView() {
         recordName={closeTarget?.name ?? ""}
         description="Closing marks the case as CLOSED — support stops and it moves out of the active workflow."
         confirmLabel="Close case"
-        loading={saving}
         onConfirm={confirmCloseCase}
       />
       <ConfirmDialog
@@ -1587,7 +1619,6 @@ export default function BeneficiariesView() {
         recordName={rejectTarget?.name ?? ""}
         description="Rejection marks the case as REJECTED — the request will not proceed. Prefer closing a completed case instead."
         confirmLabel="Reject case"
-        loading={saving}
         onConfirm={confirmRejectCase}
       />
     </div>

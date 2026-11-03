@@ -1,14 +1,19 @@
 "use client";
 
 /**
- * Campaigns (admin) — rebuilt on the round-3 design system.
+ * Campaigns (admin) — rebuilt on the round-5 design system.
  *
- * - Toolbar: debounced search + status/category filters + ViewSwitcher
- *   (table / grid / list, persisted) + CSV export + "New campaign"
- * - Create/Edit via FormSheet (lg) with six FormSections, inline validation,
- *   dirty tracking and an unsaved-changes guard
- * - Detail Sheet: full campaign 360 (funding, schedule, coordinator, budget
- *   breakdown, media & SEO, reach) with linked-donation count
+ * - KPI stat strip (total / active / raised / beneficiaries reached)
+ * - Toolbar: debounced search + status/category filters + active-filter chips
+ *   + result count in one row; ViewSwitcher (table / grid / list, persisted)
+ *   and CSV export in the card header
+ * - Table view = DataTable (height="fill", sticky header, skeleton rows,
+ *   built-in premium pager)
+ * - Create/Edit via FormSheet (full-screen composer: identity / goal /
+ *   branding / schedule / team / media / budget / settings) with inline
+ *   validation, dirty tracking and an unsaved-changes guard
+ * - Full-screen DetailSheet: complete campaign 360 (funding, schedule,
+ *   coordinator, budget breakdown, media & SEO, reach, record)
  * - Row actions: View / Edit / Duplicate / Activate / Pause / Complete
  *   (ConfirmDialog) / Delete (blocked when funds were raised)
  */
@@ -16,13 +21,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Baby,
-  CalendarDays,
   CheckCircle2,
   Copy,
   Eye,
   Flower2,
   Heart,
   HeartHandshake,
+  IndianRupee,
   Loader2,
   MapPin,
   MoreHorizontal,
@@ -41,19 +46,19 @@ import {
   Star,
   Trash2,
   Users,
-  Video,
-  Wallet,
+  X,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { formatDate, formatINR, formatINRCompact, titleCase } from "@/lib/format";
+import { formatDate, formatDateTime, formatINR, formatINRCompact, titleCase } from "@/lib/format";
 import { amountRule, phoneRule, required } from "@/lib/validators";
 import { PageHeader } from "@/components/shared/page-header";
 import { DataField } from "@/components/shared/data-field";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SectionCard } from "@/components/shared/section-card";
+import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, type CsvColumn } from "@/components/shared/csv";
@@ -65,6 +70,12 @@ import {
   type DataViewMode,
 } from "@/components/shared/view-switcher";
 import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
+import {
   Field,
   FieldGrid,
   FormSection,
@@ -74,6 +85,7 @@ import {
   TextField,
 } from "@/components/shared/form-fields";
 import { FormSheet } from "@/components/shared/form-sheet";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -92,13 +104,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   Table,
   TableBody,
@@ -145,6 +150,8 @@ interface Campaign {
   beneficiaries: number;
   volunteersEngaged: number;
   createdBy?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 interface BudgetRow {
@@ -501,6 +508,17 @@ export default function CampaignsView() {
     [filtered, safePage, pageSize]
   );
 
+  // KPI strip — computed from the loaded directory, no extra API calls
+  const stats = useMemo(
+    () => ({
+      total: rows.length,
+      active: rows.filter((c) => c.status === "ACTIVE").length,
+      raised: rows.reduce((s, c) => s + (Number(c.raisedAmount) || 0), 0),
+      beneficiaries: rows.reduce((s, c) => s + (Number(c.beneficiaries) || 0), 0),
+    }),
+    [rows]
+  );
+
   /* ------------------------------- validation ------------------------------ */
 
   const errors = useMemo(() => validateForm(form), [form]);
@@ -848,6 +866,134 @@ export default function CampaignsView() {
     { header: "SEO title", value: (c) => c.seoTitle ?? "" },
   ];
 
+  /* ---------------------------- table + toolbar ---------------------------- */
+
+  const filterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (query.trim())
+    filterChips.push({ key: "q", label: `“${query.trim()}”`, clear: () => setSearch("") });
+  if (status !== "ALL")
+    filterChips.push({ key: "status", label: titleCase(status), clear: () => setStatus("ALL") });
+  if (category !== "ALL")
+    filterChips.push({
+      key: "category",
+      label: titleCase(category),
+      clear: () => setCategory("ALL"),
+    });
+
+  const emptyNode = (
+    <EmptyState
+      icon={<Sprout className="size-6" aria-hidden="true" />}
+      title={rows.length === 0 ? "No campaigns yet" : "No campaigns match the filters"}
+      hint={
+        rows.length === 0
+          ? "Launch your first fundraising drive to start collecting donations."
+          : "Try a different search term or clear the filters."
+      }
+    >
+      {rows.length === 0 ? (
+        <Button size="sm" onClick={openCreate}>
+          <Plus className="size-4" /> New campaign
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setSearch("");
+            setQuery("");
+            setStatus("ALL");
+            setCategory("ALL");
+          }}
+        >
+          Clear filters
+        </Button>
+      )}
+    </EmptyState>
+  );
+
+  const campaignColumns: DataTableColumn<Campaign>[] = [
+    { key: "campaign", header: "Campaign" },
+    { key: "category", header: "Category", hideBelow: "lg" },
+    { key: "status", header: "Status" },
+    { key: "progress", header: "Progress", hideBelow: "md" },
+    { key: "raised", header: "Raised", align: "right", mono: true },
+    { key: "deadline", header: "Deadline", hideBelow: "lg" },
+    { key: "actions", header: <span className="sr-only">Actions</span>, align: "right" },
+  ];
+
+  const renderCampaignCell = (c: Campaign, col: DataTableColumn<Campaign>) => {
+    const Icon = ICONS[c.icon] ?? Heart;
+    const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
+    const pct = pctOf(c.raisedAmount, c.targetAmount);
+    switch (col.key) {
+      case "campaign":
+        return (
+          <div className="flex items-center gap-2.5">
+            <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", accent.chip)}>
+              <Icon className="size-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+                <span className="max-w-[200px] truncate">{c.title}</span>
+                {c.featured && (
+                  <Star className="size-3.5 shrink-0 fill-amber-400 text-amber-500" aria-label="Featured" />
+                )}
+                {c.urgent && <Zap className="size-3.5 shrink-0 text-red-500" aria-label="Urgent" />}
+              </p>
+              {c.slug && (
+                <p className="truncate font-mono text-[11px] text-muted-foreground">/{c.slug}</p>
+              )}
+            </div>
+          </div>
+        );
+      case "category":
+        return (
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+            {titleCase(c.category)}
+          </span>
+        );
+      case "status":
+        return <StatusBadge status={c.status} />;
+      case "progress":
+        return (
+          <div className="flex items-center gap-2">
+            <Progress
+              value={pct}
+              className={cn("h-2 w-24", accent.bar)}
+              aria-label={`${c.title} progress ${pct}%`}
+            />
+            <span className="text-xs text-muted-foreground">{pct}%</span>
+          </div>
+        );
+      case "raised":
+        return (
+          <div className="flex flex-col items-end">
+            <span>{formatINRCompact(c.raisedAmount)}</span>
+            <span className="text-[11px] font-normal text-muted-foreground">
+              of {formatINRCompact(c.targetAmount)}
+            </span>
+          </div>
+        );
+      case "deadline":
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <DaysLeftChip end={c.endDate} />
+            <span className="text-[11px] text-muted-foreground">
+              {c.endDate ? formatDate(c.endDate) : "No end date"}
+            </span>
+          </div>
+        );
+      case "actions":
+        return (
+          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+            <RowMenu c={c} />
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   /* -------------------------------- render --------------------------------- */
 
   return (
@@ -863,6 +1009,42 @@ export default function CampaignsView() {
         }
       />
 
+      {/* KPI strip */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total campaigns"
+          value={String(stats.total)}
+          icon={<Sprout className="size-5" aria-hidden="true" />}
+          accent="emerald"
+          hint="All fundraising drives"
+          loading={loading}
+        />
+        <StatCard
+          label="Active now"
+          value={String(stats.active)}
+          icon={<Zap className="size-5" aria-hidden="true" />}
+          accent="amber"
+          hint="Accepting donations"
+          loading={loading}
+        />
+        <StatCard
+          label="Raised all-time"
+          value={formatINRCompact(stats.raised)}
+          icon={<IndianRupee className="size-5" aria-hidden="true" />}
+          accent="teal"
+          hint="Across every campaign"
+          loading={loading}
+        />
+        <StatCard
+          label="Beneficiaries reached"
+          value={formatINRCompact(stats.beneficiaries)}
+          icon={<Users className="size-5" aria-hidden="true" />}
+          accent="fuchsia"
+          hint="Sum of campaign reach"
+          loading={loading}
+        />
+      </div>
+
       <SectionCard
         title="Campaign directory"
         icon={<Sprout className="size-4" aria-hidden="true" />}
@@ -871,507 +1053,497 @@ export default function CampaignsView() {
         }
         bodyClassName="space-y-4"
         actions={
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            <div className="relative w-full sm:w-52">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search title, tagline, place…"
-                className="pl-9"
-                aria-label="Search campaigns"
-              />
-            </div>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by status">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All statuses</SelectItem>
-                {STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by category">
-                <SelectValue placeholder="All categories" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All categories</SelectItem>
-                {CATEGORIES.map((c) => (
-                  <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportMenu
+              columns={csvColumns}
+              rows={filtered}
+              filename="uar-campaigns"
+              disabled={loading || filtered.length === 0}
+            />
             <ViewSwitcher value={view} onChange={setView} />
-            <ExportMenu columns={csvColumns} rows={filtered} filename="uar-campaigns" disabled={loading || filtered.length === 0} />
           </div>
         }
       >
-        {loading ? (
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search title, tagline, place…"
+              className="h-8 pl-8 text-sm"
+              aria-label="Search campaigns"
+            />
+          </div>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger size="sm" className="w-[130px] text-xs" aria-label="Filter by status">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All statuses</SelectItem>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={category} onValueChange={setCategory}>
+            <SelectTrigger size="sm" className="w-[140px] text-xs" aria-label="Filter by category">
+              <SelectValue placeholder="All categories" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All categories</SelectItem>
+              {CATEGORIES.map((c) => (
+                <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {filterChips.map((chip) => (
+            <Badge key={chip.key} variant="outline" className="gap-1 pr-1 text-xs font-medium">
+              {chip.label}
+              <button
+                type="button"
+                aria-label={`Clear ${chip.label} filter`}
+                onClick={chip.clear}
+                className="rounded-full p-0.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="size-3" aria-hidden="true" />
+              </button>
+            </Badge>
+          ))}
+
+          {filterChips.length > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Clear all filters"
+              onClick={() => {
+                setSearch("");
+                setQuery("");
+                setStatus("ALL");
+                setCategory("ALL");
+              }}
+            >
+              <X className="size-4" /> Clear all
+            </Button>
+          ) : null}
+
+          <span
+            className="ml-auto text-xs tabular-nums text-muted-foreground"
+            aria-live="polite"
+          >
+            {loading ? "Loading…" : `${filtered.length} result${filtered.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+
+        {view === "table" ? (
+          <DataTable
+            columns={campaignColumns}
+            rows={paged}
+            rowKey={(c) => c.id}
+            loading={loading}
+            skeletonRows={8}
+            height="fill"
+            fillOffset={520}
+            onRowClick={openView}
+            page={safePage}
+            pages={pages}
+            total={filtered.length}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={setPageSize}
+            itemLabel="campaigns"
+            empty={emptyNode}
+          >
+            {renderCampaignCell}
+          </DataTable>
+        ) : loading ? (
           <ViewSkeleton view={view} />
         ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={<Sprout className="size-6" aria-hidden="true" />}
-            title={rows.length === 0 ? "No campaigns yet" : "No campaigns match the filters"}
-            hint={
-              rows.length === 0
-                ? "Launch your first fundraising drive to start collecting donations."
-                : "Try a different search term or clear the filters."
-            }
-          >
-            {rows.length === 0 ? (
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="size-4" /> New campaign
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setSearch("");
-                  setQuery("");
-                  setStatus("ALL");
-                  setCategory("ALL");
-                }}
-              >
-                Clear filters
-              </Button>
-            )}
-          </EmptyState>
-        ) : view === "table" ? (
-          <>
-            <div className="overflow-x-auto rounded-xl border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead>Campaign</TableHead>
-                    <TableHead className="hidden lg:table-cell">Category</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="hidden md:table-cell">Progress</TableHead>
-                    <TableHead className="text-right">Raised</TableHead>
-                    <TableHead className="hidden xl:table-cell">Deadline</TableHead>
-                    <TableHead className="w-12 text-right">
-                      <span className="sr-only">Actions</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paged.map((c) => {
-                    const Icon = ICONS[c.icon] ?? Heart;
-                    const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
-                    const pct = pctOf(c.raisedAmount, c.targetAmount);
-                    return (
-                      <TableRow
-                        key={c.id}
-                        className="cursor-pointer"
-                        onClick={() => openView(c)}
-                        aria-label={`Open campaign ${c.title}`}
-                      >
-                        <TableCell className="max-w-56">
-                          <div className="flex items-center gap-2.5">
-                            <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", accent.chip)}>
-                              <Icon className="size-4" aria-hidden="true" />
-                            </span>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium">{c.title}</p>
-                              {c.slug && <p className="truncate font-mono text-[11px] text-muted-foreground">/{c.slug}</p>}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="hidden lg:table-cell">
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
-                            {titleCase(c.category)}
-                          </span>
-                        </TableCell>
-                        <TableCell><StatusBadge status={c.status} /></TableCell>
-                        <TableCell className="hidden md:table-cell">
-                          <div className="flex items-center gap-2">
-                            <Progress value={pct} className={cn("h-2 w-24", accent.bar)} aria-label={`${c.title} progress ${pct}%`} />
-                            <span className="text-xs text-muted-foreground">{pct}%</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <p className="text-sm font-semibold">{formatINRCompact(c.raisedAmount)}</p>
-                          <p className="text-[11px] text-muted-foreground">of {formatINRCompact(c.targetAmount)}</p>
-                        </TableCell>
-                        <TableCell className="hidden xl:table-cell">
-                          <div className="flex flex-col items-start gap-1">
-                            <DaysLeftChip end={c.endDate} />
-                            <span className="text-[11px] text-muted-foreground">
-                              {c.endDate ? formatDate(c.endDate) : "No end date"}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
-                            <RowMenu c={c} />
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar
-                page={safePage}
-                pages={pages}
-                total={filtered.length}
-                onPage={setPage}
-                itemLabel="campaigns"
-              />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
+          emptyNode
         ) : view === "list" ? (
-          <>
-            <ul className="divide-y rounded-xl border bg-card">
-              {paged.map((c) => {
-                const Icon = ICONS[c.icon] ?? Heart;
-                const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
-                const pct = pctOf(c.raisedAmount, c.targetAmount);
-                return (
-                  <li key={c.id}>
-                    <button
-                      type="button"
-                      onClick={() => openView(c)}
-                      aria-label={`Open details for campaign ${c.title}`}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
-                    >
-                      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", accent.chip)}>
-                        <Icon className="size-4" aria-hidden="true" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {c.title}
-                          {c.featured && <Star className="ml-1.5 inline size-3.5 fill-amber-400 text-amber-500" aria-label="Featured" />}
-                          {c.urgent && <Zap className="ml-1 inline size-3.5 text-red-500" aria-label="Urgent" />}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {titleCase(c.category)}
-                          {c.location ? ` · ${c.location}` : ""}
-                          {c.endDate ? ` · ends ${formatDate(c.endDate)}` : " · ongoing"}
-                        </p>
-                      </div>
-                      <div className="hidden shrink-0 text-right sm:block">
-                        <p className="text-sm font-semibold">{formatINRCompact(c.raisedAmount)}</p>
-                        <p className="text-[11px] text-muted-foreground">{pct}% of {formatINRCompact(c.targetAmount)}</p>
-                      </div>
-                      <StatusBadge status={c.status} className="shrink-0" />
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <RowMenu c={c} />
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar
-                page={safePage}
-                pages={pages}
-                total={filtered.length}
-                onPage={setPage}
-                itemLabel="campaigns"
-              />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
+          <ul className="divide-y rounded-xl border bg-card">
+            {paged.map((c) => {
+              const Icon = ICONS[c.icon] ?? Heart;
+              const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
+              const pct = pctOf(c.raisedAmount, c.targetAmount);
+              return (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => openView(c)}
+                    aria-label={`Open details for campaign ${c.title}`}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
+                  >
+                    <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", accent.chip)}>
+                      <Icon className="size-4" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {c.title}
+                        {c.featured && <Star className="ml-1.5 inline size-3.5 fill-amber-400 text-amber-500" aria-label="Featured" />}
+                        {c.urgent && <Zap className="ml-1 inline size-3.5 text-red-500" aria-label="Urgent" />}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {titleCase(c.category)}
+                        {c.location ? ` · ${c.location}` : ""}
+                        {c.endDate ? ` · ends ${formatDate(c.endDate)}` : " · ongoing"}
+                      </p>
+                    </div>
+                    <div className="hidden shrink-0 text-right sm:block">
+                      <p className="text-sm font-semibold">{formatINRCompact(c.raisedAmount)}</p>
+                      <p className="text-[11px] text-muted-foreground">{pct}% of {formatINRCompact(c.targetAmount)}</p>
+                    </div>
+                    <StatusBadge status={c.status} className="shrink-0" />
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <RowMenu c={c} />
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         ) : (
-          <>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {paged.map((c) => {
-                const Icon = ICONS[c.icon] ?? Heart;
-                const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
-                const pct = pctOf(c.raisedAmount, c.targetAmount);
-                return (
-                  <article key={c.id} className={cn("flex flex-col gap-3 rounded-xl border bg-card p-4", accent.ring)}>
-                    <div className="flex items-start gap-3">
-                      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl", accent.chip)}>
-                        <Icon className="size-5" aria-hidden="true" />
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {paged.map((c) => {
+              const Icon = ICONS[c.icon] ?? Heart;
+              const accent = ACCENTS[c.accent] ?? ACCENTS.emerald;
+              const pct = pctOf(c.raisedAmount, c.targetAmount);
+              return (
+                <article key={c.id} className={cn("flex flex-col gap-3 rounded-xl border bg-card p-4", accent.ring)}>
+                  <div className="flex items-start gap-3">
+                    <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl", accent.chip)}>
+                      <Icon className="size-5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn("size-2 shrink-0 rounded-full", accent.dot)} aria-hidden="true" />
+                        <h3 className="truncate text-sm font-semibold leading-tight">{c.title}</h3>
+                      </div>
+                      {c.slug && <p className="truncate font-mono text-[11px] text-muted-foreground">/{c.slug}</p>}
+                    </div>
+                    <StatusBadge status={c.status} className="shrink-0" />
+                  </div>
+
+                  {c.tagline && <p className="line-clamp-2 text-xs text-muted-foreground">{c.tagline}</p>}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {c.featured && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                        <Star className="size-3" aria-hidden="true" /> Featured
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className={cn("size-2 shrink-0 rounded-full", accent.dot)} aria-hidden="true" />
-                          <h3 className="truncate text-sm font-semibold leading-tight">{c.title}</h3>
-                        </div>
-                        {c.slug && <p className="truncate font-mono text-[11px] text-muted-foreground">/{c.slug}</p>}
-                      </div>
-                      <StatusBadge status={c.status} className="shrink-0" />
-                    </div>
-
-                    {c.tagline && <p className="line-clamp-2 text-xs text-muted-foreground">{c.tagline}</p>}
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {c.featured && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-                          <Star className="size-3" aria-hidden="true" /> Featured
-                        </span>
-                      )}
-                      {c.urgent && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
-                          <Zap className="size-3" aria-hidden="true" /> Urgent
-                        </span>
-                      )}
-                      {c.taxEligible !== false && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-teal-500/10 px-2 py-0.5 text-[11px] font-semibold text-teal-600 dark:text-teal-400">
-                          80G
-                        </span>
-                      )}
-                      <DaysLeftChip end={c.endDate} className="ml-auto" />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Progress value={pct} className={accent.bar} aria-label={`${c.title} funding progress: ${pct}%`} />
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold">{formatINR(c.raisedAmount)}</span>
-                        <span className="text-muted-foreground">of {formatINR(c.targetAmount)} · {pct}%</span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Users className="size-3.5" aria-hidden="true" /> {c.beneficiaries} beneficiaries
+                    )}
+                    {c.urgent && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
+                        <Zap className="size-3" aria-hidden="true" /> Urgent
                       </span>
-                      {c.location && (
-                        <span className="flex min-w-0 items-center gap-1">
-                          <MapPin className="size-3.5 shrink-0" aria-hidden="true" /> <span className="truncate">{c.location}</span>
-                        </span>
-                      )}
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold">{titleCase(c.category)}</span>
-                    </div>
+                    )}
+                    {c.taxEligible !== false && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-teal-500/10 px-2 py-0.5 text-[11px] font-semibold text-teal-600 dark:text-teal-400">
+                        80G
+                      </span>
+                    )}
+                    <DaysLeftChip end={c.endDate} className="ml-auto" />
+                  </div>
 
-                    <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t pt-3">
-                      <Button size="sm" variant="ghost" onClick={() => openView(c)} aria-label={`View campaign ${c.title}`}>
-                        View
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => openEdit(c)} aria-label={`Edit campaign ${c.title}`}>
-                        <Pencil className="size-3.5" /> Edit
-                      </Button>
-                      {quickStatus(c)}
-                      <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                        <RowMenu c={c} />
-                      </div>
+                  <div className="space-y-1.5">
+                    <Progress value={pct} className={accent.bar} aria-label={`${c.title} funding progress: ${pct}%`} />
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold">{formatINR(c.raisedAmount)}</span>
+                      <span className="text-muted-foreground">of {formatINR(c.targetAmount)} · {pct}%</span>
                     </div>
-                  </article>
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar
-                page={safePage}
-                pages={pages}
-                total={filtered.length}
-                onPage={setPage}
-                itemLabel="campaigns"
-              />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Users className="size-3.5" aria-hidden="true" /> {c.beneficiaries} beneficiaries
+                    </span>
+                    {c.location && (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <MapPin className="size-3.5 shrink-0" aria-hidden="true" /> <span className="truncate">{c.location}</span>
+                      </span>
+                    )}
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold">{titleCase(c.category)}</span>
+                  </div>
+
+                  <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t pt-3">
+                    <Button size="sm" variant="ghost" onClick={() => openView(c)} aria-label={`View campaign ${c.title}`}>
+                      View
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openEdit(c)} aria-label={`Edit campaign ${c.title}`}>
+                      <Pencil className="size-3.5" /> Edit
+                    </Button>
+                    {quickStatus(c)}
+                    <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                      <RowMenu c={c} />
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         )}
+
+        {/* Pagination (grid / list — the DataTable pager covers the table view) */}
+        {view !== "table" && !loading && filtered.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <PaginationBar
+              page={safePage}
+              pages={pages}
+              total={filtered.length}
+              onPage={setPage}
+              itemLabel="campaigns"
+            />
+            <PageSizeSelect value={pageSize} onChange={setPageSize} />
+          </div>
+        ) : null}
       </SectionCard>
 
-      {/* --------------------------- View sheet (360) ------------------------ */}
-      <Sheet open={!!viewTarget} onOpenChange={(o) => !o && setViewTarget(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-xl">
-          <SheetHeader className="text-left">
-            <SheetTitle className="flex items-center gap-2">
-              {(() => {
-                const I = ICONS[viewTarget?.icon ?? "heart"] ?? Heart;
-                return <I className="size-4 text-primary" aria-hidden="true" />;
-              })()}
-              {viewTarget?.title ?? "Campaign"}
-            </SheetTitle>
-            <SheetDescription>
-              {viewTarget ? `${viewTarget.tagline || titleCase(viewTarget.category)} · ${formatINR(viewTarget.raisedAmount)} raised` : ""}
-            </SheetDescription>
-          </SheetHeader>
-          {viewTarget &&
-            (() => {
-              const accent = ACCENTS[viewTarget.accent] ?? ACCENTS.emerald;
-              const pct = pctOf(viewTarget.raisedAmount, viewTarget.targetAmount);
-              const budget = parseBudget(viewTarget.budgetBreakdown);
-              const gallery = parseGallery(viewTarget.gallery);
-              const budgetSum = budget.reduce((s, b) => s + b.amount, 0);
-              return (
-                <div className="flex-1 space-y-4 px-4 pb-6">
-                  <SectionCard title="Funding" icon={<Sprout className="size-4" aria-hidden="true" />}>
-                    <ProgressRing pct={pct} accent={viewTarget.accent} />
-                    <div className="mt-3 text-center text-sm">
-                      <span className="font-semibold">{formatINR(viewTarget.raisedAmount)}</span>
-                      <span className="text-muted-foreground"> raised of {formatINR(viewTarget.targetAmount)} target</span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap justify-center gap-1.5">
-                      <StatusBadge status={viewTarget.status} />
-                      {viewTarget.featured && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-                          <Star className="size-3" aria-hidden="true" /> Featured
-                        </span>
-                      )}
-                      {viewTarget.urgent && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
-                          <Zap className="size-3" aria-hidden="true" /> Urgent
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4">
+      {/* --------------------- Detail sheet (campaign 360) -------------------- */}
+      <DetailSheet
+        open={!!viewTarget}
+        onOpenChange={(o) => !o && setViewTarget(null)}
+        eyebrow="Campaigns"
+        title={viewTarget?.title ?? "Campaign"}
+        description={
+          viewTarget
+            ? `${viewTarget.tagline || titleCase(viewTarget.category)} · ${formatINR(viewTarget.raisedAmount)} raised`
+            : undefined
+        }
+        status={
+          viewTarget ? (
+            <span className="flex flex-wrap items-center gap-1.5">
+              <StatusBadge status={viewTarget.status} />
+              {viewTarget.featured && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                  <Star className="size-3" aria-hidden="true" /> Featured
+                </span>
+              )}
+              {viewTarget.urgent && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
+                  <Zap className="size-3" aria-hidden="true" /> Urgent
+                </span>
+              )}
+            </span>
+          ) : undefined
+        }
+        actions={
+          viewTarget ? (
+            <>
+              <Button size="sm" variant="outline" onClick={() => openEdit(viewTarget)}>
+                <Pencil className="size-4" /> Edit
+              </Button>
+              <RowMenu c={viewTarget} />
+            </>
+          ) : undefined
+        }
+        footer={
+          viewTarget ? (
+            <>
+              {quickStatus(viewTarget)}
+              {(viewTarget.status === "ACTIVE" || viewTarget.status === "PAUSED") && (
+                <Button size="sm" variant="outline" onClick={() => setCompleteTarget(viewTarget)}>
+                  <CheckCircle2 className="size-4" /> Complete
+                </Button>
+              )}
+              <Button size="sm" variant="outline" className="ml-auto" onClick={() => setViewTarget(null)}>
+                Close
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {viewTarget &&
+          (() => {
+            const accent = ACCENTS[viewTarget.accent] ?? ACCENTS.emerald;
+            const pct = pctOf(viewTarget.raisedAmount, viewTarget.targetAmount);
+            const budget = parseBudget(viewTarget.budgetBreakdown);
+            const gallery = parseGallery(viewTarget.gallery);
+            const budgetSum = budget.reduce((s, b) => s + b.amount, 0);
+            return (
+              <div className="flex flex-col gap-6">
+                <DetailSection
+                  title="Funding"
+                  description="Live totals are derived from linked donations."
+                >
+                  <ProgressRing pct={pct} accent={viewTarget.accent} />
+                  <div className="mt-3 text-center text-sm">
+                    <span className="font-semibold">{formatINR(viewTarget.raisedAmount)}</span>
+                    <span className="text-muted-foreground"> raised of {formatINR(viewTarget.targetAmount)} target</span>
+                  </div>
+                  <div className="mt-4">
+                    <DetailGrid cols={2}>
                       <DataField label="Linked donations" value={viewDonationCount === null ? "…" : String(viewDonationCount)} />
                       <DataField label="Minimum donation" value={viewTarget.minDonation != null ? formatINR(viewTarget.minDonation) : "No minimum"} />
                       <DataField label="80G tax eligible" value={viewTarget.taxEligible === false ? "No" : "Yes"} />
                       <DataField label="Category" value={titleCase(viewTarget.category)} />
-                    </div>
-                  </SectionCard>
+                      <DataField label="Raised" value={formatINR(viewTarget.raisedAmount)} />
+                      <DataField label="Target" value={formatINR(viewTarget.targetAmount)} />
+                    </DetailGrid>
+                  </div>
+                </DetailSection>
 
-                  <SectionCard title="Schedule & place" icon={<CalendarDays className="size-4" aria-hidden="true" />}>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                      <DataField label="Start date" value={formatDate(viewTarget.startDate)} />
-                      <DataField label="End date" value={viewTarget.endDate ? formatDate(viewTarget.endDate) : "Ongoing"} />
-                      <DataField label="Location" value={viewTarget.location} />
-                      <DataField label="Slug" value={viewTarget.slug} mono />
-                    </div>
-                    <div className="mt-3">
-                      <DaysLeftChip end={viewTarget.endDate} />
-                    </div>
-                  </SectionCard>
+                <DetailSection title="Identity" description="How the campaign appears across the site.">
+                  <DetailGrid cols={2}>
+                    <DataField label="Title" value={viewTarget.title} />
+                    <DataField label="URL slug" value={viewTarget.slug} mono />
+                    <DataField label="Tagline" value={viewTarget.tagline} className="sm:col-span-2" />
+                    <DataField label="Icon" value={titleCase(viewTarget.icon.replace(/-/g, " "))} />
+                    <DataField
+                      label="Accent colour"
+                      value={
+                        <span className="flex items-center gap-1.5">
+                          <span className={cn("size-2.5 rounded-full", accent.dot)} aria-hidden="true" />
+                          {titleCase(viewTarget.accent)}
+                        </span>
+                      }
+                    />
+                    <DataField label="Status" value={<StatusBadge status={viewTarget.status} />} />
+                    <DataField label="Created by" value={viewTarget.createdBy} />
+                  </DetailGrid>
+                </DetailSection>
 
-                  <SectionCard title="Team & contact" icon={<Phone className="size-4" aria-hidden="true" />}>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                      <DataField label="Coordinator" value={viewTarget.coordinatorName} />
-                      <DataField label="Coordinator phone" value={viewTarget.coordinatorPhone} copy />
-                      <DataField
-                        label="Helpline"
-                        value={viewTarget.helpline}
-                        icon={<Phone className="size-3" aria-hidden="true" />}
-                        copy
-                      />
-                      <DataField label="Created by" value={viewTarget.createdBy} />
-                    </div>
-                    {viewTarget.helpline && (
-                      <a
-                        href={`tel:${viewTarget.helpline.replace(/\s+/g, "")}`}
-                        className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-primary hover:bg-accent"
-                        aria-label={`Call helpline ${viewTarget.helpline}`}
-                      >
-                        <Phone className="size-4" aria-hidden="true" /> Call {viewTarget.helpline}
-                      </a>
-                    )}
-                  </SectionCard>
+                <DetailSection title="Schedule & place">
+                  <DetailGrid cols={2}>
+                    <DataField label="Start date" value={formatDate(viewTarget.startDate)} />
+                    <DataField label="End date" value={viewTarget.endDate ? formatDate(viewTarget.endDate) : "Ongoing"} />
+                    <DataField label="Location" value={viewTarget.location} />
+                    <DataField
+                      label="Time remaining"
+                      value={
+                        daysLeft(viewTarget.endDate) === null
+                          ? "Ongoing"
+                          : daysLeft(viewTarget.endDate)! < 0
+                            ? "Ended"
+                            : `${daysLeft(viewTarget.endDate)} days left`
+                      }
+                    />
+                  </DetailGrid>
+                </DetailSection>
 
-                  {budget.length > 0 && (
-                    <SectionCard title="Budget breakdown" icon={<Wallet className="size-4" aria-hidden="true" />}>
-                      <div className="overflow-hidden rounded-lg border">
-                        <Table>
-                          <TableHeader>
-                            <TableRow className="bg-muted/50 hover:bg-muted/50">
-                              <TableHead>Head</TableHead>
-                              <TableHead className="text-right">Amount</TableHead>
-                              <TableHead className="hidden text-right sm:table-cell">Share</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {budget.map((b, i) => (
-                              <TableRow key={i}>
-                                <TableCell className="text-sm">{b.head || "—"}</TableCell>
-                                <TableCell className="text-right text-sm font-medium">{formatINR(b.amount)}</TableCell>
-                                <TableCell className="hidden text-right text-xs text-muted-foreground sm:table-cell">
-                                  {budgetSum > 0 ? `${Math.round((b.amount / budgetSum) * 100)}%` : "—"}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                            <TableRow className="bg-muted/30">
-                              <TableCell className="text-sm font-semibold">Total</TableCell>
-                              <TableCell className="text-right text-sm font-semibold">{formatINR(budgetSum)}</TableCell>
-                              <TableCell className="hidden text-right text-xs sm:table-cell">
-                                {viewTarget.targetAmount > 0
-                                  ? `${Math.min(999, Math.round((budgetSum / viewTarget.targetAmount) * 100))}% of target`
-                                  : "—"}
+                <DetailSection title="Team & contact">
+                  <DetailGrid cols={2}>
+                    <DataField label="Coordinator" value={viewTarget.coordinatorName} />
+                    <DataField label="Coordinator phone" value={viewTarget.coordinatorPhone} copy />
+                    <DataField
+                      label="Helpline"
+                      value={viewTarget.helpline}
+                      icon={<Phone className="size-3" aria-hidden="true" />}
+                      copy
+                    />
+                  </DetailGrid>
+                  {viewTarget.helpline && (
+                    <a
+                      href={`tel:${viewTarget.helpline.replace(/\s+/g, "")}`}
+                      className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-3 text-sm font-medium text-primary hover:bg-accent"
+                      aria-label={`Call helpline ${viewTarget.helpline}`}
+                    >
+                      <Phone className="size-4" aria-hidden="true" /> Call {viewTarget.helpline}
+                    </a>
+                  )}
+                </DetailSection>
+
+                <DetailSection title="Reach">
+                  <DetailGrid cols={2}>
+                    <DataField label="Beneficiaries" value={String(viewTarget.beneficiaries)} />
+                    <DataField label="Volunteers engaged" value={String(viewTarget.volunteersEngaged)} />
+                  </DetailGrid>
+                  <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                    {viewTarget.description}
+                  </p>
+                </DetailSection>
+
+                {budget.length > 0 && (
+                  <DetailSection
+                    title="Budget breakdown"
+                    description="Line items shown to donors — where the money goes."
+                  >
+                    <div className="overflow-hidden rounded-lg border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/50 hover:bg-muted/50">
+                            <TableHead>Head</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="hidden text-right sm:table-cell">Share</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {budget.map((b, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="text-sm">{b.head || "—"}</TableCell>
+                              <TableCell className="text-right text-sm font-medium">{formatINR(b.amount)}</TableCell>
+                              <TableCell className="hidden text-right text-xs text-muted-foreground sm:table-cell">
+                                {budgetSum > 0 ? `${Math.round((b.amount / budgetSum) * 100)}%` : "—"}
                               </TableCell>
                             </TableRow>
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </SectionCard>
+                          ))}
+                          <TableRow className="bg-muted/30">
+                            <TableCell className="text-sm font-semibold">Total</TableCell>
+                            <TableCell className="text-right text-sm font-semibold">{formatINR(budgetSum)}</TableCell>
+                            <TableCell className="hidden text-right text-xs sm:table-cell">
+                              {viewTarget.targetAmount > 0
+                                ? `${Math.min(999, Math.round((budgetSum / viewTarget.targetAmount) * 100))}% of target`
+                                : "—"}
+                            </TableCell>
+                          </TableRow>
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </DetailSection>
+                )}
+
+                <DetailSection title="Media & SEO">
+                  <DetailGrid cols={2}>
+                    <DataField
+                      label="Video URL"
+                      value={
+                        viewTarget.videoUrl ? (
+                          <a
+                            href={viewTarget.videoUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="break-all text-primary underline underline-offset-2"
+                          >
+                            {viewTarget.videoUrl}
+                          </a>
+                        ) : (
+                          ""
+                        )
+                      }
+                    />
+                    <DataField label="SEO title" value={viewTarget.seoTitle} />
+                    <DataField label="SEO description" value={viewTarget.seoDescription} className="sm:col-span-2" />
+                  </DetailGrid>
+                  {gallery.length > 0 && (
+                    <div className="grid grid-cols-3 gap-2">
+                      {gallery.slice(0, 6).map((g, i) => (
+                        <img
+                          key={i}
+                          src={g}
+                          alt={`${viewTarget.title} gallery image ${i + 1}`}
+                          className="aspect-video w-full rounded-lg border object-cover"
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
                   )}
+                </DetailSection>
 
-                  <SectionCard title="Media & SEO" icon={<Video className="size-4" aria-hidden="true" />}>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                      <DataField
-                        label="Video URL"
-                        value={
-                          viewTarget.videoUrl ? (
-                            <a
-                              href={viewTarget.videoUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="break-all text-primary underline underline-offset-2"
-                            >
-                              {viewTarget.videoUrl}
-                            </a>
-                          ) : (
-                            ""
-                          )
-                        }
-                      />
-                      <DataField label="SEO title" value={viewTarget.seoTitle} />
-                    </div>
-                    {viewTarget.seoDescription && (
-                      <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{viewTarget.seoDescription}</p>
-                    )}
-                    {gallery.length > 0 && (
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        {gallery.slice(0, 6).map((g, i) => (
-                          <img
-                            key={i}
-                            src={g}
-                            alt={`${viewTarget.title} gallery image ${i + 1}`}
-                            className="aspect-video w-full rounded-lg border object-cover"
-                            loading="lazy"
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </SectionCard>
-
-                  <SectionCard title="Reach" icon={<Users className="size-4" aria-hidden="true" />}>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                      <DataField label="Beneficiaries" value={String(viewTarget.beneficiaries)} />
-                      <DataField label="Volunteers engaged" value={String(viewTarget.volunteersEngaged)} />
-                    </div>
-                    <p className="mt-4 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-                      {viewTarget.description}
-                    </p>
-                  </SectionCard>
-
-                  <div className="flex flex-wrap gap-2">
-                    {quickStatus(viewTarget)}
-                    {(viewTarget.status === "ACTIVE" || viewTarget.status === "PAUSED") && (
-                      <Button size="sm" variant="outline" onClick={() => setCompleteTarget(viewTarget)}>
-                        <CheckCircle2 className="size-4" /> Complete
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setViewTarget(null);
-                        openEdit(viewTarget);
-                      }}
-                      aria-label="Edit this campaign"
-                    >
-                      <Pencil className="size-4" /> Edit campaign
-                    </Button>
-                    <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
-                      <RowMenu c={viewTarget} />
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-        </SheetContent>
-      </Sheet>
+                <DetailSection title="Record">
+                  <DetailGrid cols={2}>
+                    <DataField label="Campaign ID" value={viewTarget.id} mono copy />
+                    <DataField label="Created" value={formatDateTime(viewTarget.createdAt)} />
+                    <DataField label="Last updated" value={formatDateTime(viewTarget.updatedAt)} />
+                  </DetailGrid>
+                </DetailSection>
+              </div>
+            );
+          })()}
+      </DetailSheet>
 
       {/* --------------------------- Create / Edit ---------------------------- */}
       <FormSheet
@@ -1387,7 +1559,7 @@ export default function CampaignsView() {
         submitLabel={editingId ? "Save changes" : "Create campaign"}
         loading={saving}
         dirty={dirty}
-        size="lg"
+        size="full"
         footerExtra={
           errorCount + (budgetError ? 1 : 0) > 0 ? (
             <span className="font-medium text-destructive">
@@ -1396,7 +1568,7 @@ export default function CampaignsView() {
           ) : null
         }
       >
-        <FormSection title="Basics" description="What donors see first on the public page.">
+        <FormSection title="Identity" description="What donors see first on the public page.">
           <FieldGrid>
             <TextField
               label="Title"
@@ -1421,15 +1593,6 @@ export default function CampaignsView() {
             onChange={(v) => setForm((f) => ({ ...f, tagline: v }))}
             placeholder="One line that inspires donors"
           />
-          <TextareaField
-            label="Description"
-            required
-            rows={5}
-            value={form.description}
-            onChange={(v) => setForm((f) => ({ ...f, description: v }))}
-            placeholder="What does this campaign fund? Who benefits? Why now?"
-            error={errors.description}
-          />
           <FieldGrid>
             <SelectField
               label="Category"
@@ -1446,6 +1609,48 @@ export default function CampaignsView() {
               />
             ) : null}
           </FieldGrid>
+        </FormSection>
+
+        <FormSection title="Story" description="Tell donors who benefits and why now.">
+          <TextareaField
+            label="Description"
+            required
+            rows={5}
+            value={form.description}
+            onChange={(v) => setForm((f) => ({ ...f, description: v }))}
+            placeholder="What does this campaign fund? Who benefits? Why now?"
+            error={errors.description}
+          />
+        </FormSection>
+
+        <FormSection title="Goal & funding" description="Target and donor-facing amount rules.">
+          <FieldGrid>
+            <TextField
+              label="Target amount"
+              required
+              type="number"
+              min="1"
+              prefix="₹"
+              value={form.targetAmount}
+              onChange={(v) => setForm((f) => ({ ...f, targetAmount: v }))}
+              placeholder="500000"
+              error={errors.targetAmount}
+            />
+            <TextField
+              label="Minimum donation"
+              type="number"
+              min="1"
+              prefix="₹"
+              value={form.minDonation}
+              onChange={(v) => setForm((f) => ({ ...f, minDonation: v }))}
+              placeholder="Optional"
+              hint="Smallest amount the donate form accepts."
+              error={errors.minDonation}
+            />
+          </FieldGrid>
+        </FormSection>
+
+        <FormSection title="Branding" description="Icon and accent colour used on cards across the app.">
           <FieldGrid>
             <Field label="Icon">
               <Select value={form.icon} onValueChange={(v) => setForm((f) => ({ ...f, icon: v }))}>
@@ -1481,53 +1686,6 @@ export default function CampaignsView() {
               </Select>
             </Field>
           </FieldGrid>
-        </FormSection>
-
-        <FormSection title="Funding" description="Target, minimum donation and donor-facing flags.">
-          <FieldGrid>
-            <TextField
-              label="Target amount"
-              required
-              type="number"
-              min="1"
-              prefix="₹"
-              value={form.targetAmount}
-              onChange={(v) => setForm((f) => ({ ...f, targetAmount: v }))}
-              placeholder="500000"
-              error={errors.targetAmount}
-            />
-            <TextField
-              label="Minimum donation"
-              type="number"
-              min="1"
-              prefix="₹"
-              value={form.minDonation}
-              onChange={(v) => setForm((f) => ({ ...f, minDonation: v }))}
-              placeholder="Optional"
-              hint="Smallest amount the donate form accepts."
-              error={errors.minDonation}
-            />
-          </FieldGrid>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <SwitchField
-              label="80G tax eligible"
-              hint="Donors get tax receipts"
-              checked={form.taxEligible}
-              onChange={(v) => setForm((f) => ({ ...f, taxEligible: v }))}
-            />
-            <SwitchField
-              label="Featured"
-              hint="Show on homepage"
-              checked={form.featured}
-              onChange={(v) => setForm((f) => ({ ...f, featured: v }))}
-            />
-            <SwitchField
-              label="Urgent"
-              hint="Adds an urgent badge"
-              checked={form.urgent}
-              onChange={(v) => setForm((f) => ({ ...f, urgent: v }))}
-            />
-          </div>
         </FormSection>
 
         <FormSection title="Schedule & place" description="When and where this campaign runs.">
@@ -1701,6 +1859,29 @@ export default function CampaignsView() {
               )}
             </div>
           )}
+        </FormSection>
+
+        <FormSection title="Settings & visibility" description="Donor-facing flags and receipt eligibility.">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <SwitchField
+              label="80G tax eligible"
+              hint="Donors get tax receipts"
+              checked={form.taxEligible}
+              onChange={(v) => setForm((f) => ({ ...f, taxEligible: v }))}
+            />
+            <SwitchField
+              label="Featured"
+              hint="Show on homepage"
+              checked={form.featured}
+              onChange={(v) => setForm((f) => ({ ...f, featured: v }))}
+            />
+            <SwitchField
+              label="Urgent"
+              hint="Adds an urgent badge"
+              checked={form.urgent}
+              onChange={(v) => setForm((f) => ({ ...f, urgent: v }))}
+            />
+          </div>
         </FormSection>
       </FormSheet>
 

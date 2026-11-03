@@ -1,14 +1,19 @@
 "use client";
 
 /**
- * Adopt-a-Medicine (admin) — rebuilt on the round-3 design system.
+ * Adopt-a-Medicine (admin) — rebuilt on the round-5 design system.
  *
- * - Toolbar: debounced search + status/condition filters + ViewSwitcher
- *   (table / grid / list, persisted) + CSV export + "New cause"
- * - Create/Edit via FormSheet (md) with inline validation, dirty tracking
+ * - KPI stat strip: total causes, seeking/partial, adopted, monthly pledged
+ * - Toolbar: debounced search + status/condition filters + active-filter
+ *   chips + result count in one row; ViewSwitcher and CSV export in the
+ *   card header
+ * - Table view = DataTable (height="fill", sticky header, skeleton rows,
+ *   built-in premium pager); grid/list persist via useViewPref
+ * - Full-screen DetailSheet: every Cause field, monthly sponsorship math,
+ *   adopter, story and the pledges table, with Edit / Pause / Certificate
+ *   actions
+ * - Create/Edit via FormSheet (lg) with inline validation, dirty tracking
  *   and an unsaved-changes guard
- * - Detail Sheet: cause fields, raised progress, pledges table and the
- *   certificate / pause / delete actions
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -25,13 +30,13 @@ import {
   Search,
   Trash2,
   UserCheck,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import { labelOf, useMasters } from "@/hooks/use-masters";
-import { formatINR, formatINRCompact, titleCase } from "@/lib/format";
+import { formatDate, formatINR, formatINRCompact, titleCase } from "@/lib/format";
 import { amountRule, minLen, required } from "@/lib/validators";
-import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/page-header";
 import { SectionCard } from "@/components/shared/section-card";
 import { StatCard } from "@/components/shared/stat-card";
@@ -47,6 +52,12 @@ import {
   ViewSwitcher,
   type DataViewMode,
 } from "@/components/shared/view-switcher";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import { DataTable, type DataTableColumn } from "@/components/shared/data-table";
 import {
   FieldGrid,
   FormSection,
@@ -75,13 +86,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
   Table,
   TableBody,
   TableCell,
@@ -97,6 +101,7 @@ interface Pledge {
   donorName: string;
   amountPerMonth: number;
   months: number;
+  startDate?: string | null;
   status: string;
 }
 
@@ -114,6 +119,7 @@ interface Cause {
   raised: number;
   adoptedById?: string | null;
   adoptedByName?: string | null;
+  createdAt?: string | null;
   pledges?: Pledge[];
 }
 
@@ -127,20 +133,7 @@ interface CauseForm {
   story: string;
 }
 
-/* ------------------------------- chip styles ------------------------------- */
-
-const CAUSE_STATUS: Record<string, string> = {
-  SEEKING: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  PARTIAL: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
-  ADOPTED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  PAUSED: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
-};
-
-const PLEDGE_STATUS: Record<string, string> = {
-  ACTIVE: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  COMPLETED: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
-  CANCELLED: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
-};
+/* --------------------------------- helpers --------------------------------- */
 
 const CAUSE_STATUSES = ["SEEKING", "PARTIAL", "ADOPTED", "PAUSED"];
 
@@ -503,6 +496,114 @@ export default function CausesView() {
     { header: "Adopted by", value: (c) => c.adoptedByName ?? "" },
   ];
 
+  /* ---------------------------- table + toolbar ---------------------------- */
+
+  const filterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (query.trim())
+    filterChips.push({ key: "q", label: `“${query.trim()}”`, clear: () => setSearch("") });
+  if (statusFilter !== "ALL")
+    filterChips.push({
+      key: "status",
+      label: titleCase(statusFilter),
+      clear: () => setStatusFilter("ALL"),
+    });
+  if (conditionFilter !== "ALL")
+    filterChips.push({
+      key: "condition",
+      label: labelOf(conditionOptions.options, conditionFilter),
+      clear: () => setConditionFilter("ALL"),
+    });
+
+  const emptyNode = (
+    <EmptyState
+      icon={<HeartPulse className="size-6" aria-hidden="true" />}
+      title={causes.length === 0 ? "No medicine causes yet" : "No causes match the filters"}
+      hint={
+        causes.length === 0
+          ? "Create a cause so donors can adopt a patient's monthly medicine cost."
+          : "Try clearing the status, condition or search filters."
+      }
+    >
+      {causes.length === 0 ? (
+        <Button size="sm" onClick={openCreate}>
+          <Plus className="size-4" aria-hidden="true" /> New cause
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setSearch("");
+            setQuery("");
+            setStatusFilter("ALL");
+            setConditionFilter("ALL");
+          }}
+        >
+          Clear filters
+        </Button>
+      )}
+    </EmptyState>
+  );
+
+  const causeColumns: DataTableColumn<Cause>[] = [
+    { key: "code", header: "Code", mono: true },
+    { key: "patient", header: "Patient" },
+    { key: "condition", header: "Condition", hideBelow: "lg" },
+    { key: "monthly", header: "Monthly", align: "right", mono: true },
+    { key: "progress", header: "Progress", hideBelow: "md" },
+    { key: "status", header: "Status" },
+    { key: "actions", header: <span className="sr-only">Actions</span>, align: "right" },
+  ];
+
+  const renderCauseCell = (c: Cause, col: DataTableColumn<Cause>) => {
+    const pct = pctOf(c);
+    switch (col.key) {
+      case "code":
+        return c.code;
+      case "patient":
+        return (
+          <div className="flex flex-col">
+            <span className="font-medium">{c.patientName}</span>
+            <span className="text-[11px] text-muted-foreground">
+              {c.age} yrs · {c.city}
+            </span>
+          </div>
+        );
+      case "condition":
+        return (
+          <Badge
+            variant="outline"
+            className="border-teal-500/30 bg-teal-500/10 text-[10px] text-teal-700 dark:text-teal-400"
+          >
+            {labelOf(conditionOptions.options, c.condition)}
+          </Badge>
+        );
+      case "monthly":
+        return formatINR(c.monthlyCost);
+      case "progress":
+        return (
+          <div className="flex items-center gap-2">
+            <Progress
+              value={pct}
+              className="h-2 w-24 [&>div]:bg-teal-600"
+              aria-label={`${c.code} progress ${pct}%`}
+            />
+            <span className="text-xs text-muted-foreground">{pct}%</span>
+          </div>
+        );
+      case "status":
+        return <StatusBadge status={c.status} />;
+      case "actions":
+        return (
+          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+            <RowMenu c={c} />
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   /* -------------------------------- render --------------------------------- */
 
   return (
@@ -532,287 +633,332 @@ export default function CausesView() {
         description={loading ? "Loading causes…" : `${filtered.length} of ${causes.length} causes`}
         bodyClassName="space-y-4"
         actions={
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            <div className="relative w-full sm:w-48">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search patient, city or code…"
-                className="pl-9"
-                aria-label="Search patient, city or code"
-              />
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-36" aria-label="Filter by status">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All statuses</SelectItem>
-                {CAUSE_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={conditionFilter} onValueChange={setConditionFilter}>
-              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by condition">
-                <SelectValue placeholder="All conditions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All conditions</SelectItem>
-                {conditionOptions.options.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <ViewSwitcher value={view} onChange={setView} />
+          <div className="flex flex-wrap items-center gap-2">
             <ExportMenu columns={csvColumns} rows={filtered} filename="uar-medicine-causes" disabled={loading || filtered.length === 0} />
+            <ViewSwitcher value={view} onChange={setView} />
           </div>
         }
       >
-        {loading ? (
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search patient, city or code…"
+              className="h-8 pl-8 text-sm"
+              aria-label="Search patient, city or code"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger size="sm" className="w-[126px] text-xs" aria-label="Filter by status">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All statuses</SelectItem>
+              {CAUSE_STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={conditionFilter} onValueChange={setConditionFilter}>
+            <SelectTrigger size="sm" className="w-[136px] text-xs" aria-label="Filter by condition">
+              <SelectValue placeholder="All conditions" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All conditions</SelectItem>
+              {conditionOptions.options.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {filterChips.map((chip) => (
+            <Badge key={chip.key} variant="outline" className="gap-1 pr-1 text-xs font-medium">
+              {chip.label}
+              <button
+                type="button"
+                aria-label={`Clear ${chip.label} filter`}
+                onClick={chip.clear}
+                className="rounded-full p-0.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X className="size-3" aria-hidden="true" />
+              </button>
+            </Badge>
+          ))}
+
+          {filterChips.length > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Clear all filters"
+              onClick={() => {
+                setSearch("");
+                setQuery("");
+                setStatusFilter("ALL");
+                setConditionFilter("ALL");
+              }}
+            >
+              <X className="size-4" /> Clear all
+            </Button>
+          ) : null}
+
+          <span
+            className="ml-auto text-xs tabular-nums text-muted-foreground"
+            aria-live="polite"
+          >
+            {loading ? "Loading…" : `${filtered.length} result${filtered.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+
+        {view === "table" ? (
+          <DataTable
+            columns={causeColumns}
+            rows={paged}
+            rowKey={(c) => c.id}
+            loading={loading}
+            skeletonRows={8}
+            height="fill"
+            fillOffset={520}
+            onRowClick={setSheet}
+            page={safePage}
+            pages={pages}
+            total={filtered.length}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={setPageSize}
+            itemLabel="causes"
+            empty={emptyNode}
+          >
+            {renderCauseCell}
+          </DataTable>
+        ) : loading ? (
           <ViewSkeleton view={view} />
         ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={<HeartPulse className="size-6" aria-hidden="true" />}
-            title={causes.length === 0 ? "No medicine causes yet" : "No causes match the filters"}
-            hint={
-              causes.length === 0
-                ? "Create a cause so donors can adopt a patient's monthly medicine cost."
-                : "Try clearing the status, condition or search filters."
-            }
-          >
-            {causes.length === 0 ? (
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="size-4" aria-hidden="true" /> New cause
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setSearch("");
-                  setQuery("");
-                  setStatusFilter("ALL");
-                  setConditionFilter("ALL");
-                }}
-              >
-                Clear filters
-              </Button>
-            )}
-          </EmptyState>
-        ) : view === "table" ? (
-          <>
-            <div className="overflow-x-auto rounded-xl border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead>Code</TableHead>
-                    <TableHead>Patient</TableHead>
-                    <TableHead className="hidden lg:table-cell">Condition</TableHead>
-                    <TableHead className="text-right">Monthly</TableHead>
-                    <TableHead className="hidden md:table-cell">Progress</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-12 text-right">
-                      <span className="sr-only">Actions</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paged.map((c) => {
-                    const pct = pctOf(c);
-                    return (
-                      <TableRow
-                        key={c.id}
-                        className="cursor-pointer"
-                        onClick={() => setSheet(c)}
-                        aria-label={`Open cause ${c.code} — ${c.patientName}`}
-                      >
-                        <TableCell className="font-mono text-xs text-muted-foreground">{c.code}</TableCell>
-                        <TableCell>
-                          <p className="text-sm font-medium">{c.patientName}</p>
-                          <p className="text-[11px] text-muted-foreground">{c.age} yrs · {c.city}</p>
-                        </TableCell>
-                        <TableCell className="hidden lg:table-cell">
-                          <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
-                            {labelOf(conditionOptions.options, c.condition)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right text-sm font-medium">{formatINR(c.monthlyCost)}</TableCell>
-                        <TableCell className="hidden md:table-cell">
-                          <div className="flex items-center gap-2">
-                            <Progress value={pct} className="h-2 w-24 [&>div]:bg-teal-600" aria-label={`${c.code} progress ${pct}%`} />
-                            <span className="text-xs text-muted-foreground">{pct}%</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={cn(CAUSE_STATUS[c.status] ?? CAUSE_STATUS.SEEKING)}>
-                            {titleCase(c.status)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
-                            <RowMenu c={c} />
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="causes" />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
+          emptyNode
         ) : view === "list" ? (
-          <>
-            <ul className="divide-y rounded-xl border bg-card">
-              {paged.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSheet(c)}
-                    aria-label={`Open details for cause ${c.code} — ${c.patientName}`}
-                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
-                  >
-                    <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
-                      <HeartPulse className="size-4" aria-hidden="true" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">
-                        <span className="mr-1.5 font-mono text-xs text-muted-foreground">{c.code}</span>
-                        {c.patientName}
-                      </p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {labelOf(conditionOptions.options, c.condition)} · {c.city} · {c.durationMonths} mo
-                      </p>
-                    </div>
-                    <div className="hidden shrink-0 text-right sm:block">
-                      <p className="text-sm font-semibold">{formatINRCompact(c.raised)}</p>
-                      <p className="text-[11px] text-muted-foreground">{pctOf(c)}% of {formatINRCompact(totalCost(c))}</p>
-                    </div>
-                    <Badge variant="outline" className={cn("shrink-0", CAUSE_STATUS[c.status] ?? CAUSE_STATUS.SEEKING)}>
-                      {titleCase(c.status)}
-                    </Badge>
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <RowMenu c={c} />
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="causes" />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {paged.map((c) => (
+          <ul className="divide-y rounded-xl border bg-card">
+            {paged.map((c) => (
+              <li key={c.id}>
                 <button
-                  key={c.id}
                   type="button"
                   onClick={() => setSheet(c)}
-                  aria-label={`Open details for ${c.code} — ${c.patientName}`}
-                  className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-teal-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+                  aria-label={`Open details for cause ${c.code} — ${c.patientName}`}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary sm:px-4"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{c.code}</span>
-                    <Badge variant="outline" className={cn("ml-auto", CAUSE_STATUS[c.status] ?? CAUSE_STATUS.SEEKING)}>
-                      {titleCase(c.status)}
-                    </Badge>
-                  </div>
-                  <div>
-                    <p className="font-semibold leading-tight">{c.patientName}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {c.age} yrs · {c.city}
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                    <HeartPulse className="size-4" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      <span className="mr-1.5 font-mono text-xs text-muted-foreground">{c.code}</span>
+                      {c.patientName}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {labelOf(conditionOptions.options, c.condition)} · {c.city} · {c.durationMonths} mo
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
-                      {labelOf(conditionOptions.options, c.condition)}
-                    </Badge>
-                    <Badge variant="outline">
-                      <HandCoins className="size-3" aria-hidden="true" />
-                      {(c.pledges ?? []).length} pledge{(c.pledges ?? []).length === 1 ? "" : "s"}
-                    </Badge>
+                  <div className="hidden shrink-0 text-right sm:block">
+                    <p className="text-sm font-semibold">{formatINRCompact(c.raised)}</p>
+                    <p className="text-[11px] text-muted-foreground">{pctOf(c)}% of {formatINRCompact(totalCost(c))}</p>
                   </div>
-                  <div className="mt-auto space-y-1.5">
-                    <div className="flex items-baseline justify-between gap-2 text-sm">
-                      <span className="font-semibold text-teal-700 dark:text-teal-400">{formatINR(c.monthlyCost)}/mo</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {c.durationMonths} mo · {formatINR(c.raised)} raised
-                      </span>
-                    </div>
-                    <Progress
-                      value={pctOf(c)}
-                      className="h-2 [&>div]:bg-teal-600"
-                      aria-label={`${pctOf(c)}% of total medicine cost raised`}
-                    />
+                  <StatusBadge status={c.status} className="shrink-0" />
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <RowMenu c={c} />
                   </div>
                 </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="causes" />
-              <PageSizeSelect value={pageSize} onChange={setPageSize} />
-            </div>
-          </>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {paged.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setSheet(c)}
+                aria-label={`Open details for ${c.code} — ${c.patientName}`}
+                className="flex flex-col gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition hover:border-teal-500/40 hover:shadow-md focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-muted-foreground">{c.code}</span>
+                  <StatusBadge status={c.status} className="ml-auto" />
+                </div>
+                <div>
+                  <p className="font-semibold leading-tight">{c.patientName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {c.age} yrs · {c.city}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                    {labelOf(conditionOptions.options, c.condition)}
+                  </Badge>
+                  <Badge variant="outline">
+                    <HandCoins className="size-3" aria-hidden="true" />
+                    {(c.pledges ?? []).length} pledge{(c.pledges ?? []).length === 1 ? "" : "s"}
+                  </Badge>
+                </div>
+                <div className="mt-auto space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2 text-sm">
+                    <span className="font-semibold text-teal-700 dark:text-teal-400">{formatINR(c.monthlyCost)}/mo</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {c.durationMonths} mo · {formatINR(c.raised)} raised
+                    </span>
+                  </div>
+                  <Progress
+                    value={pctOf(c)}
+                    className="h-2 [&>div]:bg-teal-600"
+                    aria-label={`${pctOf(c)}% of total medicine cost raised`}
+                  />
+                </div>
+              </button>
+            ))}
+          </div>
         )}
+
+        {/* Pagination (grid / list — the DataTable pager covers the table view) */}
+        {view !== "table" && !loading && filtered.length > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <PaginationBar page={safePage} pages={pages} total={filtered.length} onPage={setPage} itemLabel="causes" />
+            <PageSizeSelect value={pageSize} onChange={setPageSize} />
+          </div>
+        ) : null}
       </SectionCard>
 
       {/* ============================== DETAIL SHEET ============================= */}
-      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-lg">
-          {sheet && (
-            <div className="space-y-5 p-5">
-              <SheetHeader className="p-0 text-left">
-                <SheetTitle className="flex items-center gap-2">
-                  <span className="font-mono text-sm">{sheet.code}</span>
-                  <Badge variant="outline" className={cn("ml-auto", CAUSE_STATUS[sheet.status] ?? CAUSE_STATUS.SEEKING)}>
-                    {titleCase(sheet.status)}
-                  </Badge>
-                </SheetTitle>
-                <SheetDescription>Medicine sponsorship case · {sheet.city}</SheetDescription>
-              </SheetHeader>
+      <DetailSheet
+        open={!!sheet}
+        onOpenChange={(o) => !o && setSheet(null)}
+        eyebrow="Adopt-a-Medicine"
+        title={sheet?.patientName ?? "Cause"}
+        description={
+          sheet
+            ? `Medicine sponsorship case · ${sheet.city} · ${sheet.durationMonths} months of support`
+            : undefined
+        }
+        status={sheet ? <StatusBadge status={sheet.status} /> : undefined}
+        actions={
+          sheet ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+                <Pencil className="size-4" aria-hidden="true" /> Edit
+              </Button>
+              {sheet.status === "ADOPTED" && sheet.adoptedByName ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
+                  onClick={() => void issueCertificate(sheet)}
+                  disabled={issuing === sheet.id}
+                >
+                  <Award className="size-4" aria-hidden="true" />
+                  {issuing === sheet.id ? "Issuing…" : "Certificate"}
+                </Button>
+              ) : null}
+            </>
+          ) : undefined
+        }
+        footer={
+          sheet ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void togglePause(sheet)}
+                aria-label={sheet.status === "PAUSED" ? "Resume cause" : "Pause cause"}
+              >
+                {sheet.status === "PAUSED" ? (
+                  <Play className="size-4" aria-hidden="true" />
+                ) : (
+                  <Pause className="size-4" aria-hidden="true" />
+                )}
+                {sheet.status === "PAUSED" ? "Resume" : "Pause"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                onClick={() => setDeleteTarget(sheet)}
+                aria-label={`Delete ${sheet.code}`}
+              >
+                <Trash2 className="size-4" aria-hidden="true" /> Delete
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setSheet(null)}>
+                Close
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {sheet && (
+          <div className="flex flex-col gap-6">
+            {/* Monthly math */}
+            <DetailSection
+              title="Sponsorship math"
+              description="Raised = sum of active monthly pledges recorded against this cause."
+            >
+              <Progress
+                value={pctOf(sheet)}
+                className="h-2.5 [&>div]:bg-teal-600"
+                aria-label="Fundraising progress"
+              />
+              <p className="text-xs text-muted-foreground">
+                {formatINR(sheet.raised)} of {formatINR(totalCost(sheet))} ({sheet.durationMonths} ×{" "}
+                {formatINR(sheet.monthlyCost)})
+              </p>
+              <div className="mt-2">
+                <DetailGrid cols={3}>
+                  <DataField label="Monthly cost" value={`${formatINR(sheet.monthlyCost)} / mo`} />
+                  <DataField label="Duration" value={`${sheet.durationMonths} months`} />
+                  <DataField label="Total needed" value={formatINR(totalCost(sheet))} />
+                  <DataField label="Raised so far" value={formatINR(sheet.raised)} />
+                  <DataField
+                    label="Still needed"
+                    value={formatINR(Math.max(0, totalCost(sheet) - (sheet.raised || 0)))}
+                  />
+                  <DataField
+                    label="Active monthly pledges"
+                    value={formatINR(
+                      (sheet.pledges ?? [])
+                        .filter((pl) => pl.status === "ACTIVE")
+                        .reduce((s, pl) => s + (pl.amountPerMonth || 0), 0)
+                    )}
+                  />
+                </DetailGrid>
+              </div>
+            </DetailSection>
 
-              <div className="grid grid-cols-2 gap-3">
-                <DataField label="Patient" value={sheet.patientName} />
+            {/* Patient profile — every Cause field */}
+            <DetailSection title="Patient profile">
+              <DetailGrid cols={3}>
+                <DataField label="Cause code" value={sheet.code} mono copy />
+                <DataField label="Patient name" value={sheet.patientName} />
                 <DataField label="Age" value={`${sheet.age} years`} />
+                <DataField label="City" value={sheet.city} />
                 <DataField
                   label="Condition"
                   value={
-                    <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                    <Badge
+                      variant="outline"
+                      className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400"
+                    >
                       {labelOf(conditionOptions.options, sheet.condition)}
                     </Badge>
                   }
                 />
-                <DataField label="City" value={sheet.city} />
-                <DataField label="Monthly cost" value={`${formatINR(sheet.monthlyCost)} / mo`} />
-                <DataField label="Duration" value={`${sheet.durationMonths} months`} />
-                <DataField label="Raised so far" value={formatINR(sheet.raised)} />
-                <DataField label="Total needed" value={formatINR(totalCost(sheet))} />
-              </div>
+                <DataField label="Status" value={<StatusBadge status={sheet.status} />} />
+                <DataField label="Created" value={formatDate(sheet.createdAt)} />
+              </DetailGrid>
+            </DetailSection>
 
-              <SectionCard title="Progress">
-                <Progress
-                  value={pctOf(sheet)}
-                  className="h-2.5 [&>div]:bg-teal-600"
-                  aria-label="Fundraising progress"
-                />
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {formatINR(sheet.raised)} of {formatINR(totalCost(sheet))} ({sheet.durationMonths} × {formatINR(sheet.monthlyCost)})
-                </p>
-              </SectionCard>
-
-              <SectionCard title="Story">
-                <p className="text-sm leading-relaxed text-muted-foreground">{sheet.story}</p>
-              </SectionCard>
-
-              {sheet.adoptedByName ? (
+            {/* Adoption */}
+            {sheet.adoptedByName ? (
+              <DetailSection title="Adoption">
                 <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
                   <span className="flex size-9 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-400">
                     <UserCheck className="size-4" aria-hidden="true" />
@@ -822,84 +968,57 @@ export default function CausesView() {
                     <p className="truncate text-sm font-semibold">{sheet.adoptedByName}</p>
                   </div>
                 </div>
-              ) : null}
+              </DetailSection>
+            ) : null}
 
-              <SectionCard title={`Pledges (${(sheet.pledges ?? []).length})`}>
-                {(sheet.pledges ?? []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No pledges yet — donors can pledge from the public cause page.</p>
-                ) : (
-                  <div className="overflow-hidden rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-muted/50 hover:bg-muted/50">
-                          <TableHead>Donor</TableHead>
-                          <TableHead className="text-right">Pledge</TableHead>
-                          <TableHead className="text-right">Status</TableHead>
+            {/* Story */}
+            <DetailSection title="Story" description="Shown on the public cause page.">
+              <p className="text-sm leading-relaxed text-muted-foreground">{sheet.story}</p>
+            </DetailSection>
+
+            {/* Pledges */}
+            <DetailSection
+              title={`Pledges (${(sheet.pledges ?? []).length})`}
+              description="Donors can pledge from the public cause page."
+            >
+              {(sheet.pledges ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No pledges yet — donors can pledge from the public cause page.
+                </p>
+              ) : (
+                <div className="overflow-hidden rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/50 hover:bg-muted/50">
+                        <TableHead>Donor</TableHead>
+                        <TableHead className="text-right">Pledge</TableHead>
+                        <TableHead className="hidden text-right sm:table-cell">Since</TableHead>
+                        <TableHead className="text-right">Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(sheet.pledges ?? []).map((pl) => (
+                        <TableRow key={pl.id}>
+                          <TableCell className="text-sm">{pl.donorName}</TableCell>
+                          <TableCell className="text-right text-xs text-muted-foreground">
+                            {formatINR(pl.amountPerMonth)}/mo × {pl.months} mo
+                          </TableCell>
+                          <TableCell className="hidden text-right text-xs text-muted-foreground sm:table-cell">
+                            {pl.startDate ? formatDate(pl.startDate) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <StatusBadge status={pl.status} />
+                          </TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {(sheet.pledges ?? []).map((pl) => (
-                          <TableRow key={pl.id}>
-                            <TableCell className="text-sm">{pl.donorName}</TableCell>
-                            <TableCell className="text-right text-xs text-muted-foreground">
-                              {formatINR(pl.amountPerMonth)}/mo × {pl.months} mo
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Badge variant="outline" className={cn(PLEDGE_STATUS[pl.status] ?? "")}>
-                                {titleCase(pl.status)}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </SectionCard>
-
-              <div className="flex flex-wrap gap-2 border-t pt-4">
-                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
-                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void togglePause(sheet)}
-                  aria-label={sheet.status === "PAUSED" ? "Resume cause" : "Pause cause"}
-                >
-                  {sheet.status === "PAUSED" ? (
-                    <Play className="size-3.5" aria-hidden="true" />
-                  ) : (
-                    <Pause className="size-3.5" aria-hidden="true" />
-                  )}
-                  {sheet.status === "PAUSED" ? "Resume" : "Pause"}
-                </Button>
-                {sheet.status === "ADOPTED" && sheet.adoptedByName && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400"
-                    onClick={() => void issueCertificate(sheet)}
-                    disabled={issuing === sheet.id}
-                  >
-                    <Award className="size-3.5" aria-hidden="true" />
-                    {issuing === sheet.id ? "Issuing…" : "Issue certificate"}
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
-                  onClick={() => setDeleteTarget(sheet)}
-                  aria-label={`Delete ${sheet.code}`}
-                >
-                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
-                </Button>
-              </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </DetailSection>
+          </div>
+        )}
+      </DetailSheet>
 
       {/* ============================ CREATE / EDIT ============================= */}
       <FormSheet
@@ -915,7 +1034,7 @@ export default function CausesView() {
         submitLabel={editing ? "Save changes" : "Create cause"}
         loading={saving}
         dirty={dirty}
-        size="md"
+        size="lg"
         footerExtra={
           errorCount > 0 ? (
             <span className="font-medium text-destructive">{errorCount} field(s) need attention</span>

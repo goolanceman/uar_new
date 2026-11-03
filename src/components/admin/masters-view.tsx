@@ -1,8 +1,14 @@
 "use client";
 
+/**
+ * Masters (MDM) — round-5: DataTable with inline label/sort/active editing,
+ * full-screen DetailSheet per entry (fields + category preview with
+ * sort/order/active state), FormSheet (sm) for add-entry, shared
+ * ConfirmDialog for deletes and the bulk-import FormSheet.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Download,
   FolderTree,
   Info,
   Loader2,
@@ -17,51 +23,35 @@ import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { titleCase } from "@/lib/format";
-import { downloadCsv } from "@/components/shared/csv";
+import { downloadCsv, ExportMenu, type CsvColumn } from "@/components/shared/csv";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormSheet } from "@/components/shared/form-sheet";
-import { TextareaField } from "@/components/shared/form-fields";
+import {
+  FieldGrid,
+  FormSection,
+  SelectField,
+  TextField,
+  TextareaField,
+} from "@/components/shared/form-fields";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "@/components/shared/data-table";
+import {
+  DetailGrid,
+  DetailSection,
+  DetailSheet,
+} from "@/components/shared/detail-sheet";
+import { DataField } from "@/components/shared/data-field";
 import { PageHeader } from "@/components/shared/page-header";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Switch } from "@/components/ui/switch";
 
 /* ------------------------------ types & helpers ----------------------------- */
 
@@ -86,6 +76,16 @@ interface ParsedLine {
   label: string;
   sortOrder: number;
 }
+
+interface AddFormState {
+  category: string;
+  newCategory: string;
+  value: string;
+  label: string;
+  sortOrder: string;
+}
+
+const EMPTY_ADD: AddFormState = { category: "", newCategory: "", value: "", label: "", sortOrder: "0" };
 
 /** Where each registry surfaces in the product — shown as a hint per tab. */
 const USAGE_HINTS: Record<string, string> = {
@@ -143,9 +143,9 @@ export default function MastersView() {
   const [sortDrafts, setSortDrafts] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  // add entry dialog
+  // add entry sheet (FormSheet sm)
   const [addOpen, setAddOpen] = useState(false);
-  const [addForm, setAddForm] = useState({ category: "", newCategory: "", value: "", label: "", sortOrder: "0" });
+  const [addForm, setAddForm] = useState<AddFormState>({ ...EMPTY_ADD });
 
   // bulk import
   const [importOpen, setImportOpen] = useState(false);
@@ -154,6 +154,11 @@ export default function MastersView() {
   const [importResults, setImportResults] = useState<ImportResult[]>([]);
 
   const [deleteTarget, setDeleteTarget] = useState<MasterEntry | null>(null);
+  const [detailTarget, setDetailTarget] = useState<MasterEntry | null>(null);
+
+  // pagination over the selected category
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /* -------------------------------- loading ------------------------------- */
 
@@ -199,6 +204,17 @@ export default function MastersView() {
         .filter((e) => e.category === selected)
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.label.localeCompare(b.label)),
     [entries, selected]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [selected, pageSize]);
+
+  const pages = Math.max(1, Math.ceil(selectedEntries.length / pageSize));
+  const pageSafe = Math.min(page, pages);
+  const paged = useMemo(
+    () => selectedEntries.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [selectedEntries, pageSafe, pageSize]
   );
 
   const parsedImport = useMemo(() => parseImportLines(importText), [importText]);
@@ -253,6 +269,14 @@ export default function MastersView() {
     }
   };
 
+  const addDirty =
+    addOpen &&
+    (addForm.category !== "" ||
+      addForm.newCategory !== "" ||
+      addForm.value.trim() !== "" ||
+      addForm.label.trim() !== "" ||
+      addForm.sortOrder !== "0");
+
   const addEntry = async () => {
     const category = addForm.category === "__new__" ? addForm.newCategory.trim().toUpperCase().replace(/\s+/g, "_") : addForm.category;
     if (!category) {
@@ -274,7 +298,7 @@ export default function MastersView() {
       });
       toast.success(`“${addForm.label.trim()}” added to ${titleCase(category)}`);
       setAddOpen(false);
-      setAddForm({ category: "", newCategory: "", value: "", label: "", sortOrder: "0" });
+      setAddForm({ ...EMPTY_ADD });
       await load();
       setSelected(category);
     } catch (e) {
@@ -291,6 +315,7 @@ export default function MastersView() {
       await del(`/api/masters/${deleteTarget.id}`);
       toast.success(`“${deleteTarget.label}” deleted`);
       setDeleteTarget(null);
+      setDetailTarget((d) => (d && d.id === deleteTarget.id ? null : d));
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete entry");
@@ -301,19 +326,15 @@ export default function MastersView() {
 
   /* ----------------------------- export / import --------------------------- */
 
-  const exportCategory = () => {
-    if (!selected || selectedEntries.length === 0) {
-      toast.info("Nothing to export in this category yet");
-      return;
-    }
-    downloadCsv(`uar-masters-${selected.toLowerCase()}`, [
-      { header: "value", value: (e: MasterEntry) => e.value },
-      { header: "label", value: (e: MasterEntry) => e.label },
-      { header: "sortOrder", value: (e: MasterEntry) => e.sortOrder },
-      { header: "active", value: (e: MasterEntry) => (e.active ? "1" : "0") },
-    ], selectedEntries);
-    toast.success(`Exported ${selectedEntries.length} ${selectedEntries.length === 1 ? "entry" : "entries"}`);
-  };
+  const masterCsv: CsvColumn<MasterEntry>[] = useMemo(
+    () => [
+      { header: "value", value: (e) => e.value },
+      { header: "label", value: (e) => e.label },
+      { header: "sortOrder", value: (e) => e.sortOrder },
+      { header: "active", value: (e) => (e.active ? "1" : "0") },
+    ],
+    []
+  );
 
   const openImport = () => {
     setImportText("");
@@ -322,7 +343,7 @@ export default function MastersView() {
   };
 
   const runImport = async () => {
-    const { rows, errors } = parsedImport;
+    const { rows } = parsedImport;
     if (!selected) {
       toast.error("Choose a category first");
       return;
@@ -357,12 +378,27 @@ export default function MastersView() {
     if (failCount === 0) {
       toast.success(`Imported ${okCount} ${okCount === 1 ? "entry" : "entries"} into ${titleCase(selected)}`);
     } else {
-      toast.warning(`${okCount} imported · ${failCount} failed${errors.length ? ` · ${errors.length} unparsed line${errors.length === 1 ? "" : "s"}` : ""}`);
+      toast.warning(`${okCount} imported · ${failCount} failed`);
     }
     await load();
   };
 
-  /* --------------------------------- render -------------------------------- */
+  /* ------------------------------- table cols ------------------------------ */
+
+  const columns: DataTableColumn<MasterEntry>[] = [
+    { key: "label", header: "Label", className: "min-w-44" },
+    { key: "value", header: "Value", mono: true, hideBelow: "sm" },
+    { key: "sortOrder", header: "Sort", align: "right" },
+    { key: "active", header: "Active", hideBelow: "md" },
+    { key: "delete", header: "", align: "right", className: "w-12" },
+  ];
+
+  const detailSiblings = useMemo(() => {
+    if (!detailTarget) return [];
+    return entries
+      .filter((e) => e.category === detailTarget.category)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.label.localeCompare(b.label));
+  }, [entries, detailTarget]);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -373,7 +409,7 @@ export default function MastersView() {
         actions={
           <Button
             onClick={() => {
-              setAddForm((f) => ({ ...f, category: selected || categories[0] || "__new__", value: "", label: "", sortOrder: "0", newCategory: "" }));
+              setAddForm({ ...EMPTY_ADD, category: selected || categories[0] || "__new__" });
               setAddOpen(true);
             }}
             disabled={!selected}
@@ -409,49 +445,55 @@ export default function MastersView() {
         )}
       </Tabs>
 
-      {/* Entries card */}
-      <div className="rounded-xl border bg-card">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
-          <div className="min-w-0">
-            <h3 className="flex items-center gap-2 text-sm font-semibold">
-              <FolderTree className="size-4 text-primary" aria-hidden="true" />
-              {selected ? titleCase(selected) : "Entries"}
-            </h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">{usageHint(selected ?? "")}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground" aria-live="polite">
-              {loading ? "Loading…" : `${selectedEntries.length} entr${selectedEntries.length === 1 ? "y" : "ies"}`}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportCategory}
-              disabled={!selected || selectedEntries.length === 0}
-              aria-label={`Export ${selected} entries as CSV`}
-            >
-              <Download className="size-4" aria-hidden="true" /> Export
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={openImport}
-              disabled={!selected}
-              aria-label={`Bulk import ${selected} entries`}
-            >
-              <Upload className="size-4" aria-hidden="true" /> Import
-            </Button>
-          </div>
+      {/* Entries header row */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <FolderTree className="size-4 text-primary" aria-hidden="true" />
+            {selected ? titleCase(selected) : "Entries"}
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{usageHint(selected ?? "")}</p>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground" aria-live="polite">
+            {loading ? "Loading…" : `${selectedEntries.length} entr${selectedEntries.length === 1 ? "y" : "ies"}`}
+          </span>
+          <ExportMenu
+            columns={masterCsv}
+            rows={selectedEntries}
+            filename={`uar-masters-${(selected ?? "entries").toLowerCase()}`}
+            disabled={!selected || selectedEntries.length === 0}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openImport}
+            disabled={!selected}
+            aria-label={`Bulk import ${selected} entries`}
+          >
+            <Upload className="size-4" aria-hidden="true" /> Import
+          </Button>
+        </div>
+      </div>
 
-        {loading ? (
-          <div className="space-y-2 p-4">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-11 w-full" />
-            ))}
-          </div>
-        ) : !selected ? (
-          <div className="p-6">
+      <DataTable
+        columns={columns}
+        rows={paged}
+        rowKey={(e) => e.id}
+        loading={loading}
+        skeletonRows={6}
+        height="fill"
+        fillOffset={300}
+        onRowClick={(e) => setDetailTarget(e)}
+        page={pageSafe}
+        pages={pages}
+        total={selectedEntries.length}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={setPageSize}
+        itemLabel="entries"
+        empty={
+          !selected ? (
             <EmptyState
               icon={<FolderTree className="size-6" aria-hidden="true" />}
               title="No categories yet"
@@ -460,16 +502,14 @@ export default function MastersView() {
               <Button
                 size="sm"
                 onClick={() => {
-                  setAddForm({ category: "__new__", newCategory: "", value: "", label: "", sortOrder: "0" });
+                  setAddForm({ ...EMPTY_ADD, category: "__new__" });
                   setAddOpen(true);
                 }}
               >
                 <Plus className="size-4" /> Add first entry
               </Button>
             </EmptyState>
-          </div>
-        ) : selectedEntries.length === 0 ? (
-          <div className="p-6">
+          ) : (
             <EmptyState
               icon={<Tag className="size-6" aria-hidden="true" />}
               title={`No entries in ${titleCase(selected)}`}
@@ -478,164 +518,159 @@ export default function MastersView() {
               <Button
                 size="sm"
                 onClick={() => {
-                  setAddForm((f) => ({ ...f, category: selected, value: "", label: "", sortOrder: "0", newCategory: "" }));
+                  setAddForm({ ...EMPTY_ADD, category: selected });
                   setAddOpen(true);
                 }}
               >
                 <Plus className="size-4" /> Add entry
               </Button>
             </EmptyState>
-          </div>
-        ) : (
-          <div className="max-h-[30rem] overflow-auto scrollbar-thin">
-            <Table>
-              <TableHeader className="sticky top-0 bg-background">
-                <TableRow>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead className="w-24">Sort order</TableHead>
-                  <TableHead>Active</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {selectedEntries.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="min-w-44">
-                      <Input
-                        value={labelDrafts[entry.id] ?? entry.label}
-                        onChange={(e) => setLabelDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
-                        onBlur={() => saveLabel(entry)}
-                        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                        aria-label={`Edit label for ${entry.value}`}
-                        className="h-9 text-sm"
-                      />
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{entry.value}</TableCell>
-                    <TableCell>
-                      <Input
-                        type="number"
-                        value={sortDrafts[entry.id] ?? String(entry.sortOrder ?? 0)}
-                        onChange={(e) => setSortDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
-                        onBlur={() => saveSortOrder(entry)}
-                        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                        aria-label={`Edit sort order for ${entry.value}`}
-                        className="h-9 w-20 text-sm"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={entry.active}
-                        disabled={busyId === entry.id}
-                        onCheckedChange={(v) => toggleActive(entry, v)}
-                        aria-label={`Toggle ${entry.value} active`}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-11 text-red-600 hover:bg-red-500/10 hover:text-red-700 md:size-9"
-                        aria-label={`Delete entry ${entry.value}`}
-                        onClick={() => setDeleteTarget(entry)}
-                      >
-                        {busyId === entry.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
+          )
+        }
+      >
+        {(entry, col) => {
+          switch (col.key) {
+            case "label":
+              return (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Input
+                    value={labelDrafts[entry.id] ?? entry.label}
+                    onChange={(e) => setLabelDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
+                    onBlur={() => saveLabel(entry)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                    aria-label={`Edit label for ${entry.value}`}
+                    className="h-9 text-sm"
+                  />
+                </div>
+              );
+            case "value":
+              return <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">{entry.value}</span>;
+            case "sortOrder":
+              return (
+                <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+                  <Input
+                    type="number"
+                    value={sortDrafts[entry.id] ?? String(entry.sortOrder ?? 0)}
+                    onChange={(e) => setSortDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
+                    onBlur={() => saveSortOrder(entry)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                    aria-label={`Edit sort order for ${entry.value}`}
+                    className="h-9 w-20 text-right text-sm"
+                  />
+                </div>
+              );
+            case "active":
+              return (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Switch
+                    checked={entry.active}
+                    disabled={busyId === entry.id}
+                    onCheckedChange={(v) => toggleActive(entry, v)}
+                    aria-label={`Toggle ${entry.value} active`}
+                  />
+                </div>
+              );
+            case "delete":
+              return (
+                <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-11 text-red-600 hover:bg-red-500/10 hover:text-red-700 md:size-9"
+                    aria-label={`Delete entry ${entry.value}`}
+                    onClick={() => setDeleteTarget(entry)}
+                  >
+                    {busyId === entry.id ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Trash2 className="size-4" aria-hidden="true" />
+                    )}
+                  </Button>
+                </div>
+              );
+            default:
+              return null;
+          }
+        }}
+      </DataTable>
 
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <RefreshCw className="size-3.5" aria-hidden="true" />
-        Tip: deactivating hides a value from every dropdown without deleting history tied to it.
+        Tip: deactivating hides a value from every dropdown without deleting history tied to it. Click a row for full details.
       </p>
 
-      {/* ------------------------------ Add dialog ---------------------------- */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add registry entry</DialogTitle>
-            <DialogDescription>
-              The value is stored internally; the label is what users see in dropdowns.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label>Category</Label>
-              <Select value={addForm.category} onValueChange={(v) => setAddForm((f) => ({ ...f, category: v }))}>
-                <SelectTrigger aria-label="Registry category"><SelectValue placeholder="Choose a category" /></SelectTrigger>
-                <SelectContent>
-                  {categories.map((c) => (
-                    <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
-                  ))}
-                  <SelectItem value="__new__">— New category —</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {addForm.category === "__new__" && (
-              <div className="grid gap-2">
-                <Label htmlFor="m-newcat">New category name</Label>
-                <Input
-                  id="m-newcat"
-                  value={addForm.newCategory}
-                  onChange={(e) => setAddForm((f) => ({ ...f, newCategory: e.target.value }))}
-                  placeholder="e.g. BLOOD_GROUP"
-                  className="font-mono uppercase"
-                />
-              </div>
-            )}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="m-value">Value *</Label>
-                <Input
-                  id="m-value"
-                  value={addForm.value}
-                  onChange={(e) => setAddForm((f) => ({ ...f, value: e.target.value }))}
-                  placeholder="e.g. WHITEFIELD"
-                  className="font-mono"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="m-label">Label *</Label>
-                <Input
-                  id="m-label"
-                  value={addForm.label}
-                  onChange={(e) => setAddForm((f) => ({ ...f, label: e.target.value }))}
-                  placeholder="e.g. Whitefield"
-                />
-              </div>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="m-sort">Sort order</Label>
-              <Input
-                id="m-sort"
-                type="number"
-                value={addForm.sortOrder}
-                onChange={(e) => setAddForm((f) => ({ ...f, sortOrder: e.target.value }))}
-                placeholder="0"
-              />
-              <p className="text-xs text-muted-foreground">Lower numbers appear first in dropdowns.</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
-            <Button onClick={addEntry} disabled={saving}>
-              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-              {saving ? "Saving…" : "Add entry"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ------------------------------ Add sheet (sm) -------------------------- */}
+      <FormSheet
+        open={addOpen}
+        onOpenChange={(o) => {
+          if (!o && !saving) {
+            setAddOpen(false);
+          }
+        }}
+        title="Add registry entry"
+        description="The value is stored internally; the label is what users see in dropdowns."
+        submitLabel="Add entry"
+        onSubmit={addEntry}
+        loading={saving}
+        dirty={addDirty}
+        size="sm"
+      >
+        <FormSection title="Category" description="Pick an existing registry or create a new one.">
+          <SelectField
+            label="Category"
+            required
+            value={addForm.category}
+            onChange={(v) => setAddForm((f) => ({ ...f, category: v }))}
+            options={[
+              ...categories.map((c) => ({ value: c, label: titleCase(c) })),
+              { value: "__new__", label: "— New category —" },
+            ]}
+            placeholder="Choose a category"
+          />
+          {addForm.category === "__new__" && (
+            <TextField
+              label="New category name"
+              required
+              value={addForm.newCategory}
+              onChange={(v) => setAddForm((f) => ({ ...f, newCategory: v }))}
+              placeholder="e.g. BLOOD_GROUP"
+              hint="Stored in CAPS_WITH_UNDERSCORES."
+            />
+          )}
+        </FormSection>
+        <FormSection title="Entry" description="Value is the stored key; label is shown to users.">
+          <FieldGrid>
+            <TextField
+              label="Value"
+              required
+              value={addForm.value}
+              onChange={(v) => setAddForm((f) => ({ ...f, value: v }))}
+              placeholder="e.g. WHITEFIELD"
+            />
+            <TextField
+              label="Label"
+              required
+              value={addForm.label}
+              onChange={(v) => setAddForm((f) => ({ ...f, label: v }))}
+              placeholder="e.g. Whitefield"
+            />
+          </FieldGrid>
+          <TextField
+            label="Sort order"
+            type="number"
+            value={addForm.sortOrder}
+            onChange={(v) => setAddForm((f) => ({ ...f, sortOrder: v }))}
+            hint="Lower numbers appear first in dropdowns."
+          />
+        </FormSection>
+      </FormSheet>
 
       {/* --------------------------- Bulk import sheet ------------------------- */}
       <FormSheet
         open={importOpen}
-        onOpenChange={setImportOpen}
+        onOpenChange={(o) => {
+          if (!o && !importing) setImportOpen(false);
+        }}
         title={`Import ${selected ? titleCase(selected) : "entries"}`}
         description="Paste one entry per line as value,label,sortOrder. Label and sort order are optional — existing values are updated."
         submitLabel={importing ? "Importing…" : `Import ${parsedImport.rows.length || ""}`.trim()}
@@ -698,31 +733,94 @@ export default function MastersView() {
         )}
       </FormSheet>
 
-      {/* ---------------------------- Delete confirm -------------------------- */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete entry?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleteTarget
-                ? `“${deleteTarget.label}” (${deleteTarget.category}/${deleteTarget.value}) will be removed from every dropdown that uses it. Existing records keep their stored value.`
-                : ""}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={(e) => {
-                e.preventDefault();
-                confirmDelete();
+      {/* ------------------------------ Detail sheet ---------------------------- */}
+      <DetailSheet
+        open={!!detailTarget}
+        onOpenChange={(o) => !o && setDetailTarget(null)}
+        eyebrow="Masters (MDM)"
+        title={detailTarget?.label ?? "Entry"}
+        description={detailTarget ? `${titleCase(detailTarget.category)} · ${usageHint(detailTarget.category)}` : ""}
+        status={detailTarget ? <StatusBadge tone={detailTarget.active ? "success" : "neutral"}>{detailTarget.active ? "Active" : "Inactive"}</StatusBadge> : undefined}
+        actions={
+          detailTarget ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setAddForm({ ...EMPTY_ADD, category: detailTarget.category });
+                setAddOpen(true);
               }}
             >
-              {saving ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              <Plus className="size-3.5" aria-hidden="true" /> Add to this registry
+            </Button>
+          ) : undefined
+        }
+      >
+        {detailTarget ? (
+          <>
+            <DetailSection title="Entry" description="Stored value vs. the label users see.">
+              <DetailGrid cols={2}>
+                <DataField label="Category" value={titleCase(detailTarget.category)} />
+                <DataField label="Value" value={detailTarget.value} mono copy />
+                <DataField label="Label" value={detailTarget.label} />
+                <DataField label="Sort order" value={String(detailTarget.sortOrder ?? 0)} />
+                <DataField label="Status" value={<StatusBadge tone={detailTarget.active ? "success" : "neutral"}>{detailTarget.active ? "Active" : "Inactive"}</StatusBadge>} />
+                <DataField label="Entry ID" value={detailTarget.id} mono copy />
+              </DetailGrid>
+            </DetailSection>
+
+            <DetailSection
+              title={`${titleCase(detailTarget.category)} registry`}
+              description={`${detailSiblings.length} entries — order and active state preview exactly as dropdowns render them.`}
+            >
+              <ol className="max-h-96 space-y-1.5 overflow-y-auto rounded-lg border p-2 scrollbar-thin" aria-label={`Entries in ${detailTarget.category}`}>
+                {detailSiblings.map((e, i) => (
+                  <li
+                    key={e.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-md px-2.5 py-2 text-sm",
+                      e.id === detailTarget.id && "bg-primary/10"
+                    )}
+                  >
+                    <span className="w-6 shrink-0 text-right font-mono text-xs text-muted-foreground">{i + 1}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{e.label}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">{e.value}</span>
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">#{e.sortOrder ?? 0}</span>
+                    <StatusBadge tone={e.active ? "success" : "neutral"} className="shrink-0">
+                      {e.active ? "Active" : "Inactive"}
+                    </StatusBadge>
+                  </li>
+                ))}
+              </ol>
+            </DetailSection>
+
+            <DetailSection title="Danger zone">
+              <Button
+                variant="outline"
+                className="text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                onClick={() => setDeleteTarget(detailTarget)}
+              >
+                <Trash2 className="size-4" aria-hidden="true" /> Delete this entry
+              </Button>
+            </DetailSection>
+          </>
+        ) : null}
+      </DetailSheet>
+
+      {/* ---------------------------- Delete confirm --------------------------- */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title="Delete entry?"
+        recordName={deleteTarget ? `${deleteTarget.label} (${deleteTarget.category}/${deleteTarget.value})` : null}
+        description="It will be removed from every dropdown that uses it. Existing records keep their stored value."
+        confirmLabel="Delete entry"
+        loading={saving}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }
+
