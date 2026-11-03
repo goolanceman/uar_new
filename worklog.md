@@ -328,3 +328,18 @@ Stage Summary:
 - Toast notifications provide user feedback for all actions
 - Delete confirmations prevent accidental deletions
 - ESLint passes with no errors
+
+## Round 2 — Enhancement wave (this session)
+- Dark theme: next-themes provider + ThemeToggle in public header, admin topbar, portal topbar; dark-safe accent audit.
+- Shared design system: PageHeader, StatCard, DataField, EmptyState, SectionCard (+ print CSS, shimmer, card-hover, focus rings).
+- Integrations: Settings API (grouped keys), /api/settings/public, /api/settings/test (email/SMS/WhatsApp/gateway simulated checks); Settings view rebuilt into 8 tabs.
+- 80G receipts: /api/receipts list + detail + print-ready HTML (letterhead, amount-in-words, 80G reg no, signatory); buttons in admin Donations + donor receipts.
+- Certificates: Certificate model, issue/list APIs + print-ready A4 award HTML (type-aware titles/citations/seal).
+- Reports: consolidated FY payload (Apr–Mar), admin Reports (KPIs, monthly, categories, programme impact, top donors, CSV/print), public Impact page consumption.
+- Notifications API + dashboard "needs attention" panel.
+- Donations edit bug: fixed & browser-verified end-to-end (prefill + PATCH + toast + KPI refresh).
+- Ration kits: batch detail sheet, instructions, unit table, print-ready QR label sheets (22 QRs rendered for READY units).
+- Donate wizard (4 steps, slider, UPI deeplink, PAN/80G explainer, receipt on success) — E2E verified, receipt generated.
+- Portals: donor tax centre (FY selector, per-receipt PDF), volunteer task/scan/distribution flows, beneficiary hub.
+- Mobile fixes: min-content grid overflow root-caused (truncate spans) — donate.tsx + home.tsx grids given min-w-0/overflow-hidden; all routes verified 390px scrollWidth.
+- Verification: tsc 0 errors, eslint 0 problems, browser E2E across public/admin/portals in light+dark.

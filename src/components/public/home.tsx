@@ -340,7 +340,7 @@ export function HomePage() {
                 <Card
                   key={c.id}
                   className={cn(
-                    "flex flex-col gap-3 border p-5 transition-all hover:-translate-y-0.5 hover:shadow-md",
+                    "flex min-w-0 flex-col gap-3 border p-5 transition-all hover:-translate-y-0.5 hover:shadow-md",
                     a.border
                   )}
                 >
@@ -597,7 +597,7 @@ export function HomePage() {
                 key={c.slug}
                 href={`/campaigns/${c.slug}`}
                 className={cn(
-                  "group flex min-h-[44px] items-start gap-3 rounded-xl border bg-card p-4 transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  "group flex min-h-[44px] min-w-0 items-start gap-3 overflow-hidden rounded-xl border bg-card p-4 transition-all hover:-translate-y-0.5 hover:shadow-md",
                   a.border
                 )}
                 aria-label={`${c.title} — open programme page`}

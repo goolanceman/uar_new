@@ -456,7 +456,7 @@ export function DonatePage() {
     >
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         {/* ----------------- Left: wizard ----------------- */}
-        <div>
+        <div className="min-w-0 overflow-hidden">
           {/* Stepper header */}
           <nav
             aria-label="Donation steps"
@@ -1074,7 +1074,7 @@ export function DonatePage() {
         </div>
 
         {/* ----------------- Right: summary sidebar ----------------- */}
-        <div className="space-y-4 lg:sticky lg:top-20 lg:self-start">
+        <div className="min-w-0 overflow-hidden space-y-4 lg:sticky lg:top-20 lg:self-start">
           {/* Running summary */}
           <Card className="p-5">
             <h3 className="text-sm font-bold uppercase tracking-wide text-muted-foreground">
