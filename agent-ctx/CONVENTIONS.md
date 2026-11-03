@@ -130,3 +130,59 @@
 - NO git commands. NO dev-server restarts. NO edits to `src/app/page.tsx`, `prisma/schema.prisma`, or files outside your ownership list.
 - Every file you EDIT must remain `tsc`-clean and lint-clean (`bun run lint`), dark-mode safe, responsive (mobile-first), aria-labelled, with loading skeletons + empty states + sonner toasts.
 - Public pages read org identity via `GET /api/settings/public` (with graceful fallbacks).
+
+# ================= ROUND 3 CONTRACTS (READ ALL — CURRENT TRUTH) =================
+
+## Auth (FIXED — round 3)
+- Session works via httpOnly cookie AND `Authorization: Bearer` header (api-client sends it automatically from localStorage `uar_token`). Do NOT touch auth plumbing.
+- `src/lib/api-client.ts` exports `get/post/patch/del` + `getToken/setToken`. Do not reimplement fetch elsewhere.
+
+## Shared design-system primitives (MANDATORY for every list/form you build)
+Import from `@/components/shared/`:
+- `FormSheet` (`form-sheet.tsx`): ALL add/edit goes here. Props: `{open,onOpenChange,title,description,children,onSubmit,submitLabel,cancelLabel,loading,dirty,size:"sm"|"md"|"lg"|"xl",footerExtra}`. Sticky header/footer, Esc-safe, unsaved-changes guard. NEVER centered Dialog forms.
+- `FormSection`, `FieldGrid` (`form-fields.tsx`): drawer sections + 2-col grid.
+- `Field, TextField, TextareaField, SelectField, SwitchField` (`form-fields.tsx`): bound to plain form state objects. TextField props include prefix (₹), step/min/max.
+- `StatusBadge, toneForStatus, humanize` (`status-badge.tsx`): ONE status pill for all modules.
+- `ConfirmDialog` (`confirm-dialog.tsx`): ALL deletes/critical actions. Props: `{open,onOpenChange,title,recordName,description,confirmLabel,loading,onConfirm}`.
+- `ExportMenu, downloadCsv, CsvColumn` (`csv.tsx`): CSV export on every list.
+- `ViewSwitcher, useViewPref, PaginationBar, PageSizeSelect, DataViewMode` (`view-switcher.tsx`): every list page offers table/grid/list where useful; preference persists via localStorage `uar-view-<module>`.
+- `PageHeader, SectionCard, StatCard, EmptyState, DataField` exist from round 1 — keep using them.
+
+## Validation lib (MANDATORY for forms)
+`@/lib/validators`: `validPan, validPhone, validPin, validEmail, validUpi, normalizePhone`, rule factories `required(label)`, `panRule(optional)`, `phoneRule(optional)`, `emailRule(optional)`, `pinRule(optional)`, `amountRule({min,max,optional,label})`, `dateRule(optional)`, `minLen(n,label)`. Backend routes enforce the same regexes — keep both in sync. PAN regex `^[A-Z]{5}[0-9]{4}[A-Z]{1}$`, phone `^(\+91[\-\s]?)?[6-9]\d{9}$`, PIN `^[1-9][0-9]{5}$`.
+
+## Schema v3 (PUSHED — SQLite in sync) — new/changed models
+- **Donor** (NEW): type "INDIVIDUAL|ORGANISATION|CORPORATE", organizationName?, name, email(unique), phone?, altPhone?, address?, city?, state?, pincode?, pan?, language?, source "WEB|OFFLINE|IMPORT|REFERRAL|EVENT"?, category "MAJOR|MONTHLY|ONE_TIME|CORPORATE|CSR"?, wants80g, anonymousByDefault, emailOptIn, smsOptIn, whatsappOptIn, tags?(JSON array string), notes?, userId? → donations[]
+- **Donation** (+): donorRefId?→Donor, recurringFrequency? "WEEKLY|MONTHLY|QUARTERLY|YEARLY", nextChargeAt?, paymentProvider? "RAZORPAY|CASHFREE|PAYU|STRIPE|MANUAL", gatewayOrderId?, fees Float, netAmount?, settlementDate?, receiptStatus "PENDING|ISSUED|CANCELLED|REISSUED", receiptIssuedAt?, refundAmount?, refundReason?, refundedAt?, internalNotes?; paymentMethod now includes CHEQUE; paymentStatus adds CANCELLED
+- **Campaign** (+): urgent, minDonation?, taxEligible, videoUrl?, gallery?(JSON), budgetBreakdown?(JSON [{head,amount}]), coordinatorName?, coordinatorPhone?, seoTitle?, seoDescription?
+- **KitTemplate** (+): kind "RATION|FOOD|EDUCATION|MEDICAL|HYGIENE|CLOTHING|EMERGENCY|CUSTOM", codePrefix? (unit codes: use template.codePrefix or UAR-RK), image?, status "ACTIVE|RETIRED"
+- **Beneficiary** (+): caseStatus "INTAKE|VERIFICATION|ACTIVE|CLOSED|REJECTED", caseWorker?, verificationStatus "PENDING|DOCUMENTS_REQUESTED|VERIFIED|REJECTED", guardian?, age?, gender?, photoConsent, intakeDate?; relations caseNotes[], requests[]
+- **BeneficiaryNote** (NEW): beneficiaryId, authorName?, note → use `/api/beneficiaries/:id/notes`
+- **BeneficiaryRequest** (NEW): beneficiaryId?, userId?, name, phone?, category, urgency "LOW|MEDIUM|HIGH|CRITICAL", details, status "PENDING|IN_REVIEW|APPROVED|FULFILLED|REJECTED", reviewNote?, reviewedBy?, reviewedAt?
+- **VolunteerAttendance** (+): hours Float?
+- **Setting** (+): isSecret Boolean (masked in GET responses)
+
+## API surface (NEW or CHANGED — routes are canonical)
+- `GET /api/donations` (admin, paginated): params `page,limit(≤500),status,type,category,method,from,to,q` → `{items,total,page,pages,completedSum}` (OLD callers' `Array.isArray` shims still work via items). POST: offline methods (CASH/BANK_TRANSFER/CHEQUE) → PENDING; auto-upserts Donor by email; 80G cash>₹2000 → still recorded but NOT tax-eligible (client must not promise 80G).
+- `GET/PATCH/DELETE /api/donations/:id` — PATCH accepts donorName,donorEmail,donorPhone,amount,currency,type,recurringFrequency,nextChargeAt,category,paymentMethod,paymentProvider,paymentStatus,transactionId,gatewayOrderId,campaignId,message,isAnonymous,pan,fees,settlementDate,receiptStatus,internalNotes,refundAmount,refundReason. GET by id includes campaign + donorRef (ADMIN,VOLUNTEER).
+- `GET /api/donors?q&type&category&page&limit` → `{items[+lifetimeValue,donationsCount,firstDonationAt,lastDonationAt],total,page,pages}` (ADMIN). POST creates (validates PAN/phone/PIN; links user by email).
+- `GET /api/donors/:id` → donor + donations[] + pledges[] + animalPledges[] + certificates[] + stats {lifetimeValue,fyValue,donationsCount,receiptsIssued,activePledges}. PATCH (identity/prefs/tags/notes). DELETE detaches donations first.
+- `PATCH /api/volunteers/:id` (NEW — ADMIN): skills,availability,assignedArea,emergencyContact,idProof,status(PENDING|ACTIVE|INACTIVE|SUSPENDED); mirrors status onto User row. `GET /api/volunteers/:id` → volunteer + user + tasks[] + attendances[] + stats {tasksAssigned,tasksCompleted,daysPresent,totalHours}.
+- `GET /api/volunteer-attendances?volunteerId&from&to&limit` (ADMIN,VOLUNTEER) · `POST` (ADMIN) `{volunteerId,date,checkIn?,checkOut?,hours?,location?,notes?}` — upserts per (volunteerId,date).
+- `GET /api/school-coverages?q&active=1` (ADMIN,VOLUNTEER) · `POST` `{schoolName,address?,city?,contactPerson?,contactPhone?,totalGirls,lastVisited?,isActive?}` — upserts by name, bumps visitsCount.
+- `GET /api/beneficiary-requests?status` (ADMIN,VOLUNTEER) · `?mine=1` (any auth) · `POST` (public/auth) `{name,phone?,category?,urgency?,details?}` links caller's beneficiary record. `PATCH /api/beneficiary-requests/:id` status/reviewNote/urgency (ADMIN,VOLUNTEER).
+- `GET/POST /api/beneficiaries/:id/notes` — case-note timeline (ADMIN,VOLUNTEER).
+- `GET /api/beneficiaries` — ADMIN,VOLUNTEER only for the directory; `?mine=1` returns caller's own case (any auth). **Do NOT call the directory endpoint from donor/beneficiary clients.**
+- `POST /api/campaigns` / `PATCH /api/campaigns/:id` — NOW accept slug,startDate,endDate,location,urgent,taxEligible,minDonation,videoUrl,gallery,budgetBreakdown,coordinatorName,coordinatorPhone,seoTitle,seoDescription (validated; slug uniqueness 409).
+- `PATCH /api/users/:id` — NOW persists email,pan,about,avatar (validates PAN/email; 409 on duplicate email).
+- `POST /api/distributions` — NOW persists value + photos.
+
+## List-page pattern (STANDARD — apply to every admin list you touch)
+1. Fetch with server params: `page`, `limit`, `q`, filters; read `{items,total,page,pages}` envelope (fall back to array for legacy endpoints).
+2. Toolbar: search input (debounced 300ms) + filter Selects + ViewSwitcher + ExportMenu + primary "Add" Button — all in one `SectionCard` header row, wraps on mobile.
+3. Table view: `<Table>` sticky header, hover rows, StatusBadge, right-aligned `Actions` dropdown (View / Edit / Delete). Row click opens detail Sheet.
+4. Grid view: responsive card grid (`sm:grid-cols-2 xl:grid-cols-3`), card = icon/media + title + 2 key facts + StatusBadge + progress where applicable.
+5. List view: compact rows (avatar/icon + title + meta line + trailing value), max-h with scroll.
+6. PaginationBar + PageSizeSelect under the table. Loading = Skeletons matching the active view. Empty = EmptyState with CTA.
+7. Add/Edit = FormSheet (size lg for ≥10 fields, md otherwise, xl for multi-section like missions). Delete = ConfirmDialog.
+8. Detail = read-only Sheet with SectionCards + DataField grids + related-records tabs where applicable.
