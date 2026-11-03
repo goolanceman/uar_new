@@ -9,9 +9,10 @@ async function allSettings(): Promise<Record<string, string>> {
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
-// GET /api/settings — {key: value}
+// GET /api/settings — flat {key: value} (ADMIN only)
 export async function GET() {
   try {
+    await requireRole("ADMIN");
     return json(await allSettings());
   } catch (e) {
     return handleError(e);

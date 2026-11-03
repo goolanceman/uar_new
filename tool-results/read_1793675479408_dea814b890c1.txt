@@ -1,0 +1,1018 @@
+     1→"use client";
+     2→
+     3→import * as React from "react";
+     4→import { useCallback, useEffect, useState } from "react";
+     5→import { Link } from "@/lib/router";
+     6→import { get, post } from "@/lib/api-client";
+     7→import { cn, formatINR, formatNumber, titleCase } from "@/lib/utils";
+     8→import { toast } from "sonner";
+     9→import { Button } from "@/components/ui/button";
+    10→import { Card } from "@/components/ui/card";
+    11→import { Badge } from "@/components/ui/badge";
+    12→import { Progress } from "@/components/ui/progress";
+    13→import { Skeleton } from "@/components/ui/skeleton";
+    14→import { Input } from "@/components/ui/input";
+    15→import { Label } from "@/components/ui/label";
+    16→import { Checkbox } from "@/components/ui/checkbox";
+    17→import { Separator } from "@/components/ui/separator";
+    18→import {
+    19→  Accordion,
+    20→  AccordionContent,
+    21→  AccordionItem,
+    22→  AccordionTrigger,
+    23→} from "@/components/ui/accordion";
+    24→import {
+    25→  Dialog,
+    26→  DialogContent,
+    27→  DialogDescription,
+    28→  DialogFooter,
+    29→  DialogHeader,
+    30→  DialogTitle,
+    31→} from "@/components/ui/dialog";
+    32→import {
+    33→  Select,
+    34→  SelectContent,
+    35→  SelectItem,
+    36→  SelectTrigger,
+    37→  SelectValue,
+    38→} from "@/components/ui/select";
+    39→import {
+    40→  Section,
+    41→  Stat,
+    42→  StepFlow,
+    43→  ChartBox,
+    44→  EmptyState,
+    45→  CheckItem,
+    46→  CampaignIcon,
+    47→  accentClasses,
+    48→  askAngel,
+    49→} from "@/components/public/shared";
+    50→import { LiveCorridorDemo } from "@/components/public/green-corridor";
+    51→import { CAMPAIGN_CONTENT } from "@/components/public/campaign-data";
+    52→import {
+    53→  Ban,
+    54→  BookOpenCheck,
+    55→  Check,
+    56→  CheckCircle2,
+    57→  Dog,
+    58→  ExternalLink,
+    59→  Heart,
+    60→  HeartPulse,
+    61→  Link2,
+    62→  Phone,
+    63→  Sparkles,
+    64→  Syringe,
+    65→  X,
+    66→} from "lucide-react";
+    67→
+    68→/* ------------------------------------------------------------------ */
+    69→/* Live data types                                                     */
+    70→/* ------------------------------------------------------------------ */
+    71→
+    72→interface LiveCampaign {
+    73→  id: string;
+    74→  title: string;
+    75→  slug?: string | null;
+    76→  tagline?: string | null;
+    77→  description?: string | null;
+    78→  targetAmount: number;
+    79→  raisedAmount: number;
+    80→  beneficiaries: number;
+    81→  volunteersEngaged: number;
+    82→  helpline?: string | null;
+    83→  icon?: string | null;
+    84→  accent?: string | null;
+    85→  status?: string | null;
+    86→}
+    87→
+    88→interface Cause {
+    89→  id: string;
+    90→  code: string;
+    91→  patientName: string;
+    92→  age: number;
+    93→  city: string;
+    94→  condition: string;
+    95→  monthlyCost: number;
+    96→  durationMonths: number;
+    97→  story: string;
+    98→  status: string;
+    99→  raised: number;
+   100→}
+   101→
+   102→interface Animal {
+   103→  id: string;
+   104→  name: string;
+   105→  species: string;
+   106→  breed?: string | null;
+   107→  ageMonths: number;
+   108→  gender: string;
+   109→  story: string;
+   110→  healthStatus?: string | null;
+   111→  vaccinated: boolean;
+   112→  sterilized: boolean;
+   113→  location: string;
+   114→  status: string;
+   115→  monthlyFood: number;
+   116→}
+   117→
+   118→/* ------------------------------------------------------------------ */
+   119→/* Status badge colours                                                */
+   120→/* ------------------------------------------------------------------ */
+   121→
+   122→const CAUSE_STATUS: Record<string, string> = {
+   123→  SEEKING: "bg-amber-100 text-amber-700",
+   124→  PARTIAL: "bg-orange-100 text-orange-700",
+   125→  ADOPTED: "bg-emerald-100 text-emerald-700",
+   126→  PAUSED: "bg-zinc-100 text-zinc-600",
+   127→};
+   128→
+   129→const ANIMAL_STATUS: Record<string, string> = {
+   130→  AVAILABLE: "bg-emerald-100 text-emerald-700",
+   131→  FOSTERED: "bg-amber-100 text-amber-700",
+   132→  ADOPTED: "bg-zinc-100 text-zinc-600",
+   133→  CRITICAL: "bg-red-100 text-red-700",
+   134→};
+   135→
+   136→const SPECIES_BADGE: Record<string, string> = {
+   137→  DOG: "bg-lime-100 text-lime-700",
+   138→  CAT: "bg-amber-100 text-amber-700",
+   139→  COW: "bg-orange-100 text-orange-700",
+   140→  BIRD: "bg-cyan-100 text-cyan-700",
+   141→  OTHER: "bg-zinc-100 text-zinc-600",
+   142→};
+   143→
+   144→/* ================================================================== */
+   145→/* Main page                                                          */
+   146→/* ================================================================== */
+   147→
+   148→export function CampaignDetailPage({ slug }: { slug: string }) {
+   149→  const content = CAMPAIGN_CONTENT[slug];
+   150→  const [live, setLive] = useState<LiveCampaign | null>(null);
+   151→  const [loading, setLoading] = useState(true);
+   152→
+   153→  useEffect(() => {
+   154→    let alive = true;
+   155→    get<LiveCampaign[]>("/api/campaigns")
+   156→      .then((d) => {
+   157→        if (!alive) return;
+   158→        const list = Array.isArray(d) ? d : [];
+   159→        setLive(list.find((c) => c.slug === slug) ?? null);
+   160→      })
+   161→      .catch(() => alive && setLive(null))
+   162→      .finally(() => alive && setLoading(false));
+   163→    return () => {
+   164→      alive = false;
+   165→    };
+   166→  }, [slug]);
+   167→
+   168→  if (!content) {
+   169→    return (
+   170→      <Section>
+   171→        <EmptyState
+   172→          icon={BookOpenCheck}
+   173→          title="Programme not found"
+   174→          hint={`We couldn't find “${slug}”. It may have been renamed — browse all programmes instead.`}
+   175→          action={
+   176→            <Button asChild>
+   177→              <Link href="/campaigns">Browse programmes</Link>
+   178→            </Button>
+   179→          }
+   180→        />
+   181→      </Section>
+   182→    );
+   183→  }
+   184→
+   185→  const a = accentClasses(content.accent);
+   186→  const accent = content.accent;
+   187→  const pct =
+   188→    live && live.targetAmount > 0
+   189→      ? Math.min(100, Math.round((live.raisedAmount / live.targetAmount) * 100))
+   190→      : 0;
+   191→
+   192→  return (
+   193→    <>
+   194→      {/* ================= HERO ================= */}
+   195→      <section className={cn("text-white", a.bg600)}>
+   196→        <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
+   197→          <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
+   198→            <div className="max-w-2xl">
+   199→              <div className="flex items-center gap-4">
+   200→                <span className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-white/15 backdrop-blur">
+   201→                  <CampaignIcon icon={content.icon} className="size-8" />
+   202→                </span>
+   203→                <div>
+   204→                  <h1 className="text-2xl font-extrabold tracking-tight sm:text-4xl">
+   205→                    {content.title}
+   206→                  </h1>
+   207→                  <p className="mt-1 text-sm font-medium text-white/85 sm:text-base">
+   208→                    {content.heroTag}
+   209→                  </p>
+   210→                </div>
+   211→              </div>
+   212→
+   213→              {/* Helpline pill */}
+   214→              {content.helpline && (
+   215→                <a
+   216→                  href={`tel:${content.helpline}`}
+   217→                  className="mt-6 inline-flex min-h-[44px] items-center gap-2.5 rounded-full bg-white/15 px-4 py-2 text-sm font-semibold ring-1 ring-white/25 transition hover:bg-white/25"
+   218→                >
+   219→                  <Phone className="size-4" aria-hidden />
+   220→                  24×7 helpline: {content.helpline}
+   221→                </a>
+   222→              )}
+   223→
+   224→              {/* CTAs */}
+   225→              <div className="mt-6 flex flex-wrap gap-3">
+   226→                <Button
+   227→                  size="lg"
+   228→                  className="border-0 bg-white text-zinc-900 hover:bg-white/90"
+   229→                  asChild
+   230→                >
+   231→                  <Link href={`/donate?campaign=${content.slug}`}>
+   232→                    <Heart className="size-5" aria-hidden /> Donate
+   233→                  </Link>
+   234→                </Button>
+   235→                <Button
+   236→                  size="lg"
+   237→                  variant="outline"
+   238→                  className="border-white bg-transparent text-white hover:bg-white/10"
+   239→                  asChild
+   240→                >
+   241→                  <Link href="/volunteer">Volunteer</Link>
+   242→                </Button>
+   243→                <Button
+   244→                  size="lg"
+   245→                  variant="outline"
+   246→                  className="border-white bg-transparent text-white hover:bg-white/10"
+   247→                  onClick={askAngel}
+   248→                >
+   249→                  <Sparkles className="size-5" aria-hidden /> Ask Angel
+   250→                </Button>
+   251→              </div>
+   252→            </div>
+   253→
+   254→            {/* Live progress card */}
+   255→            <Card className="w-full max-w-sm shrink-0 p-5 text-foreground">
+   256→              {loading ? (
+   257→                <div className="space-y-3">
+   258→                  <Skeleton className="h-4 w-24" />
+   259→                  <Skeleton className="h-2 w-full" />
+   260→                  <Skeleton className="h-16 w-full" />
+   261→                </div>
+   262→              ) : live ? (
+   263→                <>
+   264→                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   265→                    Live campaign numbers
+   266→                  </p>
+   267→                  <div className="mt-2 flex items-baseline gap-2">
+   268→                    <span className="text-2xl font-bold">{formatINR(live.raisedAmount)}</span>
+   269→                    <span className="text-sm text-muted-foreground">
+   270→                      raised of {formatINR(live.targetAmount)}
+   271→                    </span>
+   272→                  </div>
+   273→                  <Progress value={pct} className="mt-2 h-2" aria-label={`${pct}% raised`} />
+   274→                  <p className="mt-1 text-xs text-muted-foreground">{pct}% funded</p>
+   275→                  <Separator className="my-4" />
+   276→                  <div className="grid grid-cols-2 gap-3">
+   277→                    <div>
+   278→                      <p className="text-lg font-bold">{formatNumber(live.beneficiaries)}</p>
+   279→                      <p className="text-xs text-muted-foreground">Beneficiaries</p>
+   280→                    </div>
+   281→                    <div>
+   282→                      <p className="text-lg font-bold">{formatNumber(live.volunteersEngaged)}</p>
+   283→                      <p className="text-xs text-muted-foreground">Volunteers engaged</p>
+   284→                    </div>
+   285→                  </div>
+   286→                </>
+   287→              ) : (
+   288→                <p className="text-sm text-muted-foreground">
+   289→                  Live numbers are syncing. The editorial content below is always current.
+   290→                </p>
+   291→              )}
+   292→            </Card>
+   293→          </div>
+   294→        </div>
+   295→      </section>
+   296→
+   297→      {/* ================= OVERVIEW ================= */}
+   298→      <Section title="Understanding the problem">
+   299→        <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+   300→          <div className="space-y-4">
+   301→            {content.overview.map((p, i) => (
+   302→              <p key={i} className="text-sm leading-relaxed text-muted-foreground sm:text-base">
+   303→                {p}
+   304→              </p>
+   305→            ))}
+   306→          </div>
+   307→          <div className="grid grid-cols-2 gap-3 self-start">
+   308→            {content.keyFacts.map((f, i) => (
+   309→              <Card
+   310→                key={i}
+   311→                className={cn("col-span-1 p-4", i === 0 && "col-span-2")}
+   312→              >
+   313→                <p className={cn("text-2xl font-extrabold tracking-tight", a.text700)}>
+   314→                  {f.value}
+   315→                  <span className="text-sm font-bold">{f.suffix}</span>
+   316→                </p>
+   317→                <p className="mt-1 text-xs leading-snug text-muted-foreground">{f.label}</p>
+   318→              </Card>
+   319→            ))}
+   320→          </div>
+   321→        </div>
+   322→      </Section>
+   323→
+   324→      {/* ================= CHARTS ================= */}
+   325→      <Section
+   326→        title="The data"
+   327→        subtitle="Real India-context datasets behind this programme."
+   328→        className="bg-muted/40"
+   329→      >
+   330→        <div className={cn("grid gap-4", content.charts.length > 1 && "lg:grid-cols-2")}>
+   331→          {content.charts.map((ch, i) => (
+   332→            <ChartBox
+   333→              key={i}
+   334→              title={ch.title}
+   335→              desc={ch.desc}
+   336→              type={ch.type}
+   337→              data={ch.data}
+   338→              xKey={ch.xKey}
+   339→              nameKey={ch.nameKey}
+   340→              valueKey={ch.valueKey}
+   341→              colors={ch.colors}
+   342→            />
+   343→          ))}
+   344→        </div>
+   345→      </Section>
+   346→
+   347→      {/* ================= SPECIAL EMBEDS ================= */}
+   348→      {slug === "medicine-adoption" && <MedicineAdoptionEmbed />}
+   349→      {slug === "animal-welfare" && <AnimalWelfareEmbed />}
+   350→      {slug === "green-corridor" && (
+   351→        <Section
+   352→          title="Live corridor demo"
+   353→          subtitle="Run a simulated Hebbal → Tin Factory mission. Watch the four-layer mesh clear the road in real time."
+   354→        >
+   355→          <LiveCorridorDemo />
+   356→        </Section>
+   357→      )}
+   358→
+   359→      {/* ================= WHY IT MATTERS ================= */}
+   360→      <Section title="Why this matters">
+   361→        <div className="grid gap-3 sm:grid-cols-2">
+   362→          {content.whyItMatters.map((w, i) => (
+   363→            <Card key={i} className="flex gap-3 p-4">
+   364→              <span
+   365→                className={cn(
+   366→                  "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full",
+   367→                  a.bg100,
+   368→                  a.text700
+   369→                )}
+   370→              >
+   371→                <Check className="size-4" aria-hidden />
+   372→              </span>
+   373→              <p className="text-sm leading-relaxed text-muted-foreground">{w}</p>
+   374→            </Card>
+   375→          ))}
+   376→        </div>
+   377→      </Section>
+   378→
+   379→      {/* ================= PLAYBOOK ================= */}
+   380→      <Section
+   381→        title="The playbook"
+   382→        subtitle="What actually works — step by step, exactly as our field volunteers teach it."
+   383→        className="bg-muted/40"
+   384→      >
+   385→        <div className="mx-auto max-w-3xl">
+   386→          <StepFlow steps={content.playbook} accent={accent} />
+   387→        </div>
+   388→      </Section>
+   389→
+   390→      {/* ================= DOS & DON'TS ================= */}
+   391→      <Section title="Do this, not that">
+   392→        <div className="grid gap-4 md:grid-cols-2">
+   393→          <Card className="border-emerald-200 bg-emerald-50/60 p-5">
+   394→            <h3 className="flex items-center gap-2 font-semibold text-emerald-800">
+   395→              <CheckCircle2 className="size-5 text-emerald-600" aria-hidden /> Do
+   396→            </h3>
+   397→            <ul className="mt-4 space-y-3">
+   398→              {content.dosDonts.dos.map((d, i) => (
+   399→                <li key={i}>
+   400→                  <CheckItem done={false}>{d}</CheckItem>
+   401→                </li>
+   402→              ))}
+   403→            </ul>
+   404→          </Card>
+   405→          <Card className="border-red-200 bg-red-50/60 p-5">
+   406→            <h3 className="flex items-center gap-2 font-semibold text-red-800">
+   407→              <Ban className="size-5 text-red-600" aria-hidden /> Don&rsquo;t
+   408→            </h3>
+   409→            <ul className="mt-4 space-y-3">
+   410→              {content.dosDonts.donts.map((d, i) => (
+   411→                <li key={i} className="flex items-start gap-2 text-sm leading-relaxed">
+   412→                  <X className="mt-0.5 size-4 shrink-0 text-red-600" aria-hidden />
+   413→                  <span>{d}</span>
+   414→                </li>
+   415→              ))}
+   416→            </ul>
+   417→          </Card>
+   418→        </div>
+   419→      </Section>
+   420→
+   421→      {/* ================= MYTHS vs FACTS ================= */}
+   422→      <Section title="Myths vs facts" className="bg-muted/40">
+   423→        <Accordion type="single" collapsible className="mx-auto max-w-3xl">
+   424→          {content.mythsFacts.map((m, i) => (
+   425→            <AccordionItem key={i} value={`myth-${i}`}>
+   426→              <AccordionTrigger className="text-left text-sm sm:text-base">
+   427→                <span className="flex items-start gap-2">
+   428→                  <Badge className="mt-0.5 shrink-0 border-0 bg-red-100 text-[10px] uppercase text-red-700 hover:bg-red-100">
+   429→                    Myth
+   430→                  </Badge>
+   431→                  {m.myth}
+   432→                </span>
+   433→              </AccordionTrigger>
+   434→              <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
+   435→                <span className="flex items-start gap-2">
+   436→                  <Badge className="mt-0.5 shrink-0 border-0 bg-emerald-100 text-[10px] uppercase text-emerald-700 hover:bg-emerald-100">
+   437→                    Fact
+   438→                  </Badge>
+   439→                  {m.fact}
+   440→                </span>
+   441→              </AccordionContent>
+   442→            </AccordionItem>
+   443→          ))}
+   444→        </Accordion>
+   445→      </Section>
+   446→
+   447→      {/* ================= TOOLKIT ================= */}
+   448→      <ToolkitSection accent={accent} toolkit={content.toolkit} />
+   449→
+   450→      {/* ================= FAQS ================= */}
+   451→      <Section title="Frequently asked questions" className="bg-muted/40">
+   452→        <Accordion type="single" collapsible className="mx-auto max-w-3xl">
+   453→          {content.faqs.map((f, i) => (
+   454→            <AccordionItem key={i} value={`faq-${i}`}>
+   455→              <AccordionTrigger className="text-left text-sm sm:text-base">{f.q}</AccordionTrigger>
+   456→              <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
+   457→                {f.a}
+   458→              </AccordionContent>
+   459→            </AccordionItem>
+   460→          ))}
+   461→        </Accordion>
+   462→      </Section>
+   463→
+   464→      {/* ================= LINKS BAND ================= */}
+   465→      <Section>
+   466→        <Card className={cn("flex flex-col gap-4 border p-6 sm:flex-row sm:items-center sm:justify-between", a.border200, a.bg50)}>
+   467→          <div>
+   468→            <h3 className="flex items-center gap-2 font-semibold">
+   469→              <Link2 className={cn("size-5", a.text700)} aria-hidden /> Official links & further reading
+   470→            </h3>
+   471→            <p className="mt-1 text-sm text-muted-foreground">
+   472→              Verified government and institutional resources for this programme.
+   473→            </p>
+   474→          </div>
+   475→          <div className="flex flex-wrap gap-2">
+   476→            {content.links.map((l) => (
+   477→              <a
+   478→                key={l.href}
+   479→                href={l.href}
+   480→                target="_blank"
+   481→                rel="noopener noreferrer"
+   482→                className={cn(
+   483→                  "inline-flex min-h-[40px] items-center gap-1.5 rounded-full border bg-white px-3.5 py-2 text-xs font-semibold transition hover:shadow-sm",
+   484→                  a.border200,
+   485→                  a.text700
+   486→                )}
+   487→              >
+   488→                {l.label}
+   489→                <ExternalLink className="size-3.5" aria-hidden />
+   490→              </a>
+   491→            ))}
+   492→          </div>
+   493→        </Card>
+   494→      </Section>
+   495→    </>
+   496→  );
+   497→}
+   498→
+   499→/* ================================================================== */
+   500→/* Toolkit — interactive checklists with progress                      */
+   501→/* ================================================================== */
+   502→
+   503→function ToolkitSection({
+   504→  accent,
+   505→  toolkit,
+   506→}: {
+   507→  accent: string;
+   508→  toolkit: { title: string; items: string[] }[];
+   509→}) {
+   510→  const a = accentClasses(accent);
+   511→  const [checked, setChecked] = useState<Set<string>>(new Set());
+   512→
+   513→  const total = toolkit.reduce((n, g) => n + g.items.length, 0);
+   514→  const done = checked.size;
+   515→
+   516→  const toggle = (key: string) => {
+   517→    setChecked((prev) => {
+   518→      const next = new Set(prev);
+   519→      if (next.has(key)) next.delete(key);
+   520→      else next.add(key);
+   521→      return next;
+   522→    });
+   523→  };
+   524→
+   525→  return (
+   526→    <Section
+   527→      title="Your toolkit"
+   528→      subtitle="Tick items off as you secure your home, family or workplace. Progress is saved as you go."
+   529→    >
+   530→      <div className="mb-5 flex items-center gap-3">
+   531→        <Progress
+   532→          value={total ? (done / total) * 100 : 0}
+   533→          className="h-2.5 max-w-xs"
+   534→          aria-label={`${done} of ${total} checklist items done`}
+   535→        />
+   536→        <span className="text-sm font-semibold text-muted-foreground">
+   537→          {done}/{total}
+   538→        </span>
+   539→      </div>
+   540→      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+   541→        {toolkit.map((g, gi) => {
+   542→          const groupDone = g.items.filter((_, ii) => checked.has(`${gi}-${ii}`)).length;
+   543→          return (
+   544→            <Card key={gi} className="flex flex-col p-5">
+   545→              <div className="flex items-center justify-between gap-2">
+   546→                <h3 className="font-semibold leading-snug">{g.title}</h3>
+   547→                <Badge variant="outline" className={cn("shrink-0", a.border200, a.text700)}>
+   548→                  {groupDone}/{g.items.length}
+   549→                </Badge>
+   550→              </div>
+   551→              <ul className="mt-4 space-y-3">
+   552→                {g.items.map((item, ii) => {
+   553→                  const key = `${gi}-${ii}`;
+   554→                  return (
+   555→                    <li key={key}>
+   556→                      <label className="flex cursor-pointer items-start gap-2.5">
+   557→                        <Checkbox
+   558→                          checked={checked.has(key)}
+   559→                          onCheckedChange={() => toggle(key)}
+   560→                          className="mt-0.5"
+   561→                          aria-label={item}
+   562→                        />
+   563→                        <span
+   564→                          className={cn(
+   565→                            "text-sm leading-relaxed",
+   566→                            checked.has(key) && "text-muted-foreground line-through"
+   567→                          )}
+   568→                        >
+   569→                          {item}
+   570→                        </span>
+   571→                      </label>
+   572→                    </li>
+   573→                  );
+   574→                })}
+   575→              </ul>
+   576→            </Card>
+   577→          );
+   578→        })}
+   579→      </div>
+   580→    </Section>
+   581→  );
+   582→}
+   583→
+   584→/* ================================================================== */
+   585→/* Special embed: medicine-adoption → /api/causes                      */
+   586→/* ================================================================== */
+   587→
+   588→function MedicineAdoptionEmbed() {
+   589→  const [causes, setCauses] = useState<Cause[] | null>(null);
+   590→  const [adopting, setAdopting] = useState<Cause | null>(null);
+   591→
+   592→  const load = useCallback(async () => {
+   593→    try {
+   594→      const d = await get<Cause[]>("/api/causes");
+   595→      setCauses(Array.isArray(d) ? d : []);
+   596→    } catch {
+   597→      setCauses([]);
+   598→    }
+   599→  }, []);
+   600→
+   601→   
+   602→  useEffect(() => {
+   603→    const t = setTimeout(load, 0);
+   604→    return () => clearTimeout(t);
+   605→  }, [load]);
+   606→
+   607→  return (
+   608→    <Section
+   609→      title="Patients waiting for adoption"
+   610→      subtitle="Pharmacist-verified prescriptions, Jan Aushadhi pricing, QR'd doorstep delivery. Adopt fully or share a pledge."
+   611→    >
+   612→      {causes === null ? (
+   613→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   614→          {Array.from({ length: 3 }).map((_, i) => (
+   615→            <Skeleton key={i} className="h-64 rounded-xl" />
+   616→          ))}
+   617→        </div>
+   618→      ) : causes.length === 0 ? (
+   619→        <EmptyState
+   620→          icon={HeartPulse}
+   621→          title="No open causes right now"
+   622→          hint="Every listed patient has been adopted. New verified causes appear within a week — or donate to the general medicine fund."
+   623→          action={
+   624→            <Button asChild className="bg-teal-600 hover:bg-teal-700">
+   625→              <Link href="/donate?campaign=medicine-adoption">Fund medicines generally</Link>
+   626→            </Button>
+   627→          }
+   628→        />
+   629→      ) : (
+   630→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   631→          {causes.map((cause) => {
+   632→            const needed = cause.monthlyCost * cause.durationMonths;
+   633→            const pct = needed > 0 ? Math.min(100, Math.round((cause.raised / needed) * 100)) : 0;
+   634→            return (
+   635→              <Card key={cause.id} className="flex flex-col p-5">
+   636→                <div className="flex items-center justify-between gap-2">
+   637→                  <Badge variant="outline" className="font-mono text-[10px]">
+   638→                    {cause.code}
+   639→                  </Badge>
+   640→                  <Badge
+   641→                    className={cn(
+   642→                      "border-0 text-[10px] hover:opacity-90",
+   643→                      CAUSE_STATUS[cause.status] ?? "bg-zinc-100 text-zinc-600"
+   644→                    )}
+   645→                  >
+   646→                    {titleCase(cause.status)}
+   647→                  </Badge>
+   648→                </div>
+   649→                <h3 className="mt-3 font-semibold">{cause.patientName}</h3>
+   650→                <p className="mt-0.5 text-xs text-muted-foreground">
+   651→                  {cause.age} yrs · {titleCase(cause.condition)} · {cause.city}
+   652→                </p>
+   653→                <p className="mt-2 line-clamp-3 flex-1 text-sm text-muted-foreground">
+   654→                  {cause.story}
+   655→                </p>
+   656→                <div className="mt-3 flex items-baseline gap-1">
+   657→                  <span className="text-xl font-bold text-teal-700">
+   658→                    {formatINR(cause.monthlyCost)}
+   659→                  </span>
+   660→                  <span className="text-xs text-muted-foreground">/ month</span>
+   661→                </div>
+   662→                <Progress value={pct} className="mt-2 h-2" aria-label={`${pct}% raised`} />
+   663→                <p className="mt-1 text-xs text-muted-foreground">
+   664→                  {formatINR(cause.raised)} raised of {formatINR(needed)} ({pct}%)
+   665→                </p>
+   666→                <Button
+   667→                  className="mt-4 bg-teal-600 text-white hover:bg-teal-700"
+   668→                  onClick={() => setAdopting(cause)}
+   669→                  disabled={cause.status === "ADOPTED" || cause.status === "PAUSED"}
+   670→                >
+   671→                  <Heart className="size-4" aria-hidden /> Adopt
+   672→                </Button>
+   673→              </Card>
+   674→            );
+   675→          })}
+   676→        </div>
+   677→      )}
+   678→
+   679→      <AdoptDialog cause={adopting} onClose={() => setAdopting(null)} onDone={load} />
+   680→    </Section>
+   681→  );
+   682→}
+   683→
+   684→function AdoptDialog({
+   685→  cause,
+   686→  onClose,
+   687→  onDone,
+   688→}: {
+   689→  cause: Cause | null;
+   690→  onClose: () => void;
+   691→  onDone: () => void;
+   692→}) {
+   693→  const [amount, setAmount] = useState("");
+   694→  const [months, setMonths] = useState("6");
+   695→  const [name, setName] = useState("");
+   696→  const [busy, setBusy] = useState(false);
+   697→
+   698→  useEffect(() => {
+   699→    if (cause) {
+   700→      setAmount(String(Math.round(cause.monthlyCost)));
+   701→      setMonths("6");
+   702→      setName("");
+   703→      setBusy(false);
+   704→    }
+   705→  }, [cause]);
+   706→
+   707→  const submit = async () => {
+   708→    if (!cause) return;
+   709→    const amt = Number(amount);
+   710→    if (!amt || amt <= 0) {
+   711→      toast.error("Enter a valid monthly amount");
+   712→      return;
+   713→    }
+   714→    if (!name.trim()) {
+   715→      toast.error("Please enter your name");
+   716→      return;
+   717→    }
+   718→    setBusy(true);
+   719→    try {
+   720→      await post(`/api/causes/${cause.id}/pledges`, {
+   721→        amountPerMonth: amt,
+   722→        months: Number(months) || 6,
+   723→        donorName: name.trim(),
+   724→      });
+   725→      toast.success(
+   726→        `Adoption pledged for ${cause.patientName} — our team will call you within 48 hours.`
+   727→      );
+   728→      onClose();
+   729→      onDone();
+   730→    } catch (e) {
+   731→      toast.error(e instanceof Error ? e.message : "Could not create pledge");
+   732→    } finally {
+   733→      setBusy(false);
+   734→    }
+   735→  };
+   736→
+   737→  return (
+   738→    <Dialog open={!!cause} onOpenChange={(o) => !o && onClose()}>
+   739→      <DialogContent className="sm:max-w-md">
+   740→        {cause && (
+   741→          <>
+   742→            <DialogHeader>
+   743→              <DialogTitle>
+   744→                Adopt {cause.patientName}&rsquo;s medicines
+   745→              </DialogTitle>
+   746→              <DialogDescription>
+   747→                {cause.code} · {titleCase(cause.condition)} · {cause.city} · needs{" "}
+   748→                {formatINR(cause.monthlyCost)}/mo for {cause.durationMonths} months
+   749→              </DialogDescription>
+   750→            </DialogHeader>
+   751→            <div className="space-y-4 py-2">
+   752→              <div className="space-y-1.5">
+   753→                <Label htmlFor="pledge-amount">Amount per month (₹)</Label>
+   754→                <Input
+   755→                  id="pledge-amount"
+   756→                  type="number"
+   757→                  min={1}
+   758→                  value={amount}
+   759→                  onChange={(e) => setAmount(e.target.value)}
+   760→                />
+   761→                <p className="text-xs text-muted-foreground">
+   762→                  Full cost is {formatINR(cause.monthlyCost)} — partial adoptions are welcome.
+   763→                </p>
+   764→              </div>
+   765→              <div className="space-y-1.5">
+   766→                <Label>Commitment</Label>
+   767→                <Select value={months} onValueChange={setMonths}>
+   768→                  <SelectTrigger aria-label="Months">
+   769→                    <SelectValue />
+   770→                  </SelectTrigger>
+   771→                  <SelectContent>
+   772→                    <SelectItem value="3">3 months</SelectItem>
+   773→                    <SelectItem value="6">6 months</SelectItem>
+   774→                    <SelectItem value="12">12 months</SelectItem>
+   775→                  </SelectContent>
+   776→                </Select>
+   777→              </div>
+   778→              <div className="space-y-1.5">
+   779→                <Label htmlFor="pledge-name">Your name</Label>
+   780→                <Input
+   781→                  id="pledge-name"
+   782→                  value={name}
+   783→                  onChange={(e) => setName(e.target.value)}
+   784→                  placeholder="As you'd like to be known"
+   785→                />
+   786→              </div>
+   787→            </div>
+   788→            <DialogFooter>
+   789→              <Button variant="outline" onClick={onClose} disabled={busy}>
+   790→                Cancel
+   791→              </Button>
+   792→              <Button onClick={submit} disabled={busy} className="bg-teal-600 hover:bg-teal-700">
+   793→                {busy ? "Pledging…" : "Confirm adoption"}
+   794→              </Button>
+   795→            </DialogFooter>
+   796→          </>
+   797→        )}
+   798→      </DialogContent>
+   799→    </Dialog>
+   800→  );
+   801→}
+   802→
+   803→/* ================================================================== */
+   804→/* Special embed: animal-welfare → /api/animals                        */
+   805→/* ================================================================== */
+   806→
+   807→function AnimalWelfareEmbed() {
+   808→  const [animals, setAnimals] = useState<Animal[] | null>(null);
+   809→  const [sponsoring, setSponsoring] = useState<Animal | null>(null);
+   810→
+   811→  const load = useCallback(async () => {
+   812→    try {
+   813→      const d = await get<Animal[]>("/api/animals");
+   814→      setAnimals(Array.isArray(d) ? d : []);
+   815→    } catch {
+   816→      setAnimals([]);
+   817→    }
+   818→  }, []);
+   819→
+   820→   
+   821→  useEffect(() => {
+   822→    const t = setTimeout(load, 0);
+   823→    return () => clearTimeout(t);
+   824→  }, [load]);
+   825→
+   826→  const ageLabel = (m: number) => {
+   827→    const y = Math.floor(m / 12);
+   828→    const rest = m % 12;
+   829→    if (y <= 0) return `${rest} mo`;
+   830→    return rest ? `${y}y ${rest}m` : `${y} yrs`;
+   831→  };
+   832→
+   833→  const speciesIcon = (species: string) => {
+   834→    if (species === "DOG") return <Dog className="size-4" aria-hidden />;
+   835→    return <PawGlyph className="size-4" />;
+   836→  };
+   837→
+   838→  return (
+   839→    <Section
+   840→      title="Animals ready for sponsorship & adoption"
+   841→      subtitle="Vaccinated, sterilised, and fed by trained volunteers. Sponsor food monthly or open your home."
+   842→    >
+   843→      {animals === null ? (
+   844→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   845→          {Array.from({ length: 3 }).map((_, i) => (
+   846→            <Skeleton key={i} className="h-72 rounded-xl" />
+   847→          ))}
+   848→        </div>
+   849→      ) : animals.length === 0 ? (
+   850→        <EmptyState
+   851→          icon={Dog}
+   852→          title="No animals listed right now"
+   853→          hint="Our rescue partners are updating the board. Sponsor the general food fund meanwhile."
+   854→          action={
+   855→            <Button asChild className="bg-lime-600 hover:bg-lime-700">
+   856→              <Link href="/donate?campaign=animal-welfare">Fund animal food</Link>
+   857→            </Button>
+   858→          }
+   859→        />
+   860→      ) : (
+   861→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   862→          {animals.map((an) => (
+   863→            <Card key={an.id} className="flex flex-col p-5">
+   864→              <div className="flex items-center justify-between gap-2">
+   865→                <Badge className={cn("border-0 text-xs capitalize hover:opacity-90", SPECIES_BADGE[an.species] ?? "bg-zinc-100 text-zinc-600")}>
+   866→                  {speciesIcon(an.species)}
+   867→                  <span className="ml-1">{titleCase(an.species)}</span>
+   868→                </Badge>
+   869→                <Badge
+   870→                  className={cn(
+   871→                    "border-0 text-[10px] hover:opacity-90",
+   872→                    ANIMAL_STATUS[an.status] ?? "bg-zinc-100 text-zinc-600"
+   873→                  )}
+   874→                >
+   875→                  {titleCase(an.status)}
+   876→                </Badge>
+   877→              </div>
+   878→              <h3 className="mt-3 font-semibold">{an.name}</h3>
+   879→              <p className="mt-0.5 text-xs text-muted-foreground">
+   880→                {ageLabel(an.ageMonths)} · {titleCase(an.gender)}
+   881→                {an.breed ? ` · ${an.breed}` : ""} · {an.location}
+   882→              </p>
+   883→              <p className="mt-2 line-clamp-3 flex-1 text-sm text-muted-foreground">{an.story}</p>
+   884→              <div className="mt-3 flex flex-wrap gap-1.5">
+   885→                <Badge
+   886→                  variant="outline"
+   887→                  className={cn(
+   888→                    "gap-1 text-[10px]",
+   889→                    an.vaccinated ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-muted-foreground"
+   890→                  )}
+   891→                >
+   892→                  <Syringe className="size-3" aria-hidden />
+   893→                  {an.vaccinated ? "Vaccinated" : "Vaccination due"}
+   894→                </Badge>
+   895→                <Badge
+   896→                  variant="outline"
+   897→                  className={cn(
+   898→                    "gap-1 text-[10px]",
+   899→                    an.sterilized ? "border-teal-200 bg-teal-50 text-teal-700" : "text-muted-foreground"
+   900→                  )}
+   901→                >
+   902→                  <Check className="size-3" aria-hidden />
+   903→                  {an.sterilized ? "Sterilised" : "Sterilisation pending"}
+   904→                </Badge>
+   905→              </div>
+   906→              <div className="mt-3 flex items-baseline gap-1">
+   907→                <span className="text-lg font-bold text-lime-700">{formatINR(an.monthlyFood)}</span>
+   908→                <span className="text-xs text-muted-foreground">/ month of food</span>
+   909→              </div>
+   910→              <Button
+   911→                className="mt-4 bg-lime-600 text-white hover:bg-lime-700"
+   912→                onClick={() => setSponsoring(an)}
+   913→                disabled={an.status === "ADOPTED"}
+   914→              >
+   915→                <Heart className="size-4" aria-hidden /> Sponsor food
+   916→              </Button>
+   917→            </Card>
+   918→          ))}
+   919→        </div>
+   920→      )}
+   921→
+   922→      <SponsorDialog animal={sponsoring} onClose={() => setSponsoring(null)} onDone={load} />
+   923→    </Section>
+   924→  );
+   925→}
+   926→
+   927→function PawGlyph({ className }: { className?: string }) {
+   928→  return (
+   929→    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+   930→      <ellipse cx="6" cy="9" rx="2" ry="2.6" />
+   931→      <ellipse cx="18" cy="9" rx="2" ry="2.6" />
+   932→      <ellipse cx="10" cy="5.5" rx="2" ry="2.6" />
+   933→      <ellipse cx="14" cy="5.5" rx="2" ry="2.6" />
+   934→      <path d="M12 11c-3.5 0-6.5 3.2-6.5 6 0 1.8 1.4 3 3.2 3 1.2 0 2.1-.5 3.3-.5s2.1.5 3.3.5c1.8 0 3.2-1.2 3.2-3 0-2.8-3-6-6.5-6z" />
+   935→    </svg>
+   936→  );
+   937→}
+   938→
+   939→function SponsorDialog({
+   940→  animal,
+   941→  onClose,
+   942→  onDone,
+   943→}: {
+   944→  animal: Animal | null;
+   945→  onClose: () => void;
+   946→  onDone: () => void;
+   947→}) {
+   948→  const [name, setName] = useState("");
+   949→  const [busy, setBusy] = useState(false);
+   950→
+   951→  useEffect(() => {
+   952→    if (animal) {
+   953→      setName("");
+   954→      setBusy(false);
+   955→    }
+   956→  }, [animal]);
+   957→
+   958→  const submit = async () => {
+   959→    if (!animal) return;
+   960→    if (!name.trim()) {
+   961→      toast.error("Please enter your name");
+   962→      return;
+   963→    }
+   964→    setBusy(true);
+   965→    try {
+   966→      await post("/api/animals/pledges", {
+   967→        animalId: animal.id,
+   968→        kind: "FOOD",
+   969→        amount: animal.monthlyFood,
+   970→        frequency: "MONTHLY",
+   971→        donorName: name.trim(),
+   972→      });
+   973→      toast.success(`Thank you — ${animal.name}'s food is sponsored this month.`);
+   974→      onClose();
+   975→      onDone();
+   976→    } catch (e) {
+   977→      toast.error(e instanceof Error ? e.message : "Could not create sponsorship");
+   978→    } finally {
+   979→      setBusy(false);
+   980→    }
+   981→  };
+   982→
+   983→  return (
+   984→    <Dialog open={!!animal} onOpenChange={(o) => !o && onClose()}>
+   985→      <DialogContent className="sm:max-w-md">
+   986→        {animal && (
+   987→          <>
+   988→            <DialogHeader>
+   989→              <DialogTitle>Sponsor food for {animal.name}</DialogTitle>
+   990→              <DialogDescription>
+   991→                {formatINR(animal.monthlyFood)}/month · {titleCase(animal.species)} ·{" "}
+   992→                {animal.location}. Volunteers buy from verified suppliers and log every feeding.
+   993→              </DialogDescription>
+   994→            </DialogHeader>
+   995→            <div className="space-y-1.5 py-2">
+   996→              <Label htmlFor="sponsor-name">Your name</Label>
+   997→              <Input
+   998→                id="sponsor-name"
+   999→                value={name}
+  1000→                onChange={(e) => setName(e.target.value)}
+  1001→                placeholder="As you'd like to be known"
+  1002→              />
+  1003→            </div>
+  1004→            <DialogFooter>
+  1005→              <Button variant="outline" onClick={onClose} disabled={busy}>
+  1006→                Cancel
+  1007→              </Button>
+  1008→              <Button onClick={submit} disabled={busy} className="bg-lime-600 hover:bg-lime-700">
+  1009→                {busy ? "Sponsoring…" : "Confirm sponsorship"}
+  1010→              </Button>
+  1011→            </DialogFooter>
+  1012→          </>
+  1013→        )}
+  1014→      </DialogContent>
+  1015→    </Dialog>
+  1016→  );
+  1017→}
+  1018→

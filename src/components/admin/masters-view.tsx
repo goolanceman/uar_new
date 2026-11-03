@@ -1,16 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderTree, Info, Loader2, Plus, Tag, Trash2 } from "lucide-react";
+import {
+  FolderTree,
+  Info,
+  Loader2,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Tag,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
-import { cn, titleCase } from "@/lib/utils";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { titleCase } from "@/lib/format";
+import { PageHeader } from "@/components/shared/page-header";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Dialog,
@@ -20,6 +32,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -36,27 +65,52 @@ interface MasterEntry {
   category: string;
   value: string;
   label: string;
+  sortOrder: number;
   active: boolean;
 }
 
-interface CategoryInfo {
-  category: string;
-  count: number;
+/** Where each registry surfaces in the product — shown as a hint per tab. */
+const USAGE_HINTS: Record<string, string> = {
+  CITY: "Fills city dropdowns across onboarding forms",
+  SKILL: "Volunteer skill chips and the application form",
+  AVAILABILITY: "Volunteer availability options on applications",
+  CONDITION: "Adopt-a-Medicine patient condition filter",
+  ANIMAL_SPECIES: "Animal welfare forms and species filters",
+  AMBULANCE_TYPE: "Ambulance fleet registration",
+  EMERGENCY_TYPE: "Green-corridor mission requests",
+  INVENTORY_CATEGORY: "Inventory item categories",
+  UNIT: "Kit templates and inventory units",
+  BENEFICIARY_CATEGORY: "Beneficiary onboarding categories",
+  DISTRIBUTION_TYPE: "Distribution record types",
+  TASK_TYPE: "Volunteer task types",
+  DONATION_CATEGORY: "Donation categories on the donate flow",
+};
+
+function usageHint(category: string): string {
+  return USAGE_HINTS[category] ?? "Used across forms that reference this registry";
 }
 
 /* ---------------------------------- view ----------------------------------- */
 
 export default function MastersView() {
   const [entries, setEntries] = useState<MasterEntry[]>([]);
-  const [categories, setCategories] = useState<CategoryInfo[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [newCategory, setNewCategory] = useState("");
-  const [entryOpen, setEntryOpen] = useState(false);
-  const [entryForm, setEntryForm] = useState({ value: "", label: "" });
+
+  // inline drafts
   const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
+  const [sortDrafts, setSortDrafts] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  // add entry dialog
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({ category: "", newCategory: "", value: "", label: "", sortOrder: "0" });
+
   const [deleteTarget, setDeleteTarget] = useState<MasterEntry | null>(null);
+
+  /* -------------------------------- loading ------------------------------- */
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,27 +123,20 @@ export default function MastersView() {
       const list: MasterEntry[] = Array.isArray(all) ? all : ((all as { items?: MasterEntry[] })?.items ?? []);
       setEntries(list);
 
-      const counts = new Map<string, number>();
-      for (const e of list) counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
-
-      const catList: CategoryInfo[] = [];
+      const names = new Set<string>();
       if (Array.isArray(cats)) {
         for (const c of cats as unknown[]) {
-          if (typeof c === "string") catList.push({ category: c, count: counts.get(c) ?? 0 });
+          if (typeof c === "string") names.add(c);
           else if (c && typeof c === "object") {
-            const o = c as Record<string, unknown>;
-            const name = typeof o.category === "string" ? o.category : undefined;
-            if (name) catList.push({ category: name, count: counts.get(name) ?? Number(o.count ?? o._count ?? 0) });
+            const name = (c as Record<string, unknown>).category;
+            if (typeof name === "string") names.add(name);
           }
         }
       }
-      // include any categories found in entries but missing from the endpoint
-      for (const [name, count] of counts) {
-        if (!catList.some((c) => c.category === name)) catList.push({ category: name, count });
-      }
-
+      for (const e of list) names.add(e.category);
+      const catList = Array.from(names).sort();
       setCategories(catList);
-      setSelected((prev) => (prev && catList.some((c) => c.category === prev) ? prev : catList[0]?.category ?? ""));
+      setSelected((prev) => (prev && catList.includes(prev) ? prev : catList[0] ?? ""));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load master data");
     } finally {
@@ -102,73 +149,91 @@ export default function MastersView() {
   }, [load]);
 
   const selectedEntries = useMemo(
-    () => entries.filter((e) => e.category === selected).sort((a, b) => a.value.localeCompare(b.value)),
+    () =>
+      entries
+        .filter((e) => e.category === selected)
+        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.label.localeCompare(b.label)),
     [entries, selected]
   );
 
-  const addCategory = async () => {
-    const name = newCategory.trim().toUpperCase().replace(/\s+/g, "_");
-    if (!name) {
-      toast.error("Enter a category name first");
-      return;
-    }
-    setSaving(true);
-    try {
-      await post("/api/masters", { category: name, value: "default", label: titleCase(name) });
-      toast.success(`Category ${name} created — add its entries now`);
-      setNewCategory("");
-      await load();
-      setSelected(name);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create category");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addEntry = async () => {
-    if (!entryForm.value.trim() || !entryForm.label.trim() || !selected) {
-      toast.error("Value and label are required");
-      return;
-    }
-    setSaving(true);
-    try {
-      await post("/api/masters", {
-        category: selected,
-        value: entryForm.value.trim(),
-        label: entryForm.label.trim(),
-      });
-      toast.success(`Entry added to ${selected}`);
-      setEntryOpen(false);
-      setEntryForm({ value: "", label: "" });
-      load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to add entry");
-    } finally {
-      setSaving(false);
-    }
-  };
+  /* ------------------------------- mutations ------------------------------ */
 
   const saveLabel = async (entry: MasterEntry) => {
     const draft = labelDrafts[entry.id];
     if (draft === undefined || draft.trim() === "" || draft === entry.label) return;
+    setBusyId(entry.id);
     try {
       await patch(`/api/masters/${entry.id}`, { label: draft.trim() });
       setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, label: draft.trim() } : e)));
       toast.success("Label updated");
-      load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update label");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const saveSortOrder = async (entry: MasterEntry) => {
+    const draft = sortDrafts[entry.id];
+    if (draft === undefined || draft.trim() === "" || Number(draft) === entry.sortOrder) return;
+    const n = Math.trunc(Number(draft));
+    if (!Number.isFinite(n)) {
+      toast.error("Sort order must be a whole number");
+      return;
+    }
+    setBusyId(entry.id);
+    try {
+      await patch(`/api/masters/${entry.id}`, { sortOrder: n });
+      setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, sortOrder: n } : e)));
+      toast.success("Sort order updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update sort order");
+    } finally {
+      setBusyId(null);
     }
   };
 
   const toggleActive = async (entry: MasterEntry, active: boolean) => {
+    setBusyId(entry.id);
     try {
       await patch(`/api/masters/${entry.id}`, { active });
       setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, active } : e)));
-      toast.success(active ? "Entry activated" : "Entry deactivated");
+      toast.success(active ? `“${entry.label}” activated` : `“${entry.label}” deactivated — it disappears from dropdowns`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update entry");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const addEntry = async () => {
+    const category = addForm.category === "__new__" ? addForm.newCategory.trim().toUpperCase().replace(/\s+/g, "_") : addForm.category;
+    if (!category) {
+      toast.error("Choose or enter a category");
+      return;
+    }
+    if (!addForm.value.trim() || !addForm.label.trim()) {
+      toast.error("Value and label are required");
+      return;
+    }
+    const sortOrder = Math.trunc(Number(addForm.sortOrder)) || 0;
+    setSaving(true);
+    try {
+      await post("/api/masters", {
+        category,
+        value: addForm.value.trim(),
+        label: addForm.label.trim(),
+        sortOrder,
+      });
+      toast.success(`“${addForm.label.trim()}” added to ${titleCase(category)}`);
+      setAddOpen(false);
+      setAddForm({ category: "", newCategory: "", value: "", label: "", sortOrder: "0" });
+      await load();
+      setSelected(category);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to add entry");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -177,9 +242,9 @@ export default function MastersView() {
     setSaving(true);
     try {
       await del(`/api/masters/${deleteTarget.id}`);
-      toast.success("Entry deleted");
+      toast.success(`“${deleteTarget.label}” deleted`);
       setDeleteTarget(null);
-      load();
+      await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete entry");
     } finally {
@@ -187,210 +252,281 @@ export default function MastersView() {
     }
   };
 
+  /* --------------------------------- render -------------------------------- */
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 sm:space-y-6">
+      <PageHeader
+        title="Masters (MDM)"
+        description="Single source of truth for every dropdown in the product."
+        icon={<ShieldCheck className="size-5" aria-hidden="true" />}
+        actions={
+          <Button
+            onClick={() => {
+              setAddForm((f) => ({ ...f, category: selected || categories[0] || "__new__", value: "", label: "", sortOrder: "0", newCategory: "" }));
+              setAddOpen(true);
+            }}
+            disabled={!selected}
+            aria-label={`Add entry to ${selected}`}
+          >
+            <Plus className="size-4" /> Add entry
+          </Button>
+        }
+      />
+
       <Alert>
         <Info className="size-4" aria-hidden="true" />
         <AlertTitle>Master Data Management</AlertTitle>
-        <AlertDescription>Values here feed every dropdown across the site instantly — cities, skills, conditions, units and more.</AlertDescription>
+        <AlertDescription>
+          Values here feed every dropdown across the site. Forms load options through
+          <span className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-[11px]">useMasters()</span>
+          which fetches this registry on each page load — refresh the page or reopen a form after editing to see new values.
+        </AlertDescription>
       </Alert>
 
-      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-        {/* Category list */}
-        <Card className="h-fit p-0">
-          <CardHeader className="py-4">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <FolderTree className="size-4 text-primary" aria-hidden="true" /> Categories
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 px-3 pb-3">
-            {loading ? (
-              <div className="space-y-2">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-9 w-full" />
-                ))}
-              </div>
-            ) : (
-              <>
-                <div className="max-h-80 space-y-0.5 overflow-y-auto scrollbar-thin" role="listbox" aria-label="Master data categories">
-                  {categories.map((c) => (
-                    <button
-                      key={c.category}
-                      role="option"
-                      aria-selected={selected === c.category}
-                      onClick={() => setSelected(c.category)}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium transition",
-                        selected === c.category ? "bg-primary text-primary-foreground" : "text-foreground/70 hover:bg-accent"
-                      )}
-                    >
-                      <span className="truncate">{titleCase(c.category)}</span>
-                      <span
-                        className={cn(
-                          "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                          selected === c.category ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {c.count}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <div className="flex gap-2 border-t pt-3">
-                  <Input
-                    value={newCategory}
-                    onChange={(e) => setNewCategory(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addCategory()}
-                    placeholder="New category…"
-                    aria-label="New category name"
-                    className="h-9"
-                  />
-                  <Button size="icon" className="size-9 shrink-0" onClick={addCategory} disabled={saving} aria-label="Create category">
-                    {saving ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-                  </Button>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+      {/* Category tabs */}
+      <Tabs value={selected} onValueChange={setSelected}>
+        {loading ? (
+          <Skeleton className="h-10 w-full max-w-xl" />
+        ) : (
+          <TabsList className="h-auto w-full flex-wrap justify-start gap-1">
+            {categories.map((c) => (
+              <TabsTrigger key={c} value={c} className="px-3">
+                {titleCase(c)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        )}
+      </Tabs>
 
-        {/* Entries table */}
-        <Card className="p-0">
-          <CardHeader className="flex-row items-center justify-between space-y-0 py-4">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Tag className="size-4 text-primary" aria-hidden="true" /> {selected ? titleCase(selected) : "Entries"}
-              </CardTitle>
-              <CardDescription>
-                {selectedEntries.length} entr{selectedEntries.length === 1 ? "y" : "ies"} in this category
-              </CardDescription>
-            </div>
-            <Button size="sm" onClick={() => setEntryOpen(true)} disabled={!selected} aria-label={`Add entry to ${selected}`}>
-              <Plus className="size-4" /> Add entry
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="space-y-2 p-4">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-11 w-full" />
+      {/* Entries card */}
+      <div className="rounded-xl border bg-card">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
+          <div className="min-w-0">
+            <h3 className="flex items-center gap-2 text-sm font-semibold">
+              <FolderTree className="size-4 text-primary" aria-hidden="true" />
+              {selected ? titleCase(selected) : "Entries"}
+            </h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">{usageHint(selected ?? "")}</p>
+          </div>
+          <span className="text-xs text-muted-foreground" aria-live="polite">
+            {loading ? "Loading…" : `${selectedEntries.length} entr${selectedEntries.length === 1 ? "y" : "ies"}`}
+          </span>
+        </div>
+
+        {loading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-11 w-full" />
+            ))}
+          </div>
+        ) : !selected ? (
+          <div className="p-6">
+            <EmptyState
+              icon={<FolderTree className="size-6" aria-hidden="true" />}
+              title="No categories yet"
+              hint="Add the first entry to create a category — it will appear as a tab."
+            >
+              <Button
+                size="sm"
+                onClick={() => {
+                  setAddForm({ category: "__new__", newCategory: "", value: "", label: "", sortOrder: "0" });
+                  setAddOpen(true);
+                }}
+              >
+                <Plus className="size-4" /> Add first entry
+              </Button>
+            </EmptyState>
+          </div>
+        ) : selectedEntries.length === 0 ? (
+          <div className="p-6">
+            <EmptyState
+              icon={<Tag className="size-6" aria-hidden="true" />}
+              title={`No entries in ${titleCase(selected)}`}
+              hint={`Add the first entry — it will appear in every dropdown that uses ${titleCase(selected)}.`}
+            >
+              <Button
+                size="sm"
+                onClick={() => {
+                  setAddForm((f) => ({ ...f, category: selected, value: "", label: "", sortOrder: "0", newCategory: "" }));
+                  setAddOpen(true);
+                }}
+              >
+                <Plus className="size-4" /> Add entry
+              </Button>
+            </EmptyState>
+          </div>
+        ) : (
+          <div className="max-h-[30rem] overflow-auto scrollbar-thin">
+            <Table>
+              <TableHeader className="sticky top-0 bg-background">
+                <TableRow>
+                  <TableHead>Label</TableHead>
+                  <TableHead>Value</TableHead>
+                  <TableHead className="w-24">Sort order</TableHead>
+                  <TableHead>Active</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {selectedEntries.map((entry) => (
+                  <TableRow key={entry.id}>
+                    <TableCell className="min-w-44">
+                      <Input
+                        value={labelDrafts[entry.id] ?? entry.label}
+                        onChange={(e) => setLabelDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
+                        onBlur={() => saveLabel(entry)}
+                        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                        aria-label={`Edit label for ${entry.value}`}
+                        className="h-9 text-sm"
+                      />
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{entry.value}</TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        value={sortDrafts[entry.id] ?? String(entry.sortOrder ?? 0)}
+                        onChange={(e) => setSortDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
+                        onBlur={() => saveSortOrder(entry)}
+                        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                        aria-label={`Edit sort order for ${entry.value}`}
+                        className="h-9 w-20 text-sm"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Switch
+                        checked={entry.active}
+                        disabled={busyId === entry.id}
+                        onCheckedChange={(v) => toggleActive(entry, v)}
+                        aria-label={`Toggle ${entry.value} active`}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-11 text-red-600 hover:bg-red-500/10 hover:text-red-700 md:size-9"
+                        aria-label={`Delete entry ${entry.value}`}
+                        onClick={() => setDeleteTarget(entry)}
+                      >
+                        {busyId === entry.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </div>
-            ) : !selected ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-                <FolderTree className="size-8" aria-hidden="true" />
-                <p className="font-medium text-foreground">No categories yet</p>
-                <p>Create your first category on the left.</p>
-              </div>
-            ) : selectedEntries.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-                <Tag className="size-8" aria-hidden="true" />
-                <p className="font-medium text-foreground">No entries in {titleCase(selected)}</p>
-                <p>Add the first entry — it will appear in every related dropdown.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Label</TableHead>
-                      <TableHead>Value</TableHead>
-                      <TableHead>Active</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {selectedEntries.map((entry) => (
-                      <TableRow key={entry.id}>
-                        <TableCell className="min-w-44">
-                          <Input
-                            value={labelDrafts[entry.id] ?? entry.label}
-                            onChange={(e) => setLabelDrafts((p) => ({ ...p, [entry.id]: e.target.value }))}
-                            onBlur={() => saveLabel(entry)}
-                            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                            aria-label={`Edit label for ${entry.value}`}
-                            className="h-8 text-sm"
-                          />
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">{entry.value}</TableCell>
-                        <TableCell>
-                          <Switch
-                            checked={entry.active}
-                            onCheckedChange={(v) => toggleActive(entry, v)}
-                            aria-label={`Toggle ${entry.value} active`}
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                            aria-label={`Delete entry ${entry.value}`}
-                            onClick={() => setDeleteTarget(entry)}
-                          >
-                            <Trash2 className="size-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </div>
 
-      {/* Add entry dialog */}
-      <Dialog open={entryOpen} onOpenChange={setEntryOpen}>
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <RefreshCw className="size-3.5" aria-hidden="true" />
+        Tip: deactivating hides a value from every dropdown without deleting history tied to it.
+      </p>
+
+      {/* ------------------------------ Add dialog ---------------------------- */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add entry to {selected ? titleCase(selected) : ""}</DialogTitle>
-            <DialogDescription>The value is stored internally; the label is what users see in dropdowns.</DialogDescription>
+            <DialogTitle>Add registry entry</DialogTitle>
+            <DialogDescription>
+              The value is stored internally; the label is what users see in dropdowns.
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="m-value">Value *</Label>
-              <Input
-                id="m-value"
-                value={entryForm.value}
-                onChange={(e) => setEntryForm({ ...entryForm, value: e.target.value })}
-                placeholder="e.g. WHITEFIELD"
-                className="font-mono"
-              />
+              <Label>Category</Label>
+              <Select value={addForm.category} onValueChange={(v) => setAddForm((f) => ({ ...f, category: v }))}>
+                <SelectTrigger aria-label="Registry category"><SelectValue placeholder="Choose a category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+                  ))}
+                  <SelectItem value="__new__">— New category —</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {addForm.category === "__new__" && (
+              <div className="grid gap-2">
+                <Label htmlFor="m-newcat">New category name</Label>
+                <Input
+                  id="m-newcat"
+                  value={addForm.newCategory}
+                  onChange={(e) => setAddForm((f) => ({ ...f, newCategory: e.target.value }))}
+                  placeholder="e.g. BLOOD_GROUP"
+                  className="font-mono uppercase"
+                />
+              </div>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="m-value">Value *</Label>
+                <Input
+                  id="m-value"
+                  value={addForm.value}
+                  onChange={(e) => setAddForm((f) => ({ ...f, value: e.target.value }))}
+                  placeholder="e.g. WHITEFIELD"
+                  className="font-mono"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="m-label">Label *</Label>
+                <Input
+                  id="m-label"
+                  value={addForm.label}
+                  onChange={(e) => setAddForm((f) => ({ ...f, label: e.target.value }))}
+                  placeholder="e.g. Whitefield"
+                />
+              </div>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="m-label">Label *</Label>
+              <Label htmlFor="m-sort">Sort order</Label>
               <Input
-                id="m-label"
-                value={entryForm.label}
-                onChange={(e) => setEntryForm({ ...entryForm, label: e.target.value })}
-                placeholder="e.g. Whitefield"
+                id="m-sort"
+                type="number"
+                value={addForm.sortOrder}
+                onChange={(e) => setAddForm((f) => ({ ...f, sortOrder: e.target.value }))}
+                placeholder="0"
               />
+              <p className="text-xs text-muted-foreground">Lower numbers appear first in dropdowns.</p>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEntryOpen(false)}>Cancel</Button>
-            <Button onClick={addEntry} disabled={saving}>{saving ? "Saving…" : "Add entry"}</Button>
+            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button onClick={addEntry} disabled={saving}>
+              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+              {saving ? "Saving…" : "Add entry"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirm dialog */}
-      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete entry?</DialogTitle>
-            <DialogDescription>
-              {deleteTarget ? `"${deleteTarget.label}" (${deleteTarget.category}) will be removed from every dropdown that uses it.` : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={confirmDelete} disabled={saving}>{saving ? "Deleting…" : "Delete"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ---------------------------- Delete confirm -------------------------- */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `“${deleteTarget.label}” (${deleteTarget.category}/${deleteTarget.value}) will be removed from every dropdown that uses it. Existing records keep their stored value.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault();
+                confirmDelete();
+              }}
+            >
+              {saving ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

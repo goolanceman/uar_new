@@ -131,14 +131,19 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
     };
   }, [user.status]);
 
-  // Only genuine volunteers go through the approval gate; donors/beneficiaries
-  // visiting /volunteer simply see the application form.
+  // Approval gate — kept EXACT:
+  //  · Genuine volunteers go through the ACTIVE check (PENDING / no profile /
+  //    not-yet-ACTIVE ⇒ application view only — tasks, scan and distributions
+  //    stay hidden).
+  //  · Any other signed-in role (DONOR / BENEFICIARY) wandering into /volunteer
+  //    is gated too: they see the application form until an admin approves them.
   const gated =
-    user.role === "VOLUNTEER" &&
-    (user.status === "PENDING" ||
-      !loaded ||
-      !volunteer ||
-      volunteer.status !== "ACTIVE");
+    user.role === "VOLUNTEER"
+      ? user.status === "PENDING" ||
+        !loaded ||
+        !volunteer ||
+        volunteer.status !== "ACTIVE"
+      : true;
 
   const nav = gated ? VOLUNTEER_GATED_NAV : VOLUNTEER_ACTIVE_NAV;
   const requested = segments[1] ?? "";
@@ -157,14 +162,18 @@ function VolunteerPortal({ user }: { user: SessionUser }) {
       {gated && loaded && (
         <div
           role="status"
-          className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+          className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
         >
-          <Hourglass className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
+          <Hourglass className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
           <p>
-            <span className="font-semibold">Your account is awaiting admin approval.</span>{" "}
-            {user.status === "PENDING"
+            <span className="font-semibold">
+              {user.role === "VOLUNTEER"
+                ? "Your account is awaiting admin approval."
+                : "Volunteer tools open after approval."}
+            </span>{" "}
+            {user.role === "VOLUNTEER" && user.status === "PENDING"
               ? "Complete your volunteer application below — once approved, the full volunteer portal unlocks."
-              : "Your volunteer profile is not active yet. Our team will review and activate it shortly."}
+              : "Send your volunteer application below — once our team approves it, the full portal unlocks."}
           </p>
         </div>
       )}

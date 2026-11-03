@@ -283,6 +283,150 @@ FOUND UNDER: Admin → Operations → Distributions → Sanitary Pads (all pad d
     content: `REACHING UNITED ANGEL REACH: office in Bengaluru, Karnataka (open Mon–Sat, 9:30am–6:30pm). Use the Contact page form for anything — grievances get a 48-hour response. Emergencies NEVER wait for us: police 112, ambulance 108, cyber fraud 1930, women 181/1091, child 1098, de-addiction 14446, animal rescue 1962. For campaign collaborations, CSR partnerships, school/workshop bookings — mention "partnership" in the subject and our team prioritises it.`,
   },
   {
+    id: "80g-tax-receipts",
+    title: "80G tax benefits & how receipts work",
+    keywords: [
+      "80g", "tax", "taxes", "taxation", "deduction", "exemption", "income tax",
+      "itr", "pan", "receipt number", "amount in words", "proof", "section 80g",
+      "claim", "rebate", "tax benefit", "12a", "assessment",
+    ],
+    content: `80G TAX BENEFITS — how your giving saves tax. United Angel Reach is a registered charitable trust; donations are eligible for deduction under Section 80G of the Income-tax Act, 1961. Individual donors can claim a 50% deduction of the donated amount (subject to the qualifying-limit rules that apply to your income slab) when filing your ITR — corporate donors claim it as a business-charity expenditure under CSR rules.
+
+WHAT YOUR RECEIPT CONTAINS (every field auditors and the IT department look for):
+• Receipt number (format UAR-RCPT-YYYY-NNNNN) and issue date
+• Financial year (April–March) the donation falls in
+• Your name, email, phone and PAN — the PAN is what makes the deduction claimable
+• Donation amount in figures AND in words (e.g. "Rupees Twenty Five Thousand Only")
+• The trust's 80G registration number, 12A registration and trust PAN
+• Payment mode (UPI / card / bank transfer) and transaction reference
+• Authorised signatory block (Managing Trustee) and the trust footer declaration
+
+HOW TO GET YOURS: guest donors receive the receipt number on screen right after paying; registered donors can open or print any receipt from the Donor Portal → Receipts — every entry has a print-ready 80G receipt. Lost the number? Ask me with your email and amount, or email care@unitedangelreach.org and we re-issue. No goods or services are provided in return for donations, so the full donated amount qualifies. Note: in-kind donations (clothes, food sacks) are not eligible for 80G — only monetary gifts.`,
+  },
+  {
+    id: "certificates",
+    title: "Certificates — donor appreciation, volunteer service, animal adoption & more",
+    keywords: [
+      "certificate", "certificates", "appreciation", "recognition", "award",
+      "volunteer certificate", "adoption certificate", "csr hours", "college credit",
+      "pad drive champion", "medicine sponsor", "honour", "honor",
+    ],
+    content: `CERTIFICATES FROM UNITED ANGEL REACH. We issue five kinds of signed, printable certificates — each carries a unique verification code (UAR-CERT-YYYY-NNNNN), the issue date, the trust seal and the Managing Trustee's signature block:
+
+• CERTIFICATE OF APPRECIATION (DONOR_APPRECIATION) — for generous donors, individuals or corporates, recognising cumulative giving to our programmes.
+• CERTIFICATE OF VOLUNTEER SERVICE (VOLUNTEER_SERVICE) — for volunteers completing service hours in drives, workshops, rescues or corridor operations; accepted by colleges for credit and by companies for CSR hour reporting.
+• ANIMAL ADOPTION CERTIFICATE (ANIMAL_ADOPTION) — a keepsake for adopting a rescued animal, naming the animal and species.
+• MEDICINE SPONSORSHIP CERTIFICATE (MEDICINE_SPONSOR) — for sponsors keeping patients on monthly BP/diabetes/cardiac medicine.
+• MENSTRUAL HEALTH CHAMPION (PAD_DRIVE_CHAMPION) — for leaders of pad-bank drives and awareness sessions.
+
+HOW THEY WORK: admins issue certificates from the admin console (they can link them to your donor or volunteer account). You'll find yours in the Donor/Volunteer Portal — open it and hit print: it renders as an elegant A4 award layout with a gold-and-emerald seal, ready for framing. Codes are unique, so anyone can verify the certificate by its number. Want one for your giving or volunteering? Ask me and I'll point you to the right request.`,
+  },
+  {
+    id: "payment-options",
+    title: "Donation & payment options — UPI, gateway, monthly giving",
+    keywords: [
+      "payment", "payments", "pay", "upi", "gpay", "phonepe", "paytm", "razorpay",
+      "card", "debit", "credit", "net banking", "bank transfer", "neft", "imps",
+      "recurring", "monthly giving", "auto debit", "emi", "cancel donation", "refund",
+    ],
+    content: `WAYS TO GIVE TO UNITED ANGEL REACH — every payment path is receipted and 80G-eligible:
+
+1. UPI (fastest, zero fees): pay to the trust's UPI ID from the Donate page — the current VPA is shown live from our settings (unitedangelreach@upi). Works with GPay, PhonePe, Paytm, BHIM and every bank app. Your receipt number appears instantly.
+2. PAYMENT GATEWAY (cards / net-banking / wallets): when the gateway is enabled, the Donate page opens a secure checkout supporting debit/credit cards, net-banking and wallets — PCI-DSS compliant, we never see or store your card details.
+3. BANK TRANSFER (NEFT/IMPS): best for larger and CSR gifts — get our account details from care@unitedangelreach.org and share the UTR number so we can match and receipt it.
+4. MONTHLY GIVING (RECURRING): set up a monthly donation of any amount — it fuels steady programmes like ₹150/month medicines or ₹900/month street-dog food. Pause, change or cancel anytime from the Donor Portal, no questions asked.
+
+AFTER PAYING: every completed donation gets a UAR receipt number, shows on your dashboard (if signed in) and rolls into the live campaign totals on the Impact page. Refunds: for accidental double-charges contact us within 7 days — we return the amount to the source account. Anonymous giving is supported — tick 'Give anonymously' and your name never appears on public walls, only in the trust's books.`,
+  },
+  {
+    id: "integrations",
+    title: "Integrations — email, SMS & WhatsApp notifications (admin-configured)",
+    keywords: [
+      "integration", "integrations", "email", "smtp", "sms", "whatsapp",
+      "notification", "notifications", "settings", "webhook", "gateway test",
+      "connectivity", "msg91", "sender id", "configure", "admin settings",
+    ],
+    content: `INTEGRATIONS — how United Angel Reach stays in touch. The trust's notification stack is configured by admins in Settings → Integrations, and every channel can be health-checked with one click (Settings shows a live latency and handshake message for each test):
+
+• EMAIL (SMTP): donor receipts, monthly impact digests and volunteer rosters are sent from care@unitedangelreach.org via the configured SMTP host/port (STARTTLS secure). Admins set the host, port, from-name and secure flag in Settings.
+• SMS (DLT-compliant): mission-critical pings — low-stock alerts, volunteer approval status, ambulance corridor summaries — go through an Indian DLT provider (e.g. MSG91) with the registered sender ID (UARNGO). Admins configure provider, sender ID and API endpoint.
+• WHATSAPP (Business API): richer updates for donors and beneficiaries — kit-delivery photos, adoption follow-ups, campaign launches — from the trust's WhatsApp Business number.
+• PAYMENT GATEWAY: payment key management lives in the same Settings screen; enabling it turns on card/net-banking checkout on the Donate page.
+
+PRIVACY: notification preferences are per-user; beneficiary identities are never exposed in messages. All keys and sender IDs are stored server-side only. Everything you see on the Settings page is simulated in this demo environment — no real blasts are sent.`,
+  },
+  {
+    id: "kit-journey",
+    title: "Ration kit end-to-end — template → batch → QR label → volunteer scan",
+    keywords: [
+      "kit template", "kit batch", "qr label", "kit label", "print labels",
+      "pack kit", "kit workflow", "scan at handover", "batch progress",
+      "how kits are made", "kit lifecycle", "depleted", "expired unit",
+    ],
+    content: `RATION KIT JOURNEY — from packing table to a family's kitchen, fully tracked:
+
+1. TEMPLATE: an admin defines what goes inside — e.g. Family Ration Kit: rice 10kg, atta 5kg, toor dal 2kg, oil 2L, sugar 1kg, salt, tea — with a cost per unit (₹950 for the standard kit).
+2. BATCH: admin generates a batch (say 100 units). The system instantly reserves 100 unique codes: UAR-RK-2026-000001 … 000100 and decrements raw inventory (rice sacks, dal, oil) automatically.
+3. QR LABELS: print A4 label sheets from the batch page — each label shows the QR code of the unit code plus the trust name. Volunteers stick one on every packed kit.
+4. SCAN AT HANDOVER: when a kit physically reaches a family, the volunteer scans the QR (or types the code) at the handover screen — the unit flips READY → SCANNED with time, GPS location and volunteer name recorded, the beneficiary gets logged, and batch progress ticks up (packed/scanned/remaining).
+5. AUDIT: admin dashboards show batch progress, low-stock alerts, and any EXPIRED units (damaged/leaked kits) — donors can trace exactly how many kits "their" rupees packed.
+
+Nothing is handwritten, nothing is double-counted: one kit = one code = one scanned handover with a full audit trail.`,
+  },
+  {
+    id: "corridor-fallbacks",
+    title: "Green corridor alert chain — V2X/5G → cell broadcast → BLE mesh → FM-RDS → siren",
+    keywords: [
+      "v2x", "5g", "cell broadcast", "cellbroadcast", "ble mesh", "bluetooth mesh",
+      "fm rds", "rds", "fallback", "siren", "alert chain", "how the corridor works",
+      "dead zone", "no internet", "offline", "rsu", "roadside unit",
+    ],
+    content: `GREEN CORRIDOR ALERT CHAIN — four layers that never all fail at once. When a mission starts, the ambulance's onboard unit plans the route and then alerts traffic AHEAD through a strict priority chain with automatic fallbacks:
+
+1. V2X + 5G/4G (needs network): the vehicle streams its live GPS corridor over 5G to connected cars, smart traffic signals and navigation apps up to 2 km ahead — drivers get "AMBULANCE APPROACHING — 90 seconds — shift left" with a soft audio nudge.
+2. CELL BROADCAST (needs towers, no internet): if data drops, the same alert goes out as a cell broadcast to every phone in the corridor's cells — the tech used for disaster alerts, so it reaches basic handsets too.
+3. BLE MESH (fully offline): roadside units on signals, buses and volunteer bikes relay the alert hop-by-hop over low-energy Bluetooth — this keeps working in tunnels, network dead zones, floods and tower outages.
+4. FM-RDS BREAK-IN: traffic radio interrupts with the corridor location for older cars without data.
+5. SMART SIREN (always last resort): an adaptive siren that only fires near vehicles the mesh couldn't reach — quieter, targeted, less noise pollution.
+
+EVERY SEGMENT IS LOGGED: method used, congestion level (LOW → GRIDLOCK), vehicles alerted and seconds saved — that's what you see on the corridor events feed. In Bengaluru pilots the full chain cuts run times 40–60%. Remember: for a real medical emergency always call 108 or 112 first — the corridor system supports those ambulances.`,
+  },
+  {
+    id: "beneficiary-onboarding",
+    title: "Beneficiary onboarding — how a family enters our care",
+    keywords: [
+      "beneficiary", "onboarding", "onboard", "register family", "add beneficiary",
+      "survey", "verification", "widow", "orphan", "daily wage", "urgency",
+      "monthly need", "case worker", "home visit",
+    ],
+    content: `BENEFICIARY ONBOARDING — how a family enters United Angel Reach's care with dignity:
+
+1. IDENTIFY: families come to us via volunteer field surveys, RWA/panchayat referrals, school teachers, hospital social workers or self-referral on the Contact page. No family is ever turned away for lacking paperwork.
+2. REGISTER: a volunteer or admin adds them to the Beneficiary register — name, contact, city, household size, family category (widow, orphan, student, elderly, differently-abled, single mother, poor family, patient, daily-wage worker), monthly income vs monthly need, and specific needs (ration, medicines, pads, school fees).
+3. URGENCY TRIAGE: each case gets an urgency level — LOW, MEDIUM, HIGH or CRITICAL — so kit batches, medicine sponsors and pad drives reach the most fragile households first. CRITICAL cases surface at the top of the admin console the same day.
+4. VERIFY & ASSIGN: a case volunteer does a home visit (photo + location note), then the family is linked to the right programme — ration-kit batches, Adopt-a-Medicine causes, pad-bank schools, or animal-welfare households.
+5. SERVE & TRACK: every distribution is logged against the beneficiary with kit code, time, location and volunteer — so duplicates are impossible and impact per family is fully auditable. A beneficiary can also get a portal login to see their own history.
+
+Privacy: beneficiary records are visible only to signed-in staff and volunteers — never on public pages.`,
+  },
+  {
+    id: "volunteer-journey",
+    title: "Volunteer journey — apply → temp credentials → admin approval → portal",
+    keywords: [
+      "volunteer journey", "apply", "application", "temp creds", "temporary password",
+      "pending approval", "approve volunteer", "rejected", "reapply", "onboard volunteer",
+      "status check", "volunteer portal", "how to join",
+    ],
+    content: `THE VOLUNTEER JOURNEY — from application to first distribution in four steps:
+
+1. APPLY: fill the volunteer form (name, phone, city, occupation, skills, availability, motivation). Submission is instant and free.
+2. TEMPORARY CREDENTIALS: the moment you apply, the system issues you TEMPORARY login credentials (shown on the success screen and sent by email). Sign in right away — you land in a limited portal where you can watch your application status live and complete your profile while you wait.
+3. ADMIN REVIEW: an admin checks your application (skills, city, availability — occasional quick reference checks for medical or driving roles). Outcomes: APPROVED → your full volunteer portal unlocks (task board, distribution drives, ration-kit QR scanning, inventory stocking, animal welfare shifts, ambulance responder sign-ups); REJECTED → you see the review note and can reapply anytime.
+4. ACTIVE SERVICE: approved volunteers get assigned tasks with date, location and priority; attendance, hours and completed tasks accumulate automatically — and at milestones you earn your Certificate of Volunteer Service (great for college credit and CSR hours).
+
+TIPS: put real skills (teaching, medical, driving, tech) — matching is skills-based; WEEKENDS and EVENINGS availability fills fastest in Bengaluru South & Whitefield. Pending for more than 5 days? Ask me to nudge the admin queue.`,
+  },
+  {
     id: "safety-emergency-index",
     title: "Emergency quick index (who to call, when)",
     keywords: [

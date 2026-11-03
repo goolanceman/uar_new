@@ -1989,5 +1989,264 @@ export const CAMPAIGN_CONTENT: Record<string, CampaignContent> = {
 };
 
 /* ============================================================
+ * ROUND-2 ENRICHMENT (still pure data — no imports, no side effects)
+ * - ACCENT_SOFT: dark-mode-safe accent tokens (bg-x-500/10 pattern)
+ * - DONATION_TIERS: per-campaign "what your gift buys" ladder
+ * - GENERIC_IMPACT_HINTS: fallback ladder for the general fund
+ * - IMPACT_BULLETS: per-campaign outcome bullets for Impact tabs
+ * - DONOR_FAQS: standard giving questions for any programme page
+ * - ORG_DEFAULTS: org identity fallbacks until /api/settings/public answers
+ * ============================================================ */
+
+export interface AccentSoft {
+  chip: string; // tinted icon/background chip
+  text: string; // accent text (dark-safe)
+  border: string; // accent border
+  solid: string; // solid accent button bg
+  ring: string; // focus ring
+}
+
+export const ACCENT_SOFT: Record<string, AccentSoft> = {
+  orange: {
+    chip: "bg-orange-500/10",
+    text: "text-orange-600 dark:text-orange-400",
+    border: "border-orange-500/25",
+    solid: "bg-orange-500 hover:bg-orange-600",
+    ring: "ring-orange-500/30",
+  },
+  cyan: {
+    chip: "bg-cyan-500/10",
+    text: "text-cyan-600 dark:text-cyan-400",
+    border: "border-cyan-500/25",
+    solid: "bg-cyan-500 hover:bg-cyan-600",
+    ring: "ring-cyan-500/30",
+  },
+  fuchsia: {
+    chip: "bg-fuchsia-500/10",
+    text: "text-fuchsia-600 dark:text-fuchsia-400",
+    border: "border-fuchsia-500/25",
+    solid: "bg-fuchsia-500 hover:bg-fuchsia-600",
+    ring: "ring-fuchsia-500/30",
+  },
+  amber: {
+    chip: "bg-amber-500/10",
+    text: "text-amber-600 dark:text-amber-400",
+    border: "border-amber-500/25",
+    solid: "bg-amber-500 hover:bg-amber-600",
+    ring: "ring-amber-500/30",
+  },
+  teal: {
+    chip: "bg-teal-500/10",
+    text: "text-teal-600 dark:text-teal-400",
+    border: "border-teal-500/25",
+    solid: "bg-teal-500 hover:bg-teal-600",
+    ring: "ring-teal-500/30",
+  },
+  lime: {
+    chip: "bg-lime-500/10",
+    text: "text-lime-600 dark:text-lime-400",
+    border: "border-lime-500/25",
+    solid: "bg-lime-500 hover:bg-lime-600",
+    ring: "ring-lime-500/30",
+  },
+  red: {
+    chip: "bg-red-500/10",
+    text: "text-red-600 dark:text-red-400",
+    border: "border-red-500/25",
+    solid: "bg-red-500 hover:bg-red-600",
+    ring: "ring-red-500/30",
+  },
+  emerald: {
+    chip: "bg-emerald-500/10",
+    text: "text-emerald-600 dark:text-emerald-400",
+    border: "border-emerald-500/25",
+    solid: "bg-emerald-500 hover:bg-emerald-600",
+    ring: "ring-emerald-500/30",
+  },
+  pink: {
+    chip: "bg-pink-500/10",
+    text: "text-pink-600 dark:text-pink-400",
+    border: "border-pink-500/25",
+    solid: "bg-pink-500 hover:bg-pink-600",
+    ring: "ring-pink-500/30",
+  },
+};
+
+export function accentSoft(accent?: string | null): AccentSoft {
+  return ACCENT_SOFT[accent ?? ""] ?? ACCENT_SOFT.emerald;
+}
+
+export interface DonationTier {
+  amount: number;
+  impact: string;
+}
+
+export const DONATION_TIERS: Record<string, DonationTier[]> = {
+  "anti-drug": [
+    { amount: 500, impact: "funds an awareness pack for one classroom — recovery workbooks, screening cards and 14446 helpline stickers" },
+    { amount: 1000, impact: "sponsors confidential screening for 10 students at a campus camp, with a trained counsellor present" },
+    { amount: 2500, impact: "pays for a family-counselling block of three sessions alongside a Tele-MANAS-empanelled therapist" },
+    { amount: 10000, impact: "underwrites a full year of monthly follow-ups for one person in recovery — the window when relapse risk peaks" },
+  ],
+  "cyber-crime": [
+    { amount: 500, impact: "prints 250 “golden hour” fraud-rescue cards for a neighbourhood watch — what to dial in the first 60 minutes" },
+    { amount: 1000, impact: "runs a cyber-safety session for 50 senior citizens with a live 1930 complaint walkthrough" },
+    { amount: 2500, impact: "funds a school UPI-safety workshop for 100 students, including how to freeze a stolen payment" },
+    { amount: 10000, impact: "keeps the fraud-rescue desk staffed for a month of golden-hour interventions with bank nodal officers" },
+  ],
+  "women-safety": [
+    { amount: 500, impact: "stocks a Sakhi-centre dignity kit — essentials plus a legal-aid card — for one survivor" },
+    { amount: 1000, impact: "funds safe transport for five survivors to a One-Stop Centre, any hour of the day" },
+    { amount: 2500, impact: "pays for a self-defence and legal-rights workshop for 40 women, conducted by certified trainers" },
+    { amount: 10000, impact: "runs a 181-awareness drive across ten wards — posters, volunteer marshals and auto-stand audio spots" },
+  ],
+  "child-safety": [
+    { amount: 500, impact: "prints POCSO and 1098 classroom posters plus take-home cards for one school" },
+    { amount: 1000, impact: "funds a child-safety session for 60 children with trained, background-verified facilitators" },
+    { amount: 2500, impact: "sponsors a teacher-training block on safe-touch disclosure and mandated reporting for two schools" },
+    { amount: 10000, impact: "keeps a school child-safety desk running for a term across five schools, with counsellor referrals" },
+  ],
+  "medicine-adoption": [
+    { amount: 500, impact: "covers one month of BP or thyroid medicines for an elderly patient at Jan Aushadhi rates" },
+    { amount: 1000, impact: "covers one month of diabetes-plus-BP medicines for a chronic patient, QR-delivered to their door" },
+    { amount: 2500, impact: "covers a cardiac patient's monthly medicines with pharmacist verification and adherence notes" },
+    { amount: 10000, impact: "adopts a full six-month medicine plan for a patient still waiting for a monthly pledge" },
+  ],
+  "animal-welfare": [
+    { amount: 500, impact: "feeds two street dogs for a month at volunteer-run feeding points" },
+    { amount: 1000, impact: "funds vaccination for five community animals, logged with batch numbers" },
+    { amount: 2500, impact: "sponsors a sterilisation (ABC) camp slot with a partner veterinary clinic" },
+    { amount: 10000, impact: "stockpiles a month of feed for the shelter — dogs, cats, cows and birds" },
+  ],
+  "green-corridor": [
+    { amount: 500, impact: "installs one roadside BLE beacon on a corridor junction — offline-proof alerting" },
+    { amount: 1000, impact: "funds junction mapping and congestion baselining for a 2 km corridor stretch" },
+    { amount: 2500, impact: "equips one patient-transport ambulance with a corridor transponder kit" },
+    { amount: 10000, impact: "runs a live corridor drill across five Bengaluru junctions, every event logged to the second" },
+  ],
+  "ration-kits": [
+    { amount: 500, impact: "assembles one full ration kit for a family of four — rice, dal, oil, staples — QR-traced to their door" },
+    { amount: 1000, impact: "assembles 2 ration kits for a family of four" },
+    { amount: 2500, impact: "assembles 5 ration kits and restocks the community pantry shelf behind them" },
+    { amount: 10000, impact: "sponsors a 20-kit distribution lane for a week, with doorstep scans and a family register" },
+  ],
+  "sanitary-pads": [
+    { amount: 500, impact: "restocks a school pad-bank dispenser for 25 girls" },
+    { amount: 1000, impact: "funds an awareness session plus pad-bank restock for one classroom of girls" },
+    { amount: 2500, impact: "adopts a school's pad bank for a full term, refills included" },
+    { amount: 10000, impact: "runs menstrual-health sessions across 10 schools with take-home booklets for every girl" },
+  ],
+};
+
+export const GENERIC_IMPACT_HINTS: DonationTier[] = [
+  { amount: 10000, impact: "installs a 10-beacon BLE cluster on a 2 km corridor stretch — or assembles 20 ration kits" },
+  { amount: 5000, impact: "assembles 10 ration kits, or funds a month of medicines for three chronic patients" },
+  { amount: 2500, impact: "runs a full school awareness session — anti-drug, cyber-safety or menstrual health" },
+  { amount: 1000, impact: "assembles 2 ration kits for a family of four" },
+  { amount: 500, impact: "assembles a full ration kit for a family of four — QR-traced to their door" },
+  { amount: 0, impact: "every rupee is QR-traced to a doorstep and reconciled in the monthly public report" },
+];
+
+export const IMPACT_BULLETS: Record<string, string[]> = {
+  "anti-drug": [
+    "Every screening camp feeds referrals into the national 14446 de-addiction network and Tele-MANAS (14416) — no dead ends.",
+    "Under NDPS Section 64A, voluntary treatment grants immunity from prosecution — our volunteers carry that card in every campus kit.",
+    "Recovery support runs a full 12 months, because most relapses happen in the first year, not the first week.",
+    "Nasha Mukt Bharat Abhiyaan covers 372 districts — our playbook plugs straight into it instead of reinventing it.",
+  ],
+  "cyber-crime": [
+    "The 1930 helpline can freeze stolen money within the golden hour — our sessions teach the exact call script and the cybercrime.gov.in portal flow.",
+    "Senior citizens and first-jobbers are the most-defrauded groups; every workshop is designed around their real scam messages.",
+    "Every complaint walkthrough ends with the acknowledge-number follow-up step most victims miss.",
+    "Awareness material is refreshed each quarter against the latest RBI fraud advisories.",
+  ],
+  "women-safety": [
+    "181 (Sakhi) and 1091 (women police) are printed on every card we distribute — one call routes medical, legal and shelter under one roof.",
+    "One-Stop Centres under the Nirbhaya framework provide the infrastructure; we provide the reach, transport and follow-up.",
+    "Legal-aid cards cite the Bharatiya Nyaya Sanhita provisions volunteers are trained to explain at first contact.",
+    "Self-defence workshops are free for schools and anganwadis — funded entirely by donations like yours.",
+  ],
+  "child-safety": [
+    "1098 CHILDLINE reaches every district — we teach children the number the way they learn their own name.",
+    "POCSO makes every adult a mandated protector; our teacher trainings turn that legal duty into practical steps.",
+    "Every facilitator is background-verified and signs the child-protection charter — no exceptions.",
+    "Sessions are age-graded, in the school's medium of instruction, with take-home cards for parents.",
+  ],
+  "medicine-adoption": [
+    "Jan Aushadhi (PMBJP) pricing cuts chronic-medicine costs by 50–90% — your donation buys wholesale, not retail.",
+    "Every adopted patient's prescription is verified by a registered pharmacist before purchase.",
+    "Deliveries carry a QR receipt and an adherence log the patient's clinic can read.",
+    "Adopt a patient fully, or share a monthly pledge — both are tracked in the same public ledger.",
+  ],
+  "animal-welfare": [
+    "ABC (Animal Birth Control) programmes under AWBI rules are the proven, humane way to stabilise street-dog populations.",
+    "1962 (AWBI) and local SOS lines route rescues to trained handlers — never to untrained good intentions.",
+    "Every rescue is vaccinated and sterilised before adoption or return, with batch numbers logged.",
+    "Feeding points are fixed, mapped and volunteer-rostered so no animal depends on one person's memory.",
+  ],
+  "green-corridor": [
+    "Cardiac survival drops 10–15% every minute lost; a 25-minute saving is not convenience, it is a life.",
+    "Four alert layers — V2X/5G, cell broadcast, offline BLE mesh, FM-RDS — back each other up; the adaptive siren is the last resort.",
+    "BLE beacons cost ~₹500 each and work with no internet, no SIM, no tower — exactly when floods kill networks.",
+    "Every corridor event is timestamped per segment and auditable — savings are measured, never claimed.",
+  ],
+  "ration-kits": [
+    "Kits follow the PDS basket a family actually cooks — rice, dal, oil, salt, staples — not a photo-op hamper.",
+    "Every kit carries a QR that is scanned at the beneficiary's door; no scan, no closure, an audit instead.",
+    "Assembly cost stays at ~₹500 per kit for a family of four through wholesale procurement.",
+    "Distribution lanes run weekly so a family never waits more than seven days for the next kit.",
+  ],
+  "sanitary-pads": [
+    "NFHS-5 shows large gaps in menstrual-hygiene access — school pad banks close it where girls actually are.",
+    "Certified biodegradable pads cut the landfill load a school of 400 girls would otherwise generate.",
+    "Sessions include boys — shame survives on ignorance, and culture change starts in one classroom.",
+    "Anemia screening camps partner with PHCs and follow the Anemia Mukt Bharat supplementation protocol.",
+  ],
+};
+
+export const DONOR_FAQS: { q: string; a: string }[] = [
+  {
+    q: "Is my donation 80G eligible?",
+    a: "Yes. United Angel Reach Trust is registered under Section 80G of the Income-tax Act — donors get a 50% tax deduction on qualifying gifts. Add your PAN while donating and the receipt is issued in a tax-ready format automatically.",
+  },
+  {
+    q: "How do I get a receipt?",
+    a: "Instantly. Every gift gets a unique receipt number (UAR-RCPT-…) on the thank-you screen, with a print-ready 80G receipt you can download right away. The same receipt is emailed to you, and it lives in your Donor Portal forever.",
+  },
+  {
+    q: "Can I donate monthly?",
+    a: "Yes — choose “Monthly” on the amount step. Monthly giving is the most powerful kind: it lets us commit to a patient's medicines or a family's kits for a full year, not just one distribution. You can pause or stop any time from your Donor Portal.",
+  },
+  {
+    q: "Where does my money actually go?",
+    a: "At least 92% of every rupee reaches programmes — the rest is a lean, audited ops desk. Kits, pads and medicines carry a QR that is scanned at the beneficiary's door, and monthly public reports reconcile money against scans. If we can't evidence it, we don't claim it.",
+  },
+];
+
+export const ORG_DEFAULTS = {
+  orgName: "United Angel Reach",
+  orgHq: "Bengaluru, Karnataka",
+  orgAddress: "United Angel Reach Trust, Indiranagar, Bengaluru, Karnataka 560038, India",
+  orgEmail: "care@unitedangelreach.org",
+  orgPhone: "",
+  org80g: "",
+  orgPan: "",
+  orgReg12a: "",
+  orgDarpan: "",
+  upiId: "unitedangelreach@upi",
+  signatoryName: "Managing Trustee",
+  signatoryRole: "United Angel Reach Trust",
+  vision:
+    "A country where help is one call away — and provable. Bengaluru is our laboratory; India is the mission: every playbook that works in one ward scales to the next hundred cities.",
+};
+
+export type OrgFallbacks = typeof ORG_DEFAULTS;
+
+/** Merge a (possibly partial) /api/settings/public payload over the defaults. */
+export function orgWithFallbacks(payload: Partial<OrgFallbacks> | null | undefined): OrgFallbacks {
+  return { ...ORG_DEFAULTS, ...(payload ?? {}) };
+}
+
+/* ============================================================
  * END — campaign-data.ts (pure data; no side effects, no imports)
  * ============================================================ */

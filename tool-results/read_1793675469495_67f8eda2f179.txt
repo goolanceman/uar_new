@@ -1,0 +1,706 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import {
+     5→  HandCoins, HeartPulse, MapPin, MoreHorizontal, PawPrint, Pencil, Plus,
+     6→  RefreshCw, Scissors, Syringe, Trash2,
+     7→} from "lucide-react";
+     8→import { toast } from "sonner";
+     9→import { del, get, patch, post } from "@/lib/api-client";
+    10→import { labelOf, useMasters } from "@/hooks/use-masters";
+    11→import { cn, formatINR, titleCase } from "@/lib/utils";
+    12→import { Badge } from "@/components/ui/badge";
+    13→import { Button } from "@/components/ui/button";
+    14→import { Card, CardContent } from "@/components/ui/card";
+    15→import {
+    16→  Dialog,
+    17→  DialogContent,
+    18→  DialogDescription,
+    19→  DialogFooter,
+    20→  DialogHeader,
+    21→  DialogTitle,
+    22→} from "@/components/ui/dialog";
+    23→import {
+    24→  DropdownMenu,
+    25→  DropdownMenuContent,
+    26→  DropdownMenuItem,
+    27→  DropdownMenuLabel,
+    28→  DropdownMenuSeparator,
+    29→  DropdownMenuTrigger,
+    30→} from "@/components/ui/dropdown-menu";
+    31→import { Input } from "@/components/ui/input";
+    32→import { Label } from "@/components/ui/label";
+    33→import {
+    34→  Select,
+    35→  SelectContent,
+    36→  SelectItem,
+    37→  SelectTrigger,
+    38→  SelectValue,
+    39→} from "@/components/ui/select";
+    40→import { Skeleton } from "@/components/ui/skeleton";
+    41→import { Switch } from "@/components/ui/switch";
+    42→import {
+    43→  Table,
+    44→  TableBody,
+    45→  TableCell,
+    46→  TableHead,
+    47→  TableHeader,
+    48→  TableRow,
+    49→} from "@/components/ui/table";
+    50→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    51→import { Textarea } from "@/components/ui/textarea";
+    52→
+    53→interface AnimalPledge {
+    54→  id: string;
+    55→  animalId?: string | null;
+    56→  shelterFund?: string | null;
+    57→  donorName: string;
+    58→  kind: string;
+    59→  amount: number;
+    60→  frequency: string;
+    61→  status: string;
+    62→}
+    63→
+    64→interface Animal {
+    65→  id: string;
+    66→  name: string;
+    67→  species: string;
+    68→  breed?: string | null;
+    69→  ageMonths: number;
+    70→  gender: string;
+    71→  story: string;
+    72→  healthStatus?: string | null;
+    73→  vaccinated: boolean;
+    74→  sterilized: boolean;
+    75→  location: string;
+    76→  status: string;
+    77→  monthlyFood: number;
+    78→  pledges?: AnimalPledge[];
+    79→}
+    80→
+    81→interface AnimalForm {
+    82→  name: string;
+    83→  species: string;
+    84→  breed: string;
+    85→  ageMonths: string;
+    86→  gender: string;
+    87→  story: string;
+    88→  healthStatus: string;
+    89→  vaccinated: boolean;
+    90→  sterilized: boolean;
+    91→  location: string;
+    92→  monthlyFood: string;
+    93→}
+    94→
+    95→const SPECIES_EMOJI: Record<string, string> = {
+    96→  DOG: "🐕",
+    97→  CAT: "🐈",
+    98→  COW: "🐄",
+    99→  BIRD: "🐦",
+   100→  OTHER: "🐾",
+   101→};
+   102→
+   103→const ANIMAL_STATUS: Record<string, { label: string; cls: string }> = {
+   104→  AVAILABLE: { label: "Available", cls: "border-lime-200 bg-lime-50 text-lime-800" },
+   105→  FOSTERED: { label: "Fostered", cls: "border-amber-200 bg-amber-50 text-amber-800" },
+   106→  ADOPTED: { label: "Adopted", cls: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+   107→  CRITICAL: { label: "Critical", cls: "border-red-200 bg-red-50 text-red-800 animate-pulse" },
+   108→};
+   109→
+   110→const PLEDGE_KIND_CLS: Record<string, string> = {
+   111→  FOOD: "border-lime-200 bg-lime-50 text-lime-800",
+   112→  MEDICAL: "border-teal-200 bg-teal-50 text-teal-800",
+   113→  VACCINATION: "border-emerald-200 bg-emerald-50 text-emerald-800",
+   114→  SHELTER: "border-amber-200 bg-amber-50 text-amber-800",
+   115→};
+   116→
+   117→const PLEDGE_STATUS_CLS: Record<string, string> = {
+   118→  ACTIVE: "border-emerald-200 bg-emerald-50 text-emerald-800",
+   119→  COMPLETED: "border-teal-200 bg-teal-50 text-teal-800",
+   120→  CANCELLED: "border-zinc-200 bg-zinc-100 text-zinc-600",
+   121→};
+   122→
+   123→const EMPTY_FORM: AnimalForm = {
+   124→  name: "",
+   125→  species: "DOG",
+   126→  breed: "",
+   127→  ageMonths: "12",
+   128→  gender: "MALE",
+   129→  story: "",
+   130→  healthStatus: "",
+   131→  vaccinated: false,
+   132→  sterilized: false,
+   133→  location: "",
+   134→  monthlyFood: "",
+   135→};
+   136→
+   137→function ageText(months: number): string {
+   138→  if (!months && months !== 0) return "—";
+   139→  if (months < 12) return `${months} mo`;
+   140→  return `${Math.floor(months / 12)}y ${months % 12}m`;
+   141→}
+   142→
+   143→export default function AnimalsView() {
+   144→  const [tab, setTab] = useState("animals");
+   145→  const [animals, setAnimals] = useState<Animal[]>([]);
+   146→  const [loading, setLoading] = useState(true);
+   147→  const [dialogOpen, setDialogOpen] = useState(false);
+   148→  const [editing, setEditing] = useState<Animal | null>(null);
+   149→  const [form, setForm] = useState<AnimalForm>(EMPTY_FORM);
+   150→  const [saving, setSaving] = useState(false);
+   151→  const [deleteTarget, setDeleteTarget] = useState<Animal | null>(null);
+   152→
+   153→  const speciesOptions = useMasters("ANIMAL_SPECIES");
+   154→
+   155→  const load = useCallback(async () => {
+   156→    try {
+   157→      const data = await get<Animal[]>("/api/animals");
+   158→      setAnimals(Array.isArray(data) ? data : []);
+   159→    } catch (e) {
+   160→      toast.error(e instanceof Error ? e.message : "Failed to load animals");
+   161→    } finally {
+   162→      setLoading(false);
+   163→    }
+   164→  }, []);
+   165→
+   166→  useEffect(() => {
+   167→    load();
+   168→  }, [load]);
+   169→
+   170→  const openCreate = () => {
+   171→    setEditing(null);
+   172→    setForm(EMPTY_FORM);
+   173→    setDialogOpen(true);
+   174→  };
+   175→
+   176→  const openEdit = (a: Animal) => {
+   177→    setEditing(a);
+   178→    setForm({
+   179→      name: a.name ?? "",
+   180→      species: a.species ?? "DOG",
+   181→      breed: a.breed ?? "",
+   182→      ageMonths: String(a.ageMonths ?? 12),
+   183→      gender: a.gender ?? "MALE",
+   184→      story: a.story ?? "",
+   185→      healthStatus: a.healthStatus ?? "",
+   186→      vaccinated: !!a.vaccinated,
+   187→      sterilized: !!a.sterilized,
+   188→      location: a.location ?? "",
+   189→      monthlyFood: String(a.monthlyFood ?? 0),
+   190→    });
+   191→    setDialogOpen(true);
+   192→  };
+   193→
+   194→  const save = async () => {
+   195→    if (!form.name.trim() || !form.location.trim()) {
+   196→      toast.error("Name and location are required");
+   197→      return;
+   198→    }
+   199→    setSaving(true);
+   200→    try {
+   201→      const body = {
+   202→        name: form.name.trim(),
+   203→        species: form.species,
+   204→        breed: form.breed.trim(),
+   205→        ageMonths: Number(form.ageMonths) || 0,
+   206→        gender: form.gender,
+   207→        story: form.story.trim(),
+   208→        healthStatus: form.healthStatus.trim(),
+   209→        vaccinated: form.vaccinated,
+   210→        sterilized: form.sterilized,
+   211→        location: form.location.trim(),
+   212→        monthlyFood: Number(form.monthlyFood) || 0,
+   213→      };
+   214→      if (editing) {
+   215→        await patch(`/api/animals/${editing.id}`, body);
+   216→        toast.success(`${editing.name} updated`);
+   217→      } else {
+   218→        await post("/api/animals", body);
+   219→        toast.success(`${body.name} added to Angel Paws`);
+   220→      }
+   221→      setDialogOpen(false);
+   222→      load();
+   223→    } catch (e) {
+   224→      toast.error(e instanceof Error ? e.message : "Save failed");
+   225→    } finally {
+   226→      setSaving(false);
+   227→    }
+   228→  };
+   229→
+   230→  const setStatus = async (a: Animal, status: string) => {
+   231→    try {
+   232→      await patch(`/api/animals/${a.id}`, { status });
+   233→      toast.success(`${a.name} marked ${titleCase(status).toLowerCase()}`);
+   234→      load();
+   235→    } catch (e) {
+   236→      toast.error(e instanceof Error ? e.message : "Update failed");
+   237→    }
+   238→  };
+   239→
+   240→  const remove = async () => {
+   241→    if (!deleteTarget) return;
+   242→    try {
+   243→      await del(`/api/animals/${deleteTarget.id}`);
+   244→      toast.success(`${deleteTarget.name} removed`);
+   245→      setDeleteTarget(null);
+   246→      load();
+   247→    } catch (e) {
+   248→      toast.error(e instanceof Error ? e.message : "Delete failed");
+   249→    }
+   250→  };
+   251→
+   252→  const cancelPledge = async (p: AnimalPledge) => {
+   253→    try {
+   254→      await patch(`/api/animal-pledges/${p.id}`, { status: "CANCELLED" });
+   255→      toast.success(`Pledge by ${p.donorName} cancelled`);
+   256→      load();
+   257→    } catch (e) {
+   258→      toast.error(e instanceof Error ? e.message : "Cancel failed");
+   259→    }
+   260→  };
+   261→
+   262→  const pledges = useMemo(
+   263→    () =>
+   264→      animals.flatMap((a) =>
+   265→        (a.pledges ?? []).map((p) => ({
+   266→          ...p,
+   267→          target: p.animalId ? a.name : (p.shelterFund ?? "Shelter fund"),
+   268→        }))
+   269→      ),
+   270→    [animals]
+   271→  );
+   272→
+   273→  const counts = useMemo(
+   274→    () => ({
+   275→      available: animals.filter((a) => a.status === "AVAILABLE").length,
+   276→      critical: animals.filter((a) => a.status === "CRITICAL").length,
+   277→      adopted: animals.filter((a) => a.status === "ADOPTED").length,
+   278→    }),
+   279→    [animals]
+   280→  );
+   281→
+   282→  return (
+   283→    <div className="space-y-4">
+   284→      <div className="flex flex-wrap items-center gap-2">
+   285→        <Badge variant="outline" className="border-lime-200 bg-lime-50 text-lime-800">
+   286→          {counts.available} available
+   287→        </Badge>
+   288→        <Badge variant="outline" className="border-red-200 bg-red-50 text-red-800">
+   289→          {counts.critical} critical
+   290→        </Badge>
+   291→        <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
+   292→          {counts.adopted} adopted
+   293→        </Badge>
+   294→        <div className="ml-auto flex gap-2">
+   295→          <Button variant="outline" size="icon" onClick={load} aria-label="Refresh animals">
+   296→            <RefreshCw className="size-4" />
+   297→          </Button>
+   298→          <Button onClick={openCreate}>
+   299→            <Plus className="size-4" /> Add animal
+   300→          </Button>
+   301→        </div>
+   302→      </div>
+   303→
+   304→      <Tabs value={tab} onValueChange={setTab}>
+   305→        <TabsList>
+   306→          <TabsTrigger value="animals">Residents</TabsTrigger>
+   307→          <TabsTrigger value="pledges">Pledges ({pledges.length})</TabsTrigger>
+   308→        </TabsList>
+   309→
+   310→        {/* ================= ANIMALS ================= */}
+   311→        <TabsContent value="animals" className="mt-4">
+   312→          {loading ? (
+   313→            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   314→              {[0, 1, 2, 3, 4, 5].map((i) => (
+   315→                <Skeleton key={i} className="h-64 rounded-xl" />
+   316→              ))}
+   317→            </div>
+   318→          ) : animals.length === 0 ? (
+   319→            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-center">
+   320→              <PawPrint className="size-8 text-muted-foreground/50" />
+   321→              <p className="text-sm font-medium">No residents yet</p>
+   322→              <p className="max-w-sm text-xs text-muted-foreground">
+   323→                Add rescued animals so donors can sponsor food and medical care.
+   324→              </p>
+   325→            </div>
+   326→          ) : (
+   327→            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   328→              {animals.map((a) => {
+   329→                const st = ANIMAL_STATUS[a.status] ?? ANIMAL_STATUS.AVAILABLE;
+   330→                const pledgeCount = (a.pledges ?? []).length;
+   331→                return (
+   332→                  <Card key={a.id} className="flex flex-col">
+   333→                    <CardContent className="flex flex-1 flex-col gap-3 p-4">
+   334→                      <div className="flex items-start gap-3">
+   335→                        <span
+   336→                          className="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-xl"
+   337→                          aria-hidden="true"
+   338→                        >
+   339→                          {SPECIES_EMOJI[a.species] ?? "🐾"}
+   340→                        </span>
+   341→                        <div className="min-w-0 flex-1">
+   342→                          <p className="truncate font-semibold leading-tight">{a.name}</p>
+   343→                          <p className="truncate text-xs text-muted-foreground">
+   344→                            {labelOf(speciesOptions.options, a.species)}
+   345→                            {a.breed ? ` · ${a.breed}` : ""} · {ageText(a.ageMonths)}
+   346→                          </p>
+   347→                        </div>
+   348→                        <Badge variant="outline" className={cn("shrink-0", st.cls)}>
+   349→                          {st.label}
+   350→                        </Badge>
+   351→                      </div>
+   352→
+   353→                      <div className="flex flex-wrap gap-1.5">
+   354→                        <Badge variant="outline">
+   355→                          {a.gender === "FEMALE" ? "♀ Female" : "♂ Male"}
+   356→                        </Badge>
+   357→                        <Badge
+   358→                          variant="outline"
+   359→                          className={
+   360→                            a.vaccinated
+   361→                              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+   362→                              : "text-zinc-500"
+   363→                          }
+   364→                        >
+   365→                          <Syringe className="size-3" />
+   366→                          {a.vaccinated ? "Vaccinated" : "Not vaccinated"}
+   367→                        </Badge>
+   368→                        <Badge
+   369→                          variant="outline"
+   370→                          className={
+   371→                            a.sterilized
+   372→                              ? "border-teal-200 bg-teal-50 text-teal-800"
+   373→                              : "text-zinc-500"
+   374→                          }
+   375→                        >
+   376→                          <Scissors className="size-3" />
+   377→                          {a.sterilized ? "Sterilized" : "Not sterilized"}
+   378→                        </Badge>
+   379→                        {a.healthStatus ? (
+   380→                          <Badge variant="outline" className="border-red-200 bg-red-50 text-red-800">
+   381→                            <HeartPulse className="size-3" />
+   382→                            {a.healthStatus}
+   383→                          </Badge>
+   384→                        ) : null}
+   385→                      </div>
+   386→
+   387→                      <p className="line-clamp-2 text-xs text-muted-foreground">{a.story}</p>
+   388→
+   389→                      <div className="mt-auto space-y-2">
+   390→                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+   391→                          <span className="flex min-w-0 items-center gap-1">
+   392→                            <MapPin className="size-3.5 shrink-0" />
+   393→                            <span className="truncate">{a.location}</span>
+   394→                          </span>
+   395→                          <span className="whitespace-nowrap font-medium text-foreground">
+   396→                            {formatINR(a.monthlyFood)}/mo food
+   397→                          </span>
+   398→                        </div>
+   399→                        {pledgeCount > 0 ? (
+   400→                          <Badge variant="outline" className="border-lime-200 bg-lime-50 text-lime-800">
+   401→                            <HandCoins className="size-3" />
+   402→                            {pledgeCount} pledge{pledgeCount === 1 ? "" : "s"}
+   403→                          </Badge>
+   404→                        ) : null}
+   405→                      </div>
+   406→
+   407→                      <div className="flex gap-1.5 border-t pt-3">
+   408→                        <DropdownMenu>
+   409→                          <DropdownMenuTrigger asChild>
+   410→                            <Button
+   411→                              variant="outline"
+   412→                              size="sm"
+   413→                              aria-label={`Change status of ${a.name}`}
+   414→                            >
+   415→                              <MoreHorizontal className="size-3.5" /> Status
+   416→                            </Button>
+   417→                          </DropdownMenuTrigger>
+   418→                          <DropdownMenuContent align="start">
+   419→                            <DropdownMenuLabel>Set status</DropdownMenuLabel>
+   420→                            <DropdownMenuSeparator />
+   421→                            <DropdownMenuItem onClick={() => setStatus(a, "AVAILABLE")}>
+   422→                              <span className="size-2 rounded-full bg-lime-500" /> Available
+   423→                            </DropdownMenuItem>
+   424→                            <DropdownMenuItem onClick={() => setStatus(a, "FOSTERED")}>
+   425→                              <span className="size-2 rounded-full bg-amber-500" /> Fostered
+   426→                            </DropdownMenuItem>
+   427→                            <DropdownMenuItem onClick={() => setStatus(a, "ADOPTED")}>
+   428→                              <span className="size-2 rounded-full bg-emerald-500" /> Adopted
+   429→                            </DropdownMenuItem>
+   430→                            <DropdownMenuItem
+   431→                              onClick={() => setStatus(a, "CRITICAL")}
+   432→                              className="text-red-600 focus:text-red-700"
+   433→                            >
+   434→                              <span className="size-2 rounded-full bg-red-500" /> Critical
+   435→                            </DropdownMenuItem>
+   436→                          </DropdownMenuContent>
+   437→                        </DropdownMenu>
+   438→                        <Button
+   439→                          variant="outline"
+   440→                          size="sm"
+   441→                          onClick={() => openEdit(a)}
+   442→                          aria-label={`Edit ${a.name}`}
+   443→                        >
+   444→                          <Pencil className="size-3.5" /> Edit
+   445→                        </Button>
+   446→                        <Button
+   447→                          variant="outline"
+   448→                          size="sm"
+   449→                          className="ml-auto text-red-600 hover:bg-red-50 hover:text-red-700"
+   450→                          onClick={() => setDeleteTarget(a)}
+   451→                          aria-label={`Delete ${a.name}`}
+   452→                        >
+   453→                          <Trash2 className="size-3.5" />
+   454→                        </Button>
+   455→                      </div>
+   456→                    </CardContent>
+   457→                  </Card>
+   458→                );
+   459→              })}
+   460→            </div>
+   461→          )}
+   462→        </TabsContent>
+   463→
+   464→        {/* ================= PLEDGES ================= */}
+   465→        <TabsContent value="pledges" className="mt-4">
+   466→          {loading ? (
+   467→            <Skeleton className="h-64 rounded-lg" />
+   468→          ) : pledges.length === 0 ? (
+   469→            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-center">
+   470→              <HandCoins className="size-8 text-muted-foreground/50" />
+   471→              <p className="text-sm font-medium">No animal pledges yet</p>
+   472→              <p className="max-w-sm text-xs text-muted-foreground">
+   473→                Donor pledges for food, medical care and shelter appear here.
+   474→              </p>
+   475→            </div>
+   476→          ) : (
+   477→            <div className="overflow-x-auto rounded-lg border">
+   478→              <Table>
+   479→                <TableHeader>
+   480→                  <TableRow>
+   481→                    <TableHead>Donor</TableHead>
+   482→                    <TableHead>For</TableHead>
+   483→                    <TableHead>Kind</TableHead>
+   484→                    <TableHead className="text-right">Amount</TableHead>
+   485→                    <TableHead>Frequency</TableHead>
+   486→                    <TableHead>Status</TableHead>
+   487→                    <TableHead className="text-right">Action</TableHead>
+   488→                  </TableRow>
+   489→                </TableHeader>
+   490→                <TableBody>
+   491→                  {pledges.map((p) => (
+   492→                    <TableRow key={p.id}>
+   493→                      <TableCell className="font-medium">{p.donorName}</TableCell>
+   494→                      <TableCell>{p.target}</TableCell>
+   495→                      <TableCell>
+   496→                        <Badge variant="outline" className={cn("whitespace-nowrap", PLEDGE_KIND_CLS[p.kind] ?? "")}>
+   497→                          {titleCase(p.kind)}
+   498→                        </Badge>
+   499→                      </TableCell>
+   500→                      <TableCell className="text-right">{formatINR(p.amount)}</TableCell>
+   501→                      <TableCell>{titleCase(p.frequency)}</TableCell>
+   502→                      <TableCell>
+   503→                        <Badge
+   504→                          variant="outline"
+   505→                          className={cn("whitespace-nowrap", PLEDGE_STATUS_CLS[p.status] ?? "")}
+   506→                        >
+   507→                          {titleCase(p.status)}
+   508→                        </Badge>
+   509→                      </TableCell>
+   510→                      <TableCell className="text-right">
+   511→                        {p.status === "ACTIVE" ? (
+   512→                          <Button
+   513→                            variant="outline"
+   514→                            size="sm"
+   515→                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+   516→                            onClick={() => cancelPledge(p)}
+   517→                            aria-label={`Cancel pledge by ${p.donorName}`}
+   518→                          >
+   519→                            Cancel
+   520→                          </Button>
+   521→                        ) : (
+   522→                          <span className="text-xs text-muted-foreground">—</span>
+   523→                        )}
+   524→                      </TableCell>
+   525→                    </TableRow>
+   526→                  ))}
+   527→                </TableBody>
+   528→              </Table>
+   529→            </div>
+   530→          )}
+   531→        </TabsContent>
+   532→      </Tabs>
+   533→
+   534→      {/* ============ CREATE / EDIT DIALOG ============ */}
+   535→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   536→        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+   537→          <DialogHeader>
+   538→            <DialogTitle>{editing ? `Edit ${editing.name}` : "Add animal"}</DialogTitle>
+   539→            <DialogDescription>
+   540→              Angel Paws resident profile — donors sponsor food and care.
+   541→            </DialogDescription>
+   542→          </DialogHeader>
+   543→          <div className="grid gap-4">
+   544→            <div className="grid gap-4 sm:grid-cols-2">
+   545→              <div className="grid gap-2">
+   546→                <Label htmlFor="an-name">Name *</Label>
+   547→                <Input
+   548→                  id="an-name"
+   549→                  value={form.name}
+   550→                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+   551→                  placeholder="Simba"
+   552→                />
+   553→              </div>
+   554→              <div className="grid gap-2">
+   555→                <Label>Species</Label>
+   556→                <Select
+   557→                  value={form.species}
+   558→                  onValueChange={(v) => setForm({ ...form, species: v })}
+   559→                >
+   560→                  <SelectTrigger aria-label="Species">
+   561→                    <SelectValue placeholder="Select species" />
+   562→                  </SelectTrigger>
+   563→                  <SelectContent>
+   564→                    {speciesOptions.options.map((o) => (
+   565→                      <SelectItem key={o.value} value={o.value}>
+   566→                        {o.label}
+   567→                      </SelectItem>
+   568→                    ))}
+   569→                  </SelectContent>
+   570→                </Select>
+   571→              </div>
+   572→            </div>
+   573→            <div className="grid gap-4 sm:grid-cols-3">
+   574→              <div className="grid gap-2">
+   575→                <Label htmlFor="an-breed">Breed</Label>
+   576→                <Input
+   577→                  id="an-breed"
+   578→                  value={form.breed}
+   579→                  onChange={(e) => setForm({ ...form, breed: e.target.value })}
+   580→                  placeholder="Indie"
+   581→                />
+   582→              </div>
+   583→              <div className="grid gap-2">
+   584→                <Label htmlFor="an-age">Age (months)</Label>
+   585→                <Input
+   586→                  id="an-age"
+   587→                  type="number"
+   588→                  min={0}
+   589→                  value={form.ageMonths}
+   590→                  onChange={(e) => setForm({ ...form, ageMonths: e.target.value })}
+   591→                />
+   592→              </div>
+   593→              <div className="grid gap-2">
+   594→                <Label>Gender</Label>
+   595→                <Select
+   596→                  value={form.gender}
+   597→                  onValueChange={(v) => setForm({ ...form, gender: v })}
+   598→                >
+   599→                  <SelectTrigger aria-label="Gender">
+   600→                    <SelectValue placeholder="Select" />
+   601→                  </SelectTrigger>
+   602→                  <SelectContent>
+   603→                    <SelectItem value="MALE">Male</SelectItem>
+   604→                    <SelectItem value="FEMALE">Female</SelectItem>
+   605→                  </SelectContent>
+   606→                </Select>
+   607→              </div>
+   608→            </div>
+   609→            <div className="grid gap-4 sm:grid-cols-2">
+   610→              <div className="grid gap-2">
+   611→                <Label htmlFor="an-location">Location *</Label>
+   612→                <Input
+   613→                  id="an-location"
+   614→                  value={form.location}
+   615→                  onChange={(e) => setForm({ ...form, location: e.target.value })}
+   616→                  placeholder="Jayanagar shelter"
+   617→                />
+   618→              </div>
+   619→              <div className="grid gap-2">
+   620→                <Label htmlFor="an-food">Monthly food (₹)</Label>
+   621→                <Input
+   622→                  id="an-food"
+   623→                  type="number"
+   624→                  min={0}
+   625→                  value={form.monthlyFood}
+   626→                  onChange={(e) => setForm({ ...form, monthlyFood: e.target.value })}
+   627→                  placeholder="1500"
+   628→                />
+   629→              </div>
+   630→            </div>
+   631→            <div className="grid gap-2">
+   632→              <Label htmlFor="an-health">Health status</Label>
+   633→              <Input
+   634→                id="an-health"
+   635→                value={form.healthStatus}
+   636→                onChange={(e) => setForm({ ...form, healthStatus: e.target.value })}
+   637→                placeholder="Recovering from mange"
+   638→              />
+   639→            </div>
+   640→            <div className="grid gap-2">
+   641→              <Label htmlFor="an-story">Story</Label>
+   642→              <Textarea
+   643→                id="an-story"
+   644→                rows={3}
+   645→                value={form.story}
+   646→                onChange={(e) => setForm({ ...form, story: e.target.value })}
+   647→                placeholder="Rescued from a highway median with a fractured leg…"
+   648→              />
+   649→            </div>
+   650→            <div className="grid gap-4 sm:grid-cols-2">
+   651→              <div className="flex items-center justify-between rounded-lg border p-3">
+   652→                <Label htmlFor="an-vaccinated" className="cursor-pointer">
+   653→                  Vaccinated
+   654→                </Label>
+   655→                <Switch
+   656→                  id="an-vaccinated"
+   657→                  checked={form.vaccinated}
+   658→                  onCheckedChange={(v) => setForm({ ...form, vaccinated: v })}
+   659→                />
+   660→              </div>
+   661→              <div className="flex items-center justify-between rounded-lg border p-3">
+   662→                <Label htmlFor="an-sterilized" className="cursor-pointer">
+   663→                  Sterilized
+   664→                </Label>
+   665→                <Switch
+   666→                  id="an-sterilized"
+   667→                  checked={form.sterilized}
+   668→                  onCheckedChange={(v) => setForm({ ...form, sterilized: v })}
+   669→                />
+   670→              </div>
+   671→            </div>
+   672→          </div>
+   673→          <DialogFooter>
+   674→            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+   675→              Cancel
+   676→            </Button>
+   677→            <Button onClick={save} disabled={saving}>
+   678→              {saving ? "Saving…" : editing ? "Save changes" : "Add animal"}
+   679→            </Button>
+   680→          </DialogFooter>
+   681→        </DialogContent>
+   682→      </Dialog>
+   683→
+   684→      {/* ============ DELETE CONFIRM ============ */}
+   685→      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   686→        <DialogContent className="sm:max-w-sm">
+   687→          <DialogHeader>
+   688→            <DialogTitle>Remove {deleteTarget?.name}?</DialogTitle>
+   689→            <DialogDescription>
+   690→              This permanently removes the resident and its pledge records.
+   691→            </DialogDescription>
+   692→          </DialogHeader>
+   693→          <DialogFooter>
+   694→            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+   695→              Keep
+   696→            </Button>
+   697→            <Button variant="destructive" onClick={remove}>
+   698→              Remove
+   699→            </Button>
+   700→          </DialogFooter>
+   701→        </DialogContent>
+   702→      </Dialog>
+   703→    </div>
+   704→  );
+   705→}
+   706→

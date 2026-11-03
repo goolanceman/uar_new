@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   Activity, Ambulance, BadgeCheck, Boxes, ChevronDown, ClipboardList,
-  FileBarChart, HeartHandshake, LayoutDashboard,
+  ExternalLink, FileBarChart, HeartHandshake, LayoutDashboard,
   LogOut, Menu, Package, PawPrint, Pill, RefreshCw, Settings, ShieldCheck,
   Sprout, TrendingUp, Users, X,
 } from "lucide-react";
@@ -11,6 +11,15 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { navigate, useRoute } from "@/lib/router";
 import { useAuth } from "@/hooks/use-auth";
+import { ThemeToggle } from "@/components/shared/theme-toggle";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { AssistantWidget } from "@/components/shared/assistant-widget";
 import DashboardView from "@/components/admin/dashboard-view";
 import DonationsView from "@/components/admin/donations-view";
@@ -92,7 +101,7 @@ function AdminNav({
     <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="Admin sections">
       {NAV.map((group: { group: string; items: NavItem[] }) => (
         <div key={group.group}>
-          <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground/80">
             {group.group}
           </p>
           <div className="space-y-0.5">
@@ -107,10 +116,10 @@ function AdminNav({
                     onNavigate?.();
                   }}
                   className={cn(
-                    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition",
+                    "flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-sidebar-ring",
                     active
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-foreground/70 hover:bg-accent hover:text-foreground"
+                      ? "bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/40"
+                      : "text-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   )}
                 >
                   <Icon className="size-4 shrink-0" />
@@ -197,21 +206,64 @@ export default function AdminApp() {
           <h1 className="truncate text-sm font-semibold sm:text-base">
             {current?.label ?? "Dashboard"}
           </h1>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="hidden rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary sm:inline">
-              {user?.name} · ADMIN
-            </span>
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <ThemeToggle align="end" />
             <Button
               size="icon"
               variant="ghost"
+              className="sm:hidden"
               aria-label="Sign out"
               onClick={async () => {
                 await logout();
                 navigate("/");
               }}
             >
-              <LogOut className="size-4" />
+              <LogOut className="size-4" aria-hidden="true" />
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Account menu"
+                  className="hidden min-h-11 items-center gap-2 rounded-full bg-primary/10 py-1 pl-1.5 pr-2.5 outline-none transition-colors hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring sm:flex"
+                >
+                  <span className="flex size-7 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                    {(user?.name ?? "A")
+                      .split(" ")
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((w) => w.charAt(0).toUpperCase())
+                      .join("")}
+                  </span>
+                  <span className="max-w-[140px] truncate text-xs font-semibold text-primary">
+                    {user?.name}
+                  </span>
+                  <ChevronDown className="size-3.5 text-primary/70" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <span className="block truncate">{user?.name}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {user?.email} · {user?.role ?? "ADMIN"}
+                  </span>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/")}>
+                  <ExternalLink className="size-4" aria-hidden="true" /> View public site
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={async () => {
+                    await logout();
+                    navigate("/");
+                  }}
+                >
+                  <LogOut className="size-4" aria-hidden="true" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
@@ -234,8 +286,8 @@ export default function AdminApp() {
           {view === "settings" && <SettingsView />}
         </main>
 
-        <footer className="mt-auto border-t bg-background px-6 py-3 text-center text-xs text-muted-foreground">
-          United Angel Reach Trust · Bengaluru, Karnataka → serving all of India · 80G eligible
+        <footer className="mt-auto border-t bg-background px-4 py-3 text-center text-xs text-muted-foreground sm:px-6">
+          United Angel Reach · Bengaluru, Karnataka → serving all of India
         </footer>
       </div>
 

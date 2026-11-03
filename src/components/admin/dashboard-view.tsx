@@ -1,12 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
@@ -16,50 +13,57 @@ import {
   YAxis,
 } from "recharts";
 import {
-  AlertTriangle,
   Ambulance,
   ArrowRight,
   BadgeCheck,
+  ClipboardList,
+  HandCoins,
   HeartHandshake,
-  IndianRupee,
-  Info,
+  Inbox,
+  LayoutDashboard,
   PackageCheck,
+  RefreshCw,
+  ReceiptText,
+  Sprout,
   TrendingUp,
+  UserRoundPlus,
   Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { get } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
-import { cn, formatINR, formatNumber, timeAgo, titleCase } from "@/lib/utils";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import {
+  financialYear,
+  formatINR,
+  formatINRCompact,
+  formatDateTime,
+  titleCase,
+  initials,
+} from "@/lib/format";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatCard } from "@/components/shared/stat-card";
+import { EmptyState } from "@/components/shared/empty-state";
+import { SectionCard } from "@/components/shared/section-card";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 
 /* ------------------------------ types & helpers ----------------------------- */
 
 type Rec = Record<string, unknown>;
 
-interface DonationRow {
-  id: string;
-  donorName: string;
-  amount: number;
-  paymentStatus: string;
-  createdAt: string;
-  campaignTitle?: string | null;
-  campaign?: { title?: string } | null;
-}
-
-interface StatsResponse extends Rec {
-  monthlyDonations?: Rec[];
-  byCampaign?: Rec[];
-  byRole?: Rec[];
-  recentDonations?: Rec[];
+function asArray(v: unknown): Rec[] {
+  if (Array.isArray(v)) return v as Rec[];
+  if (v && typeof v === "object") {
+    const o = v as Rec;
+    if (Array.isArray(o.items)) return o.items as Rec[];
+  }
+  return [];
 }
 
 function pickNum(o: Rec | null | undefined, keys: string[], fb = 0): number {
   if (!o) return fb;
-  const sources: Rec[] = [o, (o.totals ?? {}) as Rec];
+  const sources: Rec[] = [o, (o.kpis ?? {}) as Rec, (o.totals ?? {}) as Rec];
   for (const src of sources) {
     for (const k of keys) {
       const v = src[k];
@@ -72,7 +76,7 @@ function pickNum(o: Rec | null | undefined, keys: string[], fb = 0): number {
 
 function pickStr(o: Rec | null | undefined, keys: string[], fb = ""): string {
   if (!o) return fb;
-  const sources: Rec[] = [o, (o.totals ?? {}) as Rec];
+  const sources: Rec[] = [o, (o.kpis ?? {}) as Rec, (o.totals ?? {}) as Rec];
   for (const src of sources) {
     for (const k of keys) {
       const v = src[k];
@@ -82,87 +86,58 @@ function pickStr(o: Rec | null | undefined, keys: string[], fb = ""): string {
   return fb;
 }
 
-function asArray(v: unknown): Rec[] {
-  if (Array.isArray(v)) return v as Rec[];
-  if (v && typeof v === "object") {
-    const o = v as Rec;
-    if (Array.isArray(o.items)) return o.items as Rec[];
-    if (Array.isArray(o.data)) return o.data as Rec[];
-  }
-  return [];
-}
+const DONUT_COLORS = [
+  "#10b981", "#f59e0b", "#ec4899", "#14b8a6", "#f97316",
+  "#84cc16", "#ef4444", "#06b6d4", "#d946ef",
+];
 
-const CHART_COLORS = ["#10b981", "#f59e0b", "#ec4899", "#14b8a6", "#f97316", "#84cc16", "#ef4444", "#06b6d4", "#a855f7"];
-
-function statusBadgeClass(status: string): string {
-  switch (status) {
-    case "COMPLETED":
-    case "ACTIVE":
-      return "bg-emerald-100 text-emerald-700";
-    case "PENDING":
-      return "bg-amber-100 text-amber-700";
-    case "FAILED":
-    case "REFUNDED":
-    case "REJECTED":
-      return "bg-red-100 text-red-700";
-    default:
-      return "bg-zinc-100 text-zinc-600";
-  }
-}
-
-/* --------------------------------- KPI card -------------------------------- */
-
-function Kpi({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
+interface QuickAction {
   label: string;
-  value: string;
-  sub: string;
-  tone: string;
-}) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
-          <p className="mt-1 truncate text-xl font-bold tracking-tight sm:text-2xl">{value}</p>
-          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{sub}</p>
-        </div>
-        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", tone)}>
-          <Icon className="size-4.5" aria-hidden="true" />
-        </span>
-      </div>
-    </Card>
-  );
+  hint: string;
+  icon: React.ComponentType<{ className?: string }>;
+  to: string;
+  accent: string;
 }
+
+const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Record donation", hint: "Log an offline gift", icon: HandCoins, to: "/admin/donations", accent: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  { label: "New campaign", hint: "Launch a fundraiser", icon: Sprout, to: "/admin/campaigns", accent: "bg-orange-500/10 text-orange-600 dark:text-orange-400" },
+  { label: "Onboard beneficiary", hint: "Register someone in need", icon: UserRoundPlus, to: "/admin/beneficiaries", accent: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400" },
+  { label: "Dispatch ambulance", hint: "Start a green-corridor mission", icon: Ambulance, to: "/admin/ambulance", accent: "bg-red-500/10 text-red-600 dark:text-red-400" },
+  { label: "Create kit batch", hint: "Print ration-kit QR labels", icon: ClipboardList, to: "/admin/kits", accent: "bg-lime-500/10 text-lime-600 dark:text-lime-400" },
+];
 
 /* ---------------------------------- view ----------------------------------- */
 
 export default function DashboardView() {
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [lowStockCount, setLowStockCount] = useState<number | null>(null);
-  const [pendingApps, setPendingApps] = useState<number | null>(null);
+  const [stats, setStats] = useState<Rec | null>(null);
+  const [reports, setReports] = useState<Rec | null>(null);
+  const [lowStock, setLowStock] = useState<Rec[]>([]);
+  const [pendingApps, setPendingApps] = useState<Rec[]>([]);
+  const [pendingQueries, setPendingQueries] = useState<Rec[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const [s, low, apps] = await Promise.all([
-        get<StatsResponse>("/api/stats"),
-        get<unknown>("/api/inventory?low=1").catch(() => [] as unknown),
+      const [s, r, apps, inv, queries] = await Promise.all([
+        get<Rec>("/api/stats"),
+        get<Rec>("/api/reports").catch(() => null),
         get<unknown>("/api/volunteer-applications?status=PENDING").catch(() => [] as unknown),
+        get<unknown>("/api/inventory?limit=100").catch(() => [] as unknown),
+        get<unknown>("/api/contact-queries?status=PENDING").catch(() => [] as unknown),
       ]);
       setStats(s ?? {});
-      setLowStockCount(asArray(low).length);
-      setPendingApps(asArray(apps).length);
+      setReports(r);
+      setPendingApps(asArray(apps));
+      setLowStock(asArray(inv).filter((i) => Number(i.quantity ?? 0) <= Number(i.minStock ?? 0)));
+      setPendingQueries(asArray(queries));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load dashboard stats");
+      toast.error(e instanceof Error ? e.message : "Failed to load dashboard");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -170,274 +145,394 @@ export default function DashboardView() {
     load();
   }, [load]);
 
-  const rec = stats as Rec | null;
-  const raised = pickNum(rec, ["totalRaised", "raised", "totalDonationsAmount"]);
-  const donationsCount = pickNum(rec, ["donationsCount", "totalDonations", "donations"]);
-  const beneficiaries = pickNum(rec, ["beneficiaries", "beneficiariesCount"]);
-  const volunteers = pickNum(rec, ["volunteers", "volunteersCount"]);
-  const kitsScanned = pickNum(rec, ["kitsScanned", "scannedUnits"]);
-  const kitsTotal = pickNum(rec, ["kitsTotal", "kitsUnits", "totalUnits"]);
-  const corridorMinDirect = pickNum(rec, ["corridorTimeSavedMin", "timeSavedMin"]);
-  const corridorSec = pickNum(rec, ["corridorTimeSavedSec", "timeSavedSec", "corridorTimeSaved"]);
-  const corridorMin = corridorMinDirect || Math.round(corridorSec / 60);
+  /* --------------------------------- KPIs --------------------------------- */
 
-  const monthly = asArray(stats?.monthly ?? stats?.monthlyDonations).map((m) => ({
-    month: pickStr(m, ["month", "label", "name"], "—"),
-    amount: pickNum(m, ["amount", "value", "donations", "total"]),
-  }));
+  const totals = (stats?.totals ?? {}) as Rec;
+  const kpis = (reports?.kpis ?? {}) as Rec;
+  const raisedFY = pickNum(reports, ["totalDonations"]) || pickNum(stats, ["raised"], 0);
+  const donationCount =
+    pickNum(reports, ["donationCount"]) || pickNum(stats, ["donations"], 0);
+  const activeCampaigns = pickNum(stats, ["campaigns"]);
+  const beneficiaries = pickNum(stats, ["beneficiaries"]);
+  const pendingCount = pendingApps.length;
 
-  const byCampaign = asArray(stats?.byCampaign)
-    .map((c) => ({
-      name: pickStr(c, ["name", "title", "campaign"]),
-      raised: pickNum(c, ["raised", "amount", "value", "raisedAmount"]),
-    }))
-    .filter((c) => c.name)
-    .slice(0, 7);
+  /* -------------------------------- charts -------------------------------- */
 
-  const byRole = asArray(stats?.byRole)
-    .map((r) => ({
-      name: pickStr(r, ["name", "role", "label"], "Other"),
-      value: pickNum(r, ["value", "count", "users"]),
-    }))
-    .filter((r) => r.value > 0);
+  const trend = useMemo(() => {
+    const rMonthly = asArray(reports?.monthly);
+    if (rMonthly.length > 0) {
+      return rMonthly.map((m) => ({
+        month: pickStr(m, ["month", "label", "name"], "—"),
+        amount: pickNum(m, ["amount", "value", "total"], 0),
+      }));
+    }
+    return asArray(stats?.monthly).map((m) => ({
+      month: pickStr(m, ["month", "label", "name"], "—"),
+      amount: pickNum(m, ["amount", "value"], 0),
+    }));
+  }, [reports, stats]);
 
-  const recentDonations: DonationRow[] = asArray(stats?.recentDonations)
-    .slice(0, 8)
-    .map((d, i) => ({
-      id: pickStr(d, ["id"], `d-${i}`),
-      donorName: pickStr(d, ["donorName", "name"], "Anonymous"),
-      amount: pickNum(d, ["amount"]),
-      paymentStatus: pickStr(d, ["paymentStatus", "status"], "PENDING"),
-      createdAt: pickStr(d, ["createdAt", "date"]),
-      campaignTitle: pickStr(d, ["campaignTitle"]) || (typeof d.campaign === "object" && d.campaign ? pickStr(d.campaign as Rec, ["title"]) : ""),
+  const categories = useMemo(() => {
+    const rCats = asArray(reports?.categories);
+    if (rCats.length > 0) {
+      return rCats
+        .map((c) => ({
+          name: titleCase(pickStr(c, ["category", "name", "type"], "Other")),
+          value: pickNum(c, ["amount", "value", "count"], 0),
+        }))
+        .filter((c) => c.value > 0)
+        .sort((a, b) => b.value - a.value);
+    }
+    return [];
+  }, [reports]);
+
+  const donut = categories.length > 0 ? categories : [];
+  const fy = financialYear(new Date());
+
+  /* ----------------------------- needs attention --------------------------- */
+
+  const attention: {
+    key: string;
+    icon: React.ReactNode;
+    tone: string;
+    title: string;
+    detail: string;
+    action: string;
+    to: string;
+  }[] = [];
+
+  if (lowStock.length > 0) {
+    const first = lowStock.slice(0, 3).map((i) => pickStr(i, ["name"], "Item"));
+    attention.push({
+      key: "stock",
+      icon: <PackageCheck className="size-4" aria-hidden="true" />,
+      tone: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+      title: `${lowStock.length} inventory item${lowStock.length === 1 ? "" : "s"} at or below minimum stock`,
+      detail: first.join(" · ") + (lowStock.length > 3 ? ` +${lowStock.length - 3} more` : ""),
+      action: "Restock",
+      to: "/admin/inventory",
+    });
+  }
+  if (pendingCount > 0) {
+    const first = pendingApps.slice(0, 3).map((a) => pickStr(a, ["fullName", "name"], "Applicant"));
+    attention.push({
+      key: "volunteers",
+      icon: <BadgeCheck className="size-4" aria-hidden="true" />,
+      tone: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+      title: `${pendingCount} volunteer application${pendingCount === 1 ? "" : "s"} awaiting review`,
+      detail: first.join(" · ") + (pendingCount > 3 ? ` +${pendingCount - 3} more` : ""),
+      action: "Review",
+      to: "/admin/volunteers",
+    });
+  }
+  if (pendingQueries.length > 0) {
+    attention.push({
+      key: "queries",
+      icon: <Inbox className="size-4" aria-hidden="true" />,
+      tone: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400",
+      title: `${pendingQueries.length} unresolved contact quer${pendingQueries.length === 1 ? "y" : "ies"}`,
+      detail: pendingQueries
+        .slice(0, 3)
+        .map((c) => pickStr(c, ["subject"], "Query"))
+        .join(" · "),
+      action: "Open reports",
+      to: "/admin/reports",
+    });
+  }
+
+  /* ---------------------------- latest donations --------------------------- */
+
+  const recent: { name: string; amount: number; campaign: string; at: string }[] = asArray(
+    stats?.recentDonations
+  )
+    .slice(0, 5)
+    .map((d) => ({
+      name: pickStr(d, ["donorName", "name"], "Anonymous"),
+      amount: pickNum(d, ["amount"], 0),
+      campaign: pickStr(d, ["campaign"], "General Fund"),
+      at: pickStr(d, ["createdAt", "date"]),
     }));
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      <PageHeader
+        title="Dashboard"
+        description={`Trust operations at a glance · ${fy} · Bengaluru → India`}
+        icon={<LayoutDashboard className="size-5" aria-hidden="true" />}
+        actions={
+          <Button variant="outline" onClick={load} disabled={refreshing} aria-label="Refresh dashboard data">
+            <RefreshCw className={cn("size-4", refreshing && "animate-spin")} /> Refresh
+          </Button>
+        }
+      />
+
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-6">
-        {loading ? (
-          Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)
-        ) : (
-          <>
-            <Kpi icon={IndianRupee} label="Total Raised" value={formatINR(raised)} sub={`${formatNumber(donationsCount)} donations`} tone="bg-emerald-100 text-emerald-700" />
-            <Kpi icon={TrendingUp} label="Donations" value={formatNumber(donationsCount)} sub="all time" tone="bg-teal-100 text-teal-700" />
-            <Kpi icon={HeartHandshake} label="Beneficiaries" value={formatNumber(beneficiaries)} sub="people supported" tone="bg-fuchsia-100 text-fuchsia-700" />
-            <Kpi icon={Users} label="Volunteers" value={formatNumber(volunteers)} sub="onboarded" tone="bg-amber-100 text-amber-700" />
-            <Kpi icon={PackageCheck} label="Kits Scanned" value={`${formatNumber(kitsScanned)} / ${formatNumber(kitsTotal)}`} sub="scanned / total" tone="bg-lime-100 text-lime-700" />
-            <Kpi icon={Ambulance} label="Corridor Time Saved" value={`${formatNumber(corridorMin)} min`} sub="green corridor" tone="bg-red-100 text-red-700" />
-          </>
-        )}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5 sm:gap-4">
+        <StatCard
+          label="Funds raised"
+          value={formatINRCompact(raisedFY)}
+          icon={<TrendingUp className="size-5" aria-hidden="true" />}
+          accent="emerald"
+          hint={`${fy} · completed gifts`}
+          loading={loading}
+        />
+        <StatCard
+          label="Donations"
+          value={donationCount.toLocaleString("en-IN")}
+          icon={<ReceiptText className="size-5" aria-hidden="true" />}
+          accent="teal"
+          hint="all-time completed"
+          loading={loading}
+        />
+        <StatCard
+          label="Active campaigns"
+          value={activeCampaigns.toLocaleString("en-IN")}
+          icon={<Sprout className="size-5" aria-hidden="true" />}
+          accent="orange"
+          hint="currently fundraising"
+          loading={loading}
+        />
+        <StatCard
+          label="Beneficiaries"
+          value={beneficiaries.toLocaleString("en-IN")}
+          icon={<HeartHandshake className="size-5" aria-hidden="true" />}
+          accent="fuchsia"
+          hint="people supported"
+          loading={loading}
+        />
+        <StatCard
+          label="Volunteers pending"
+          value={pendingCount.toLocaleString("en-IN")}
+          icon={<Users className="size-5" aria-hidden="true" />}
+          accent="amber"
+          hint="applications to approve"
+          loading={loading}
+        />
       </div>
 
-      {/* Action callouts */}
-      {!loading && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Alert
-            className={cn(
-              "flex-row items-center gap-3",
-              (lowStockCount ?? 0) > 0 ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"
-            )}
-          >
-            {(lowStockCount ?? 0) > 0 ? (
-              <AlertTriangle className="size-5 shrink-0 text-amber-600" aria-hidden="true" />
-            ) : (
-              <Info className="size-5 shrink-0 text-emerald-600" aria-hidden="true" />
-            )}
-            <div className="min-w-0 flex-1">
-              <AlertTitle className="text-sm font-semibold">
-                {(lowStockCount ?? 0) > 0 ? `${lowStockCount} item${(lowStockCount ?? 0) === 1 ? "" : "s"} below minimum stock` : "Inventory levels healthy"}
-              </AlertTitle>
-              <AlertDescription className="text-xs">
-                {(lowStockCount ?? 0) > 0 ? "Ration kits and distribution depend on these items." : "All items are at or above their minimum stock levels."}
-              </AlertDescription>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="shrink-0 border-amber-300 bg-white/60 hover:bg-amber-100"
-              onClick={() => navigate("/admin/inventory")}
-            >
-              Open inventory <ArrowRight className="size-3.5" />
-            </Button>
-          </Alert>
-
-          <Alert
-            className={cn(
-              "flex-row items-center gap-3",
-              (pendingApps ?? 0) > 0 ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"
-            )}
-          >
-            {(pendingApps ?? 0) > 0 ? (
-              <BadgeCheck className="size-5 shrink-0 text-amber-600" aria-hidden="true" />
-            ) : (
-              <BadgeCheck className="size-5 shrink-0 text-emerald-600" aria-hidden="true" />
-            )}
-            <div className="min-w-0 flex-1">
-              <AlertTitle className="text-sm font-semibold">
-                {(pendingApps ?? 0) > 0 ? `${pendingApps} volunteer application${(pendingApps ?? 0) === 1 ? "" : "s"} awaiting review` : "No pending volunteer applications"}
-              </AlertTitle>
-              <AlertDescription className="text-xs">
-                {(pendingApps ?? 0) > 0 ? "Applicants are waiting for portal access." : "Every applicant has been reviewed."}
-              </AlertDescription>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="shrink-0 border-amber-300 bg-white/60 hover:bg-amber-100"
-              onClick={() => navigate("/admin/volunteers")}
-            >
-              Review <ArrowRight className="size-3.5" />
-            </Button>
-          </Alert>
-        </div>
-      )}
-
-      {/* Monthly donations area chart */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Monthly donations</CardTitle>
-          <CardDescription>Funds raised per month across all campaigns</CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Charts */}
+      <div className="grid gap-4 lg:grid-cols-5">
+        <SectionCard
+          className="lg:col-span-3"
+          title="Giving trend"
+          description="Funds raised per month"
+          icon={<TrendingUp className="size-4" aria-hidden="true" />}
+        >
           {loading ? (
-            <Skeleton className="h-56 w-full" />
-          ) : monthly.length === 0 ? (
-            <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">No donation data yet</div>
+            <Skeleton className="h-64 w-full" />
+          ) : trend.length === 0 ? (
+            <EmptyState
+              icon={<TrendingUp className="size-6" aria-hidden="true" />}
+              title="No giving data yet"
+              hint="The trend chart fills in as donations arrive."
+            />
           ) : (
-            <div className="h-56 w-full">
+            <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthly} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
+                <AreaChart data={trend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="donationFill" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="dashTrendFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#10b981" stopOpacity={0.35} />
                       <stop offset="100%" stopColor="#10b981" stopOpacity={0.02} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => formatINR(v)} width={56} />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => formatINRCompact(v)}
+                    width={56}
+                  />
                   <Tooltip formatter={(v) => [formatINR(Number(v)), "Raised"]} />
-                  <Area type="monotone" dataKey="amount" stroke="#10b981" strokeWidth={2} fill="url(#donationFill)" />
+                  <Area type="monotone" dataKey="amount" stroke="#10b981" strokeWidth={2} fill="url(#dashTrendFill)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </SectionCard>
 
-      {/* Campaign bar + role pie */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <Card className="lg:col-span-3">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Raised by campaign</CardTitle>
-            <CardDescription>Top campaigns by funds raised</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <Skeleton className="h-56 w-full" />
-            ) : byCampaign.length === 0 ? (
-              <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">No campaign data yet</div>
-            ) : (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={byCampaign} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fontSize: 10 }}
-                      tickLine={false}
-                      axisLine={false}
-                      interval={0}
-                      tickFormatter={(v: string) => (v.length > 12 ? `${v.slice(0, 11)}…` : v)}
-                    />
-                    <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => formatINR(v)} width={56} />
-                    <Tooltip formatter={(v) => [formatINR(Number(v)), "Raised"]} />
-                    <Bar dataKey="raised" fill="#10b981" radius={[6, 6, 0, 0]} maxBarSize={42} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Users by role</CardTitle>
-            <CardDescription>Community composition</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <Skeleton className="h-56 w-full" />
-            ) : byRole.length === 0 ? (
-              <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">No user data yet</div>
-            ) : (
-              <div className="h-56 w-full">
+        <SectionCard
+          className="lg:col-span-2"
+          title="Giving by category"
+          description={`${fy} donation mix`}
+          icon={<HandCoins className="size-4" aria-hidden="true" />}
+        >
+          {loading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : donut.length === 0 ? (
+            <EmptyState
+              icon={<HandCoins className="size-6" aria-hidden="true" />}
+              title="No category data yet"
+              hint="Categorised donations will appear here."
+            />
+          ) : (
+            <div className="flex h-64 flex-col">
+              <div className="min-h-0 flex-1">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={byRole} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
-                      {byRole.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                    <Pie
+                      data={donut}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius="58%"
+                      outerRadius="88%"
+                      paddingAngle={2}
+                      strokeWidth={0}
+                    >
+                      {donut.map((_, i) => (
+                        <Cell key={i} fill={DONUT_COLORS[i % DONUT_COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v, name) => [formatNumber(Number(v)), titleCase(String(name))]} />
+                    <Tooltip formatter={(v, name) => [formatINR(Number(v)), String(name)]} />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="mt-1 flex flex-wrap justify-center gap-x-3 gap-y-1">
-                  {byRole.map((r, i) => (
-                    <span key={r.name} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="size-2 rounded-full" style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }} aria-hidden="true" />
-                      {titleCase(r.name)} · {formatNumber(r.value)}
-                    </span>
-                  ))}
-                </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <div className="mt-2 flex max-h-20 flex-wrap justify-center gap-x-3 gap-y-1 overflow-y-auto scrollbar-thin">
+                {donut.map((c, i) => (
+                  <span key={c.name} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span
+                      className="size-2 rounded-full"
+                      style={{ backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length] }}
+                      aria-hidden="true"
+                    />
+                    {c.name} · {formatINRCompact(c.value)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </SectionCard>
       </div>
 
-      {/* Recent donations */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Recent donations</CardTitle>
-          <CardDescription>Latest contributions received</CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Needs attention + latest donations */}
+      <div className="grid gap-4 lg:grid-cols-5">
+        <SectionCard
+          className="lg:col-span-3"
+          title="Needs attention"
+          description="Items that need an admin decision"
+          icon={<BadgeCheck className="size-4" aria-hidden="true" />}
+          actions={
+            <Button size="sm" variant="ghost" onClick={() => navigate("/admin/activity")} aria-label="Open activity logs">
+              Activity logs <ArrowRight className="size-3.5" aria-hidden="true" />
+            </Button>
+          }
+        >
           {loading ? (
             <div className="space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => (
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-14 w-full" />
+              ))}
+            </div>
+          ) : attention.length === 0 ? (
+            <EmptyState
+              icon={<BadgeCheck className="size-6" aria-hidden="true" />}
+              title="Everything is on track"
+              hint="No low stock, pending applications or unresolved queries right now."
+            />
+          ) : (
+            <ul className="max-h-72 space-y-2 overflow-y-auto scrollbar-thin" aria-label="Items needing attention">
+              {attention.map((a) => (
+                <li
+                  key={a.key}
+                  className="flex items-center gap-3 rounded-lg border p-3 transition hover:bg-accent/50"
+                >
+                  <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", a.tone)}>
+                    {a.icon}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{a.title}</p>
+                    <p className="truncate text-xs text-muted-foreground">{a.detail}</p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => navigate(a.to)} aria-label={`${a.action} — ${a.title}`}>
+                    {a.action} <ArrowRight className="size-3.5" aria-hidden="true" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          className="lg:col-span-2"
+          title="Latest donations"
+          description="Most recent completed gifts"
+          icon={<ReceiptText className="size-4" aria-hidden="true" />}
+          actions={
+            <Button size="sm" variant="ghost" onClick={() => navigate("/admin/donations")} aria-label="View all donations">
+              View all <ArrowRight className="size-3.5" aria-hidden="true" />
+            </Button>
+          }
+        >
+          {loading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : recentDonations.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-1 py-8 text-sm text-muted-foreground">
-              <IndianRupee className="size-6" aria-hidden="true" />
-              No donations recorded yet
-            </div>
+          ) : recent.length === 0 ? (
+            <EmptyState
+              icon={<ReceiptText className="size-6" aria-hidden="true" />}
+              title="No donations yet"
+              hint="Recorded gifts will appear here instantly."
+            >
+              <Button size="sm" onClick={() => navigate("/admin/donations")}>
+                <HandCoins className="size-4" aria-hidden="true" /> Record donation
+              </Button>
+            </EmptyState>
           ) : (
-            <ul className="max-h-96 divide-y overflow-y-auto scrollbar-thin" aria-label="Recent donations">
-              {recentDonations.map((d) => (
-                <li key={d.id} className="flex items-center gap-3 py-2.5">
+            <ul className="max-h-72 divide-y overflow-y-auto scrollbar-thin" aria-label="Latest donations">
+              {recent.map((d, i) => (
+                <li key={`${d.name}-${i}`} className="flex items-center gap-3 py-2.5">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-hidden="true">
-                    {d.donorName.charAt(0).toUpperCase()}
+                    {initials(d.name)}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{d.donorName}</p>
+                    <p className="truncate text-sm font-medium">{d.name}</p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {d.campaignTitle || "General donation"} · {timeAgo(d.createdAt)}
+                      <ReceiptText className="mr-1 inline size-3" aria-hidden="true" />
+                      {d.campaign} · {d.at ? formatDateTime(d.at) : "recently"}
                     </p>
                   </div>
-                  <span className={cn("hidden rounded-full px-2 py-0.5 text-[11px] font-semibold sm:inline", statusBadgeClass(d.paymentStatus))}>
-                    {titleCase(d.paymentStatus)}
-                  </span>
                   <span className="shrink-0 text-sm font-semibold">{formatINR(d.amount)}</span>
                 </li>
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </SectionCard>
+      </div>
+
+      {/* Quick actions */}
+      <SectionCard
+        title="Quick actions"
+        description="Jump straight into the most common admin tasks"
+        icon={<PackageCheck className="size-4" aria-hidden="true" />}
+      >
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {QUICK_ACTIONS.map((qa) => {
+            const Icon = qa.icon;
+            return (
+              <button
+                key={qa.to}
+                onClick={() => navigate(qa.to)}
+                className="group flex min-h-20 flex-col items-start gap-2 rounded-xl border p-3 text-left transition hover:border-primary/40 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`${qa.label} — ${qa.hint}`}
+              >
+                <span className={cn("flex size-9 items-center justify-center rounded-lg", qa.accent)}>
+                  <Icon className="size-4.5" aria-hidden="true" />
+                </span>
+                <span className="text-sm font-medium leading-tight">{qa.label}</span>
+                <span className="text-xs text-muted-foreground">{qa.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      </SectionCard>
     </div>
   );
 }

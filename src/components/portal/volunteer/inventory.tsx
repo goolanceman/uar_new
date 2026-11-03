@@ -3,25 +3,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Boxes,
   MapPin,
-  PackagePlus,
   RefreshCw,
+  ScrollText,
+  Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import type { VolunteerProfile } from "../portal-router";
 import { get, patch } from "@/lib/api-client";
-import { cn, formatNumber, titleCase } from "@/lib/utils";
+import { titleCase } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +48,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 
 interface InventoryItem {
   id: string;
@@ -66,17 +67,25 @@ function asArray<T>(data: unknown): T[] {
   return [];
 }
 
-export default function VolunteerInventory(_props: {
+const formatNumber = (n: number) => n.toLocaleString("en-IN");
+
+export default function VolunteerInventory({
+  volunteer,
+}: {
   user: SessionUser;
   volunteer?: VolunteerProfile | null;
 }) {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
 
-  const [addOpen, setAddOpen] = useState(false);
-  const [addItemId, setAddItemId] = useState("");
-  const [addQty, setAddQty] = useState("");
-  const [adding, setAdding] = useState(false);
+  // Stock movement dialog
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveItemId, setMoveItemId] = useState("");
+  const [direction, setDirection] = useState<"IN" | "OUT">("IN");
+  const [moveQty, setMoveQty] = useState("");
+  const [moveNotes, setMoveNotes] = useState("");
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,20 +105,33 @@ export default function VolunteerInventory(_props: {
     load();
   }, [load]);
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (i) =>
+        i.name.toLowerCase().includes(q) ||
+        titleCase(i.category).toLowerCase().includes(q) ||
+        (i.location ?? "").toLowerCase().includes(q)
+    );
+  }, [items, query]);
+
   const lowItems = useMemo(
     () => items.filter((i) => i.quantity <= i.minStock),
     [items]
   );
 
-  const openAdd = () => {
-    setAddItemId(lowItems[0]?.id ?? items[0]?.id ?? "");
-    setAddQty("");
-    setAddOpen(true);
+  const openMove = () => {
+    setMoveItemId(lowItems[0]?.id ?? filtered[0]?.id ?? items[0]?.id ?? "");
+    setDirection("IN");
+    setMoveQty("");
+    setMoveNotes("");
+    setMoveOpen(true);
   };
 
-  const submitAdd = async () => {
-    const qty = Number(addQty);
-    if (!addItemId) {
+  const submitMove = async () => {
+    const qty = Number(moveQty);
+    if (!moveItemId) {
       toast.error("Select an item");
       return;
     }
@@ -117,65 +139,86 @@ export default function VolunteerInventory(_props: {
       toast.error("Enter a quantity of at least 1");
       return;
     }
-    setAdding(true);
+    setMoving(true);
     try {
-      await patch(`/api/inventory/${addItemId}`, { addQuantity: Math.round(qty) });
-      toast.success("Stock added — inventory updated");
-      setAddOpen(false);
+      await patch(`/api/inventory/${moveItemId}`, {
+        addQuantity: direction === "IN" ? Math.round(qty) : -Math.round(qty),
+      });
+      toast.success(
+        direction === "IN"
+          ? `Stock in recorded (+${Math.round(qty)}) — the movement is audit-logged under your name.`
+          : `Stock out recorded (−${Math.round(qty)}) — the movement is audit-logged under your name.`
+      );
+      setMoveOpen(false);
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not add stock");
+      toast.error(e instanceof Error ? e.message : "Could not record stock movement");
     } finally {
-      setAdding(false);
+      setMoving(false);
     }
   };
 
-  const lowBadge = (i: InventoryItem) =>
-    i.quantity <= i.minStock ? (
-      <Badge
-        variant="outline"
-        className="gap-1 rounded-full border-amber-200 bg-amber-50 text-[10px] text-amber-700"
-      >
-        <AlertTriangle className="size-3" aria-hidden="true" />
-        Low
-      </Badge>
-    ) : null;
+  const LowBadge = () => (
+    <Badge
+      variant="outline"
+      className="gap-1 rounded-full border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400"
+    >
+      <AlertTriangle className="size-3" aria-hidden="true" />
+      Low
+    </Badge>
+  );
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-            Inventory
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {loading
-              ? "Loading…"
-              : `${items.length} items · ${lowItems.length} low on stock`}
-          </p>
+      <PageHeader
+        title="Inventory"
+        description={
+          loading
+            ? "Loading stock rooms…"
+            : `${items.length} items · ${lowItems.length} low on stock`
+        }
+        icon={<Boxes className="size-5" />}
+        actions={
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 gap-1.5 sm:min-h-9"
+              onClick={load}
+              aria-label="Refresh inventory"
+            >
+              <RefreshCw className="size-4" aria-hidden="true" />
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              className="min-h-11 gap-1.5 sm:min-h-9"
+              onClick={openMove}
+              disabled={items.length === 0}
+            >
+              <ArrowDownToLine className="size-4" aria-hidden="true" />
+              Log stock in/out
+            </Button>
+          </div>
+        }
+      />
+
+      {/* Search */}
+      {!loading && items.length > 0 && (
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            className="pl-9"
+            placeholder="Search items, categories or locations…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search inventory"
+          />
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="min-h-11 gap-1.5 sm:min-h-9"
-            onClick={load}
-            aria-label="Refresh inventory"
-          >
-            <RefreshCw className="size-4" aria-hidden="true" />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            className="min-h-11 gap-1.5 sm:min-h-9"
-            onClick={openAdd}
-            disabled={items.length === 0}
-          >
-            <PackagePlus className="size-4" aria-hidden="true" />
-            Add stock
-          </Button>
-        </div>
-      </div>
+      )}
 
       {loading ? (
         <div className="space-y-3">
@@ -184,14 +227,25 @@ export default function VolunteerInventory(_props: {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 p-10 text-center">
-            <Boxes className="size-8 text-primary/60" aria-hidden="true" />
-            <p className="text-sm text-muted-foreground">
-              No inventory items yet — the admin creates items from the admin console.
-            </p>
-          </CardContent>
-        </Card>
+        <SectionCard title="Stock" icon={<Boxes className="size-5" />}>
+          <EmptyState
+            icon={<Boxes className="size-5" />}
+            title="No inventory items yet"
+            hint="Items are created from the admin console — once stocked, they appear here."
+          />
+        </SectionCard>
+      ) : filtered.length === 0 ? (
+        <SectionCard title="Search" icon={<Search className="size-5" />}>
+          <EmptyState
+            icon={<Search className="size-5" />}
+            title="Nothing matches your search"
+            hint="Try a shorter term — item names, categories or storage locations."
+          >
+            <Button variant="outline" className="min-h-11" onClick={() => setQuery("")}>
+              Clear search
+            </Button>
+          </EmptyState>
+        </SectionCard>
       ) : (
         <>
           {/* Desktop table */}
@@ -208,18 +262,20 @@ export default function VolunteerInventory(_props: {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((i) => {
+                {filtered.map((i) => {
                   const low = i.quantity <= i.minStock;
                   return (
-                    <TableRow
-                      key={i.id}
-                      className={cn(low && "bg-amber-50/70")}
-                    >
+                    <TableRow key={i.id} className={cn(low && "bg-amber-500/10")}>
                       <TableCell className="font-medium">{i.name}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {titleCase(i.category)}
                       </TableCell>
-                      <TableCell className={cn("text-right font-semibold", low && "text-amber-700")}>
+                      <TableCell
+                        className={cn(
+                          "text-right font-semibold",
+                          low && "text-amber-700 dark:text-amber-400"
+                        )}
+                      >
                         {formatNumber(i.quantity)} {i.unit}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">
@@ -231,7 +287,7 @@ export default function VolunteerInventory(_props: {
                           {i.location ?? "—"}
                         </span>
                       </TableCell>
-                      <TableCell>{lowBadge(i)}</TableCell>
+                      <TableCell>{low ? <LowBadge /> : null}</TableCell>
                     </TableRow>
                   );
                 })}
@@ -241,12 +297,15 @@ export default function VolunteerInventory(_props: {
 
           {/* Mobile cards */}
           <div className="grid gap-3 md:hidden">
-            {items.map((i) => {
+            {filtered.map((i) => {
               const low = i.quantity <= i.minStock;
               return (
-                <Card
+                <div
                   key={i.id}
-                  className={cn("p-4", low && "border-amber-200 bg-amber-50/60")}
+                  className={cn(
+                    "rounded-xl border bg-card p-4",
+                    low && "border-amber-500/40 bg-amber-500/10"
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -260,35 +319,65 @@ export default function VolunteerInventory(_props: {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className={cn("text-base font-bold", low && "text-amber-700")}>
+                      <p
+                        className={cn(
+                          "text-base font-bold",
+                          low && "text-amber-700 dark:text-amber-400"
+                        )}
+                      >
                         {formatNumber(i.quantity)}
                       </p>
                       <p className="text-xs text-muted-foreground">{i.unit}</p>
                     </div>
                   </div>
                   {low && (
-                    <div className="mt-2">{lowBadge(i)}</div>
+                    <div className="mt-2">
+                      <LowBadge />
+                    </div>
                   )}
-                </Card>
+                </div>
               );
             })}
           </div>
         </>
       )}
 
-      {/* ---------- Add stock dialog ---------- */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-sm">
+      {/* ---------- Stock movement dialog ---------- */}
+      <Dialog open={moveOpen} onOpenChange={setMoveOpen}>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add stock</DialogTitle>
+            <DialogTitle>Log stock in / out</DialogTitle>
             <DialogDescription>
-              Received a fresh purchase or donation? Top up the item here.
+              Received a purchase or donation? Moving stock out for a drive? Record
+              it — every movement is audit-logged with your name.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Movement direction">
+              <Button
+                type="button"
+                variant={direction === "IN" ? "default" : "outline"}
+                className={cn("min-h-11 gap-1.5", direction === "OUT" && "border-zinc-500/30")}
+                onClick={() => setDirection("IN")}
+                aria-pressed={direction === "IN"}
+              >
+                <ArrowDownToLine className="size-4" aria-hidden="true" />
+                Stock in
+              </Button>
+              <Button
+                type="button"
+                variant={direction === "OUT" ? "default" : "outline"}
+                className={cn("min-h-11 gap-1.5", direction === "IN" && "border-zinc-500/30")}
+                onClick={() => setDirection("OUT")}
+                aria-pressed={direction === "OUT"}
+              >
+                <ArrowUpFromLine className="size-4" aria-hidden="true" />
+                Stock out
+              </Button>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="inv-item">Item</Label>
-              <Select value={addItemId} onValueChange={setAddItemId}>
+              <Select value={moveItemId} onValueChange={setMoveItemId}>
                 <SelectTrigger id="inv-item" className="w-full">
                   <SelectValue placeholder="Select item" />
                 </SelectTrigger>
@@ -302,28 +391,51 @@ export default function VolunteerInventory(_props: {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="inv-qty">Quantity to add</Label>
+              <Label htmlFor="inv-qty">
+                Quantity {direction === "IN" ? "received" : "issued"}
+              </Label>
               <Input
                 id="inv-qty"
                 type="number"
                 min={1}
                 inputMode="numeric"
                 placeholder="e.g. 50"
-                value={addQty}
-                onChange={(e) => setAddQty(e.target.value)}
+                value={moveQty}
+                onChange={(e) => setMoveQty(e.target.value)}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="inv-notes">Notes (optional)</Label>
+              <Textarea
+                id="inv-notes"
+                rows={2}
+                placeholder={
+                  direction === "IN"
+                    ? "e.g. Received from donor Amit — 50 rice bags"
+                    : volunteer?.assignedArea
+                      ? `e.g. Issued for ${volunteer.assignedArea} drive`
+                      : "e.g. Issued for Saturday drive"
+                }
+                value={moveNotes}
+                onChange={(e) => setMoveNotes(e.target.value)}
+              />
+            </div>
+            <p className="flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              <ScrollText className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              Stock-outs can&apos;t push a quantity below zero. Deleting items is
+              admin-only — volunteers adjust quantities safely here.
+            </p>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
               className="min-h-11 sm:min-h-9"
-              onClick={() => setAddOpen(false)}
+              onClick={() => setMoveOpen(false)}
             >
               Cancel
             </Button>
-            <Button className="min-h-11" onClick={submitAdd} disabled={adding}>
-              {adding ? "Adding…" : "Add stock"}
+            <Button className="min-h-11" onClick={submitMove} disabled={moving}>
+              {moving ? "Recording…" : direction === "IN" ? "Record stock in" : "Record stock out"}
             </Button>
           </DialogFooter>
         </DialogContent>

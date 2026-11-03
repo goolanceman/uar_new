@@ -1,44 +1,94 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  CheckCircle2, GraduationCap, Package, Plus, RefreshCw, Trash2, UserRound,
-} from "lucide-react";
+import { Package, Pencil, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { del, get, post } from "@/lib/api-client";
-import { cn, formatDateTime, formatNumber } from "@/lib/utils";
+import { formatDate, formatDateTime, formatINR, titleCase } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { StatCard } from "@/components/shared/stat-card";
+import { DataField } from "@/components/shared/data-field";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+/* ---------------------------------- types ---------------------------------- */
 
 interface DistributionRow {
   id: string;
   type: string;
+  beneficiaryId?: string | null;
+  items?: string | null;
   quantity: number;
+  value?: number | null;
   location?: string | null;
   notes?: string | null;
   distributedAt: string;
-  beneficiary?: { id: string; name: string } | null;
-  volunteer?: { user?: { name?: string | null } | null } | null;
-  campaign?: { id: string; title: string } | null;
+  beneficiary?: { name: string } | null;
+  volunteer?: { user?: { name: string } | null } | null;
+  campaign?: { title: string } | null;
 }
 
-interface PadRow {
+interface BeneficiaryLite {
+  id: string;
+  name: string;
+  city?: string | null;
+}
+
+interface ItemRow {
+  name: string;
+  qty: string;
+}
+
+interface PadDrive {
   id: string;
   schoolName?: string | null;
   area: string;
@@ -46,582 +96,847 @@ interface PadRow {
   padsDistributed: number;
   awarenessSession: boolean;
   sessionAttendees?: number | null;
+  notes?: string | null;
   distributionDate: string;
-}
-
-interface DistributionForm {
-  beneficiaryId: string;
-  walkInName: string;
-  quantity: string;
-  location: string;
-  campaignId: string;
-  notes: string;
+  volunteer?: { name: string } | null;
 }
 
 interface PadForm {
-  schoolName: string;
   area: string;
+  schoolName: string;
   girlsCount: string;
   padsDistributed: string;
   awarenessSession: boolean;
   sessionAttendees: string;
+  notes: string;
 }
 
-const TYPE_TABS: { value: string; label: string }[] = [
-  { value: "FOOD", label: "Ration (FOOD)" },
-  { value: "SANITARY_PADS", label: "Sanitary Pads" },
-  { value: "MEDICAL", label: "Medicine (MEDICAL)" },
-  { value: "ANIMAL_FEED", label: "Animal Feed" },
-  { value: "OTHER", label: "Other" },
-];
+/* ------------------------------- chip styles ------------------------------- */
 
-const TYPE_LABEL: Record<string, string> = {
-  FOOD: "Ration (FOOD)",
-  SANITARY_PADS: "Sanitary pads",
-  MEDICAL: "Medicine (MEDICAL)",
-  ANIMAL_FEED: "Animal feed",
-  OTHER: "Other",
+const TYPE_CLS: Record<string, string> = {
+  FOOD: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  SANITARY_PADS: "border-pink-500/30 bg-pink-500/10 text-pink-700 dark:text-pink-400",
+  MEDICAL: "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+  ANIMAL_FEED: "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+  CLOTHING: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+  EDUCATION_MATERIAL: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  CASH: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  OTHER: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
 };
 
-const WALK_IN = "WALK_IN";
+const DISTRIBUTION_TYPES = [
+  "FOOD",
+  "SANITARY_PADS",
+  "MEDICAL",
+  "ANIMAL_FEED",
+  "CLOTHING",
+  "EDUCATION_MATERIAL",
+  "CASH",
+  "OTHER",
+];
 
-const EMPTY_DIST_FORM: DistributionForm = {
+const EMPTY_DIST_FORM = {
+  type: "FOOD",
   beneficiaryId: "",
-  walkInName: "",
   quantity: "1",
+  value: "",
   location: "",
-  campaignId: "none",
   notes: "",
+  items: [{ name: "", qty: "1" }] as ItemRow[],
 };
 
 const EMPTY_PAD_FORM: PadForm = {
-  schoolName: "",
   area: "",
+  schoolName: "",
   girlsCount: "",
   padsDistributed: "",
-  awarenessSession: true,
+  awarenessSession: false,
   sessionAttendees: "",
+  notes: "",
 };
 
-export default function DistributionsView() {
-  const [tab, setTab] = useState("FOOD");
+function parseItems(json: string | null | undefined): { name: string; qty: number | string }[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
-  // distributions (per type)
-  const [items, setItems] = useState<DistributionRow[]>([]);
+/* ---------------------------------- view ----------------------------------- */
+
+export default function DistributionsView() {
+  const [distributions, setDistributions] = useState<DistributionRow[]>([]);
+  const [padDrives, setPadDrives] = useState<PadDrive[]>([]);
+  const [beneficiaries, setBeneficiaries] = useState<BeneficiaryLite[]>([]);
+  const [schoolOptions, setSchoolOptions] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [distOpen, setDistOpen] = useState(false);
-  const [form, setForm] = useState<DistributionForm>(EMPTY_DIST_FORM);
-  const [saving, setSaving] = useState(false);
+  const [typeFilter, setTypeFilter] = useState("ALL");
+
+  /* general dialogs */
+  const [distDialog, setDistDialog] = useState(false);
+  const [distForm, setDistForm] = useState(EMPTY_DIST_FORM);
+  const [savingDist, setSavingDist] = useState(false);
+  const [sheet, setSheet] = useState<DistributionRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DistributionRow | null>(null);
 
-  // pick lists
-  const [beneficiaries, setBeneficiaries] = useState<{ id: string; name: string }[]>([]);
-  const [campaigns, setCampaigns] = useState<{ id: string; title: string }[]>([]);
-
-  // pad drives
-  const [padItems, setPadItems] = useState<PadRow[]>([]);
-  const [loadingPads, setLoadingPads] = useState(true);
-  const [padOpen, setPadOpen] = useState(false);
+  /* pad drive dialogs */
+  const [padDialog, setPadDialog] = useState(false);
   const [padForm, setPadForm] = useState<PadForm>(EMPTY_PAD_FORM);
   const [savingPad, setSavingPad] = useState(false);
-  const [padDeleteTarget, setPadDeleteTarget] = useState<PadRow | null>(null);
+  const [padSheet, setPadSheet] = useState<PadDrive | null>(null);
+  const [deletePad, setDeletePad] = useState<PadDrive | null>(null);
 
-  const loadDistributions = useCallback(async (type: string) => {
-    setLoading(true);
+  const load = useCallback(async () => {
     try {
-      const data = await get<DistributionRow[]>(`/api/distributions?type=${encodeURIComponent(type)}`);
-      setItems(Array.isArray(data) ? data : []);
+      const [dist, pads] = await Promise.all([
+        get<DistributionRow[]>("/api/distributions?limit=200"),
+        get<PadDrive[]>("/api/pad-distributions"),
+      ]);
+      setDistributions(Array.isArray(dist) ? dist : []);
+      setPadDrives(Array.isArray(pads) ? pads : []);
+      // beneficiaries for the record dialog (best-effort)
+      get<BeneficiaryLite[]>("/api/beneficiaries")
+        .then((rows) => setBeneficiaries(Array.isArray(rows) ? rows : []))
+        .catch(() => setBeneficiaries([]));
+      // optional school coverage MDM — fall back to free text when absent
+      get<string[]>("/api/school-coverages")
+        .then((rows) => setSchoolOptions(Array.isArray(rows) && rows.length > 0 ? rows.map(String) : null))
+        .catch(() => setSchoolOptions(null));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load distributions");
-      setItems([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const loadPads = useCallback(async () => {
-    setLoadingPads(true);
-    try {
-      const data = await get<PadRow[]>("/api/pad-distributions");
-      setPadItems(Array.isArray(data) ? data : []);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load pad drives");
-      setPadItems([]);
-    } finally {
-      setLoadingPads(false);
-    }
-  }, []);
-
   useEffect(() => {
-    if (tab === "pads") loadPads();
-    else loadDistributions(tab);
-  }, [tab, loadDistributions, loadPads]);
+    load();
+  }, [load]);
 
-  const openRecord = async () => {
-    setForm({ ...EMPTY_DIST_FORM, quantity: "1" });
-    setDistOpen(true);
-    try {
-      const [b, c] = await Promise.all([
-        get<{ id: string; name: string }[]>("/api/beneficiaries"),
-        get<{ id: string; title: string }[]>("/api/campaigns"),
-      ]);
-      setBeneficiaries(Array.isArray(b) ? b : []);
-      setCampaigns(Array.isArray(c) ? c : []);
-    } catch {
-      // lists stay empty — walk-in entry still works
-    }
+  const filteredDist = useMemo(
+    () => (typeFilter === "ALL" ? distributions : distributions.filter((d) => d.type === typeFilter)),
+    [distributions, typeFilter]
+  );
+
+  const padStats = useMemo(() => {
+    const pads = padDrives.reduce((s, p) => s + (p.padsDistributed ?? 0), 0);
+    const girls = padDrives.reduce((s, p) => s + (p.girlsCount ?? 0), 0);
+    const sessions = padDrives.filter((p) => p.awarenessSession).length;
+    const schools = new Set(padDrives.map((p) => p.schoolName).filter(Boolean)).size;
+    return { pads, girls, sessions, schools };
+  }, [padDrives]);
+
+  /* --------------------------- general distributions ------------------------ */
+
+  const openDistDialog = () => {
+    setDistForm(EMPTY_DIST_FORM);
+    setDistDialog(true);
   };
 
-  const recordDistribution = async () => {
-    if (!form.location.trim()) {
-      toast.error("Location is required");
-      return;
-    }
-    if (form.beneficiaryId === WALK_IN && !form.walkInName.trim()) {
-      toast.error("Enter the walk-in person's name");
-      return;
-    }
-    setSaving(true);
+  const saveDist = async () => {
+    if (!distForm.location.trim()) return toast.error("Location is required");
+    const qty = Math.trunc(Number(distForm.quantity));
+    if (!Number.isFinite(qty) || qty < 1) return toast.error("Quantity must be at least 1");
+    setSavingDist(true);
     try {
-      const isWalkIn = form.beneficiaryId === WALK_IN;
+      const items = distForm.items.filter((i) => i.name.trim());
       await post("/api/distributions", {
-        type: tab,
-        beneficiaryId: isWalkIn ? null : form.beneficiaryId || null,
-        walkInName: isWalkIn ? form.walkInName.trim() : undefined,
-        quantity: Number(form.quantity) || 1,
-        location: form.location.trim(),
-        campaignId: form.campaignId === "none" ? null : form.campaignId || null,
-        notes: isWalkIn
-          ? `Walk-in: ${form.walkInName.trim()}${form.notes.trim() ? ` · ${form.notes.trim()}` : ""}`
-          : form.notes.trim(),
+        type: distForm.type,
+        beneficiaryId: distForm.beneficiaryId || undefined,
+        quantity: qty,
+        items: items.length
+          ? items.map((i) => ({ name: i.name.trim(), qty: Number(i.qty) || 1 }))
+          : undefined,
+        value: distForm.value === "" ? undefined : Number(distForm.value),
+        location: distForm.location.trim(),
+        notes: distForm.notes.trim() || undefined,
       });
       toast.success("Distribution recorded");
-      setDistOpen(false);
-      loadDistributions(tab);
+      setDistDialog(false);
+      load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to record distribution");
+      toast.error(e instanceof Error ? e.message : "Record failed");
     } finally {
-      setSaving(false);
+      setSavingDist(false);
     }
   };
 
-  const removeDistribution = async () => {
+  const removeDist = async () => {
     if (!deleteTarget) return;
     try {
       await del(`/api/distributions/${deleteTarget.id}`);
-      toast.success("Distribution record deleted");
+      toast.success("Distribution deleted");
       setDeleteTarget(null);
-      loadDistributions(tab);
+      setSheet(null);
+      load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
-  const logPadDrive = async () => {
-    if (!padForm.area.trim()) {
-      toast.error("Area is required");
-      return;
-    }
+  /* ------------------------------ pad drives -------------------------------- */
+
+  const openPadDialog = () => {
+    setPadForm(EMPTY_PAD_FORM);
+    setPadDialog(true);
+  };
+
+  const savePad = async () => {
+    if (!padForm.area.trim()) return toast.error("Area is required");
+    const girls = Math.trunc(Number(padForm.girlsCount));
+    const pads = Math.trunc(Number(padForm.padsDistributed));
+    if (!Number.isFinite(girls) || girls < 0) return toast.error("Girls count must be 0 or more");
+    if (!Number.isFinite(pads) || pads < 0) return toast.error("Pads distributed must be 0 or more");
     setSavingPad(true);
     try {
       await post("/api/pad-distributions", {
-        schoolName: padForm.schoolName.trim(),
         area: padForm.area.trim(),
-        girlsCount: Number(padForm.girlsCount) || 0,
-        padsDistributed: Number(padForm.padsDistributed) || 0,
+        schoolName: padForm.schoolName.trim() || undefined,
+        girlsCount: girls,
+        padsDistributed: pads,
         awarenessSession: padForm.awarenessSession,
-        sessionAttendees: padForm.sessionAttendees ? Number(padForm.sessionAttendees) : null,
+        sessionAttendees:
+          padForm.sessionAttendees === "" ? undefined : Math.trunc(Number(padForm.sessionAttendees)),
+        notes: padForm.notes.trim() || undefined,
       });
-      toast.success("Pad drive logged");
-      setPadOpen(false);
-      setPadForm(EMPTY_PAD_FORM);
-      loadPads();
+      toast.success("Pad drive recorded");
+      setPadDialog(false);
+      load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to log pad drive");
+      toast.error(e instanceof Error ? e.message : "Record failed");
     } finally {
       setSavingPad(false);
     }
   };
 
   const removePad = async () => {
-    if (!padDeleteTarget) return;
+    if (!deletePad) return;
     try {
-      await del(`/api/pad-distributions/${padDeleteTarget.id}`);
+      await del(`/api/pad-distributions/${deletePad.id}`);
       toast.success("Pad drive deleted");
-      setPadDeleteTarget(null);
-      loadPads();
+      setDeletePad(null);
+      setPadSheet(null);
+      load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
-  const totals = useMemo(() => {
-    const qty = items.reduce((s, d) => s + (d.quantity || 0), 0);
-    return { count: items.length, qty };
-  }, [items]);
-
-  const padTotals = useMemo(
-    () => ({
-      count: padItems.length,
-      pads: padItems.reduce((s, p) => s + (p.padsDistributed || 0), 0),
-      girls: padItems.reduce((s, p) => s + (p.girlsCount || 0), 0),
-    }),
-    [padItems]
-  );
-
-  const distTable = (rows: DistributionRow[], loadingState: boolean, onDelete: (r: DistributionRow) => void) =>
-    loadingState ? (
-      <Skeleton className="h-72 rounded-lg" />
-    ) : rows.length === 0 ? (
-      <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-center">
-        <Package className="size-8 text-muted-foreground/50" />
-        <p className="text-sm font-medium">No distributions recorded for this type</p>
-        <p className="max-w-sm text-xs text-muted-foreground">
-          Use “Record distribution” to log the first one.
-        </p>
-      </div>
-    ) : (
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Beneficiary</TableHead>
-              <TableHead className="text-right">Qty</TableHead>
-              <TableHead>Location</TableHead>
-              <TableHead>Volunteer</TableHead>
-              <TableHead>Campaign</TableHead>
-              <TableHead>When</TableHead>
-              <TableHead>Notes</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((d) => (
-              <TableRow key={d.id}>
-                <TableCell className="font-medium">
-                  {d.beneficiary?.name ?? <span className="text-muted-foreground">Walk-in</span>}
-                </TableCell>
-                <TableCell className="text-right">{d.quantity}</TableCell>
-                <TableCell>{d.location ?? "—"}</TableCell>
-                <TableCell>{d.volunteer?.user?.name ?? "—"}</TableCell>
-                <TableCell className="max-w-40 truncate">{d.campaign?.title ?? "—"}</TableCell>
-                <TableCell className="whitespace-nowrap">{formatDateTime(d.distributedAt)}</TableCell>
-                <TableCell>
-                  <p className="max-w-44 truncate text-xs text-muted-foreground">{d.notes ?? "—"}</p>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                    onClick={() => onDelete(d)}
-                    aria-label="Delete distribution record"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    );
+  /* --------------------------------- render -------------------------------- */
 
   return (
-    <div className="space-y-4">
-      <Tabs value={tab} onValueChange={setTab}>
+    <div className="space-y-6">
+      <PageHeader
+        title="Distributions"
+        description="Field distributions to beneficiaries and sanitary pad awareness drives."
+        icon={<Package className="size-5" aria-hidden="true" />}
+        actions={
+          <Button variant="outline" onClick={load} aria-label="Refresh distributions">
+            <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+          </Button>
+        }
+      />
+
+      {/* muted banner — pads live here */}
+      <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground">
+        <Sparkles className="size-4 shrink-0 text-pink-600 dark:text-pink-400" aria-hidden="true" />
+        Sanitary pads initiative lives here — use the <strong>Pad drives</strong> tab below.
+      </div>
+
+      <Tabs defaultValue="general">
         <TabsList className="h-auto flex-wrap">
-          {TYPE_TABS.map((t) => (
-            <TabsTrigger key={t.value} value={t.value}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-          <TabsTrigger value="pads">
-            <GraduationCap className="size-3.5" /> School Pad Drives
-          </TabsTrigger>
+          <TabsTrigger value="general">General distributions ({distributions.length})</TabsTrigger>
+          <TabsTrigger value="pads">Pad drives ({padDrives.length})</TabsTrigger>
         </TabsList>
 
-        {/* ================= DISTRIBUTION TYPE TABS ================= */}
-        {TYPE_TABS.map((t) => (
-          <TabsContent key={t.value} value={t.value} className="mt-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">
-                {formatNumber(totals.count)} record{totals.count === 1 ? "" : "s"}
-              </Badge>
-              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
-                {formatNumber(totals.qty)} units distributed
-              </Badge>
-              <div className="ml-auto flex gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => loadDistributions(tab)}
-                  aria-label="Refresh distributions"
-                >
-                  <RefreshCw className="size-4" />
-                </Button>
-                <Button onClick={openRecord}>
-                  <Plus className="size-4" /> Record distribution
-                </Button>
-              </div>
-            </div>
-            {distTable(items, loading, setDeleteTarget)}
-          </TabsContent>
-        ))}
-
-        {/* ================= SCHOOL PAD DRIVES ================= */}
-        <TabsContent value="pads" className="mt-4 space-y-3">
+        {/* =========================== GENERAL TAB =========================== */}
+        <TabsContent value="general" className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{formatNumber(padTotals.count)} drive{padTotals.count === 1 ? "" : "s"}</Badge>
-            <Badge variant="outline" className="border-pink-200 bg-pink-50 text-pink-800">
-              {formatNumber(padTotals.pads)} pads distributed
-            </Badge>
-            <Badge variant="outline" className="border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800">
-              {formatNumber(padTotals.girls)} girls reached
-            </Badge>
-            <div className="ml-auto flex gap-2">
-              <Button variant="outline" size="icon" onClick={loadPads} aria-label="Refresh pad drives">
-                <RefreshCw className="size-4" />
-              </Button>
-              <Button onClick={() => setPadOpen(true)}>
-                <Plus className="size-4" /> Log pad drive
-              </Button>
+            <div className="flex flex-wrap gap-1.5">
+              {["ALL", ...DISTRIBUTION_TYPES].map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTypeFilter(t)}
+                  aria-pressed={typeFilter === t}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs font-medium transition",
+                    typeFilter === t
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground hover:bg-accent"
+                  )}
+                >
+                  {t === "ALL" ? "All" : titleCase(t)}
+                </button>
+              ))}
             </div>
+            <Button size="sm" className="ml-auto" onClick={openDistDialog}>
+              <Plus className="size-4" aria-hidden="true" /> Record distribution
+            </Button>
           </div>
 
-          {loadingPads ? (
-            <Skeleton className="h-72 rounded-lg" />
-          ) : padItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-center">
-              <GraduationCap className="size-8 text-muted-foreground/50" />
-              <p className="text-sm font-medium">No school pad drives logged</p>
-              <p className="max-w-sm text-xs text-muted-foreground">
-                Log a drive to track pads distributed and awareness sessions in schools and
-                communities.
-              </p>
+          {loading ? (
+            <div className="space-y-2" aria-busy="true">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-12 rounded-lg" />
+              ))}
             </div>
+          ) : filteredDist.length === 0 ? (
+            <EmptyState
+              icon={<Package className="size-8" aria-hidden="true" />}
+              title={distributions.length === 0 ? "No distributions recorded" : "No distributions match this type"}
+              hint="Record a field distribution so stock levels and impact stats stay accurate."
+            >
+              <Button variant="outline" onClick={openDistDialog}>
+                <Plus className="size-4" aria-hidden="true" /> Record distribution
+              </Button>
+            </EmptyState>
           ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>School / Community</TableHead>
-                    <TableHead>Area</TableHead>
-                    <TableHead className="text-right">Girls</TableHead>
-                    <TableHead className="text-right">Pads</TableHead>
-                    <TableHead>Awareness session</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {padItems.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="font-medium">{p.schoolName ?? "Community"}</TableCell>
-                      <TableCell>{p.area}</TableCell>
-                      <TableCell className="text-right">{p.girlsCount}</TableCell>
-                      <TableCell className="text-right">{p.padsDistributed}</TableCell>
-                      <TableCell>
-                        {p.awarenessSession ? (
-                          <Badge
-                            variant="outline"
-                            className="border-emerald-200 bg-emerald-50 text-emerald-800"
-                          >
-                            <CheckCircle2 className="size-3" />
-                            {p.sessionAttendees ? `${p.sessionAttendees} attendees` : "Held"}
-                          </Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">{formatDateTime(p.distributionDate)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                          onClick={() => setPadDeleteTarget(p)}
-                          aria-label="Delete pad drive"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </TableCell>
+            <>
+              {/* mobile cards */}
+              <ul className="space-y-2 sm:hidden">
+                {filteredDist.map((d) => (
+                  <li key={d.id} className="rounded-lg border p-3">
+                    <button type="button" className="w-full text-left" onClick={() => setSheet(d)} aria-label="Open distribution">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className={cn(TYPE_CLS[d.type] ?? TYPE_CLS.OTHER)}>
+                          {titleCase(d.type)}
+                        </Badge>
+                        <span className="ml-auto text-xs text-muted-foreground">{formatDate(d.distributedAt)}</span>
+                      </div>
+                      <p className="mt-1 text-sm font-medium">
+                        {d.beneficiary?.name ?? "Community"} × {d.quantity}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {d.location || "—"}
+                        {d.volunteer?.user?.name ? ` · ${d.volunteer.user.name}` : ""}
+                      </p>
+                    </button>
+                    <div className="mt-2 flex gap-1.5">
+                      <Button variant="outline" size="sm" onClick={() => setSheet(d)} aria-label="View">
+                        View
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                        onClick={() => setDeleteTarget(d)}
+                        aria-label="Delete distribution"
+                      >
+                        <Trash2 className="size-3.5" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {/* desktop table */}
+              <div className="hidden overflow-x-auto rounded-lg border sm:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Beneficiary</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead>Volunteer</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredDist.map((d) => (
+                      <TableRow key={d.id}>
+                        <TableCell className="whitespace-nowrap">{formatDate(d.distributedAt)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={cn(TYPE_CLS[d.type] ?? TYPE_CLS.OTHER)}>
+                            {titleCase(d.type)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <button type="button" className="font-medium hover:text-primary" onClick={() => setSheet(d)} aria-label="Open distribution">
+                            {d.beneficiary?.name ?? "Community"}
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-right">{d.quantity}</TableCell>
+                        <TableCell className="text-right">{d.value != null ? formatINR(d.value) : "—"}</TableCell>
+                        <TableCell className="max-w-40 truncate">{d.location || "—"}</TableCell>
+                        <TableCell>{d.volunteer?.user?.name ?? "—"}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1.5">
+                            <Button variant="outline" size="sm" onClick={() => setSheet(d)} aria-label="View distribution">
+                              View
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                              onClick={() => setDeleteTarget(d)}
+                              aria-label="Delete distribution"
+                            >
+                              <Trash2 className="size-3.5" aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* ============================ PAD DRIVES ============================ */}
+        <TabsContent value="pads" className="mt-4 space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Pads distributed" value={padStats.pads.toLocaleString("en-IN")} accent="pink" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
+            <StatCard label="Girls reached" value={padStats.girls.toLocaleString("en-IN")} accent="fuchsia" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
+            <StatCard label="Awareness sessions" value={padStats.sessions} accent="teal" icon={<Sparkles className="size-5" aria-hidden="true" />} loading={loading} />
+            <StatCard label="Schools covered" value={padStats.schools} accent="amber" icon={<Package className="size-5" aria-hidden="true" />} loading={loading} />
+          </div>
+
+          <div className="flex justify-end">
+            <Button size="sm" onClick={openPadDialog}>
+              <Plus className="size-4" aria-hidden="true" /> Record pad drive
+            </Button>
+          </div>
+
+          {loading ? (
+            <div className="space-y-2" aria-busy="true">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-12 rounded-lg" />
+              ))}
             </div>
+          ) : padDrives.length === 0 ? (
+            <EmptyState
+              icon={<Sparkles className="size-8" aria-hidden="true" />}
+              title="No pad drives yet"
+              hint="Record school visits with pads distributed and awareness session counts."
+            >
+              <Button variant="outline" onClick={openPadDialog}>
+                <Plus className="size-4" aria-hidden="true" /> Record pad drive
+              </Button>
+            </EmptyState>
+          ) : (
+            <>
+              {/* mobile cards */}
+              <ul className="space-y-2 sm:hidden">
+                {padDrives.map((p) => (
+                  <li key={p.id} className="rounded-lg border p-3">
+                    <button type="button" className="w-full text-left" onClick={() => setPadSheet(p)} aria-label="Open pad drive">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-semibold">{p.area}</p>
+                        {p.awarenessSession ? (
+                          <Badge variant="outline" className="ml-auto shrink-0 border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                            Session
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {formatDate(p.distributionDate)} · {p.schoolName || "Community visit"}
+                      </p>
+                      <p className="mt-1 text-sm">
+                        {p.padsDistributed} pads · {p.girlsCount} girls
+                      </p>
+                    </button>
+                    <div className="mt-2 flex gap-1.5">
+                      <Button variant="outline" size="sm" onClick={() => setPadSheet(p)} aria-label="View">
+                        View
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                        onClick={() => setDeletePad(p)}
+                        aria-label="Delete pad drive"
+                      >
+                        <Trash2 className="size-3.5" aria-hidden="true" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {/* desktop table */}
+              <div className="hidden overflow-x-auto rounded-lg border sm:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Area</TableHead>
+                      <TableHead>School</TableHead>
+                      <TableHead className="text-right">Girls</TableHead>
+                      <TableHead className="text-right">Pads</TableHead>
+                      <TableHead>Session</TableHead>
+                      <TableHead className="text-right">Attendees</TableHead>
+                      <TableHead>Volunteer</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {padDrives.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="whitespace-nowrap">{formatDate(p.distributionDate)}</TableCell>
+                        <TableCell className="font-medium">{p.area}</TableCell>
+                        <TableCell className="max-w-44 truncate">{p.schoolName || "—"}</TableCell>
+                        <TableCell className="text-right">{p.girlsCount}</TableCell>
+                        <TableCell className="text-right">{p.padsDistributed}</TableCell>
+                        <TableCell>
+                          {p.awarenessSession ? (
+                            <Badge variant="outline" className="border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                              Yes
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">{p.sessionAttendees ?? "—"}</TableCell>
+                        <TableCell>{p.volunteer?.name ?? "—"}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1.5">
+                            <Button variant="outline" size="sm" onClick={() => setPadSheet(p)} aria-label="View pad drive">
+                              View
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                              onClick={() => setDeletePad(p)}
+                              aria-label="Delete pad drive"
+                            >
+                              <Trash2 className="size-3.5" aria-hidden="true" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </TabsContent>
       </Tabs>
 
-      {/* ============ RECORD DISTRIBUTION DIALOG ============ */}
-      <Dialog open={distOpen} onOpenChange={setDistOpen}>
+      {/* ========================= DISTRIBUTION SHEET ========================= */}
+      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+          {sheet && (
+            <div className="space-y-5 p-5">
+              <SheetHeader className="p-0 text-left">
+                <SheetTitle className="flex items-center gap-2">
+                  Distribution
+                  <Badge variant="outline" className={cn("ml-auto", TYPE_CLS[sheet.type] ?? TYPE_CLS.OTHER)}>
+                    {titleCase(sheet.type)}
+                  </Badge>
+                </SheetTitle>
+                <SheetDescription>{formatDateTime(sheet.distributedAt)}</SheetDescription>
+              </SheetHeader>
+
+              <div className="grid grid-cols-2 gap-3">
+                <DataField label="Beneficiary" value={sheet.beneficiary?.name ?? "Community hand-out"} />
+                <DataField label="Quantity" value={String(sheet.quantity)} />
+                <DataField label="Value" value={sheet.value != null ? formatINR(sheet.value) : "—"} />
+                <DataField label="Volunteer" value={sheet.volunteer?.user?.name ?? "—"} />
+                <DataField label="Location" value={sheet.location || "—"} />
+                <DataField label="Campaign" value={sheet.campaign?.title ?? "—"} />
+              </div>
+
+              <SectionCard title="Items">
+                {parseItems(sheet.items).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No item breakdown recorded.</p>
+                ) : (
+                  <ul className="space-y-1.5 text-sm">
+                    {parseItems(sheet.items).map((i, idx) => (
+                      <li key={idx} className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-1.5">
+                        <span className="min-w-0 truncate">{String(i?.name ?? i)}</span>
+                        <span className="shrink-0 font-medium text-muted-foreground">
+                          {String(i?.qty ?? "×1")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </SectionCard>
+
+              {sheet.notes ? (
+                <SectionCard title="Notes">
+                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.notes}</p>
+                </SectionCard>
+              ) : null}
+
+              <div className="flex gap-2 border-t pt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  onClick={() => setDeleteTarget(sheet)}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* ============================ PAD DRIVE SHEET =========================== */}
+      <Sheet open={!!padSheet} onOpenChange={(o) => !o && setPadSheet(null)}>
+        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+          {padSheet && (
+            <div className="space-y-5 p-5">
+              <SheetHeader className="p-0 text-left">
+                <SheetTitle className="flex items-center gap-2">
+                  Pad drive
+                  {padSheet.awarenessSession ? (
+                    <Badge variant="outline" className="ml-auto border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400">
+                      Awareness session
+                    </Badge>
+                  ) : null}
+                </SheetTitle>
+                <SheetDescription>{formatDateTime(padSheet.distributionDate)}</SheetDescription>
+              </SheetHeader>
+
+              <div className="grid grid-cols-2 gap-3">
+                <DataField label="Area" value={padSheet.area} />
+                <DataField label="School" value={padSheet.schoolName || "Community visit"} />
+                <DataField label="Girls reached" value={String(padSheet.girlsCount)} />
+                <DataField label="Pads distributed" value={String(padSheet.padsDistributed)} />
+                <DataField label="Session attendees" value={padSheet.sessionAttendees != null ? String(padSheet.sessionAttendees) : "—"} />
+                <DataField label="Volunteer" value={padSheet.volunteer?.name ?? "—"} />
+              </div>
+
+              {padSheet.notes ? (
+                <SectionCard title="Notes">
+                  <p className="text-sm leading-relaxed text-muted-foreground">{padSheet.notes}</p>
+                </SectionCard>
+              ) : null}
+
+              <div className="flex gap-2 border-t pt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  onClick={() => setDeletePad(padSheet)}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* ======================== RECORD DISTRIBUTION DIALOG ==================== */}
+      <Dialog open={distDialog} onOpenChange={setDistDialog}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Package className="size-4" /> Record distribution
-            </DialogTitle>
-            <DialogDescription className="flex items-center gap-2">
-              Type:
-              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-800">
-                {TYPE_LABEL[tab] ?? tab}
-              </Badge>
+            <DialogTitle>Record distribution</DialogTitle>
+            <DialogDescription>
+              Logged against your volunteer profile. Attribution is automatic.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label>Beneficiary</Label>
-              <Select
-                value={form.beneficiaryId || undefined}
-                onValueChange={(v) => setForm({ ...form, beneficiaryId: v })}
-              >
-                <SelectTrigger aria-label="Beneficiary">
-                  <SelectValue placeholder="Select beneficiary" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={WALK_IN}>
-                    <span className="flex items-center gap-1.5">
-                      <UserRound className="size-3.5" /> Walk-in (enter name)
-                    </span>
-                  </SelectItem>
-                  {beneficiaries.map((b) => (
-                    <SelectItem key={b.id} value={b.id}>
-                      {b.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {form.beneficiaryId === WALK_IN ? (
-              <div className="grid gap-2">
-                <Label htmlFor="d-walkin">Walk-in person name *</Label>
-                <Input
-                  id="d-walkin"
-                  value={form.walkInName}
-                  onChange={(e) => setForm({ ...form, walkInName: e.target.value })}
-                  placeholder="Name noted at the distribution point"
-                />
-              </div>
-            ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="d-qty">Quantity</Label>
+                <Label>Type</Label>
+                <Select value={distForm.type} onValueChange={(v) => setDistForm({ ...distForm, type: v })}>
+                  <SelectTrigger aria-label="Distribution type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DISTRIBUTION_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {titleCase(t)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="dist-beneficiary">Beneficiary</Label>
+                <Select
+                  value={distForm.beneficiaryId || "NONE"}
+                  onValueChange={(v) => setDistForm({ ...distForm, beneficiaryId: v === "NONE" ? "" : v })}
+                >
+                  <SelectTrigger id="dist-beneficiary" aria-label="Beneficiary">
+                    <SelectValue placeholder="Community hand-out" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NONE">Community hand-out (none)</SelectItem>
+                    {beneficiaries.map((b) => (
+                      <SelectItem key={b.id} value={b.id}>
+                        {b.name}
+                        {b.city ? ` — ${b.city}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="dist-qty">Quantity *</Label>
                 <Input
-                  id="d-qty"
+                  id="dist-qty"
                   type="number"
                   min={1}
-                  value={form.quantity}
-                  onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+                  value={distForm.quantity}
+                  onChange={(e) => setDistForm({ ...distForm, quantity: e.target.value })}
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="d-location">Location *</Label>
+                <Label htmlFor="dist-value">Value (₹)</Label>
                 <Input
-                  id="d-location"
-                  value={form.location}
-                  onChange={(e) => setForm({ ...form, location: e.target.value })}
-                  placeholder="Anandapura slum cluster"
+                  id="dist-value"
+                  type="number"
+                  min={0}
+                  value={distForm.value}
+                  onChange={(e) => setDistForm({ ...distForm, value: e.target.value })}
+                  placeholder="Estimated value"
                 />
               </div>
             </div>
             <div className="grid gap-2">
-              <Label>Campaign (optional)</Label>
-              <Select
-                value={form.campaignId || "none"}
-                onValueChange={(v) => setForm({ ...form, campaignId: v })}
-              >
-                <SelectTrigger aria-label="Campaign">
-                  <SelectValue placeholder="No campaign" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No campaign</SelectItem>
-                  {campaigns.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center justify-between">
+                <Label>Item breakdown</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDistForm((f) => ({ ...f, items: [...f.items, { name: "", qty: "1" }] }))}
+                  aria-label="Add item row"
+                >
+                  <Plus className="size-3.5" aria-hidden="true" /> Add item
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {distForm.items.map((item, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_72px_36px] items-center gap-2">
+                    <Input
+                      value={item.name}
+                      onChange={(e) =>
+                        setDistForm((f) => ({
+                          ...f,
+                          items: f.items.map((it, j) => (j === i ? { ...it, name: e.target.value } : it)),
+                        }))
+                      }
+                      placeholder="Rice (5kg bags)"
+                      aria-label={`Item ${i + 1} name`}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      value={item.qty}
+                      onChange={(e) =>
+                        setDistForm((f) => ({
+                          ...f,
+                          items: f.items.map((it, j) => (j === i ? { ...it, qty: e.target.value } : it)),
+                        }))
+                      }
+                      aria-label={`Item ${i + 1} quantity`}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDistForm((f) => ({ ...f, items: f.items.filter((_, j) => j !== i) }))}
+                      aria-label={`Remove item ${i + 1}`}
+                      disabled={distForm.items.length <= 1}
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="d-notes">Notes</Label>
+              <Label htmlFor="dist-location">Location *</Label>
+              <Input
+                id="dist-location"
+                value={distForm.location}
+                onChange={(e) => setDistForm({ ...distForm, location: e.target.value })}
+                placeholder="Ambedkar Nagar community hall"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="dist-notes">Notes</Label>
               <Textarea
-                id="d-notes"
+                id="dist-notes"
                 rows={2}
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                placeholder="Verified against beneficiary list…"
+                value={distForm.notes}
+                onChange={(e) => setDistForm({ ...distForm, notes: e.target.value })}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDistOpen(false)}>
+            <Button variant="outline" onClick={() => setDistDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={recordDistribution} disabled={saving}>
-              {saving ? "Saving…" : "Record"}
+            <Button onClick={saveDist} disabled={savingDist}>
+              {savingDist ? "Saving…" : "Record"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ============ DELETE DISTRIBUTION CONFIRM ============ */}
-      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete distribution record?</DialogTitle>
-            <DialogDescription>
-              {deleteTarget?.beneficiary?.name ?? "Walk-in"} · qty {deleteTarget?.quantity} at{" "}
-              {deleteTarget?.location}. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              Keep
-            </Button>
-            <Button variant="destructive" onClick={removeDistribution}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ============ LOG PAD DRIVE DIALOG ============ */}
-      <Dialog open={padOpen} onOpenChange={setPadOpen}>
+      {/* ========================== RECORD PAD DRIVE DIALOG ===================== */}
+      <Dialog open={padDialog} onOpenChange={setPadDialog}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <GraduationCap className="size-4" /> Log school pad drive
-            </DialogTitle>
+            <DialogTitle>Record pad drive</DialogTitle>
             <DialogDescription>
-              Track pads distributed and menstrual-health awareness sessions.
+              School or community visit with pads distributed and optional awareness session.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="p-school">School name</Label>
-              <Input
-                id="p-school"
-                value={padForm.schoolName}
-                onChange={(e) => setPadForm({ ...padForm, schoolName: e.target.value })}
-                placeholder="Govt Higher Primary School, remaining blank for community drives"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="p-area">Area *</Label>
-              <Input
-                id="p-area"
-                value={padForm.area}
-                onChange={(e) => setPadForm({ ...padForm, area: e.target.value })}
-                placeholder="JP Nagar ward"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="pad-area">Area *</Label>
+                <Input
+                  id="pad-area"
+                  value={padForm.area}
+                  onChange={(e) => setPadForm({ ...padForm, area: e.target.value })}
+                  placeholder="Yelahanka, Bengaluru"
+                />
+              </div>
+              {schoolOptions ? (
+                <div className="grid gap-2">
+                  <Label>School</Label>
+                  <Select value={padForm.schoolName || "NONE"} onValueChange={(v) => setPadForm({ ...padForm, schoolName: v === "NONE" ? "" : v })}>
+                    <SelectTrigger aria-label="School">
+                      <SelectValue placeholder="Community visit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NONE">Community visit (none)</SelectItem>
+                      {schoolOptions.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label htmlFor="pad-school">School</Label>
+                  <Input
+                    id="pad-school"
+                    value={padForm.schoolName}
+                    onChange={(e) => setPadForm({ ...padForm, schoolName: e.target.value })}
+                    placeholder="Govt. High School, Yelahanka"
+                  />
+                </div>
+              )}
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="p-girls">Girls reached</Label>
+                <Label htmlFor="pad-girls">Girls reached *</Label>
                 <Input
-                  id="p-girls"
+                  id="pad-girls"
                   type="number"
                   min={0}
                   value={padForm.girlsCount}
@@ -629,9 +944,9 @@ export default function DistributionsView() {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="p-pads">Pads distributed</Label>
+                <Label htmlFor="pad-pads">Pads distributed *</Label>
                 <Input
-                  id="p-pads"
+                  id="pad-pads"
                   type="number"
                   min={0}
                   value={padForm.padsDistributed}
@@ -641,63 +956,103 @@ export default function DistributionsView() {
             </div>
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div>
-                <Label htmlFor="p-session" className="cursor-pointer">
-                  Awareness session held
+                <Label htmlFor="pad-session" className="text-sm">
+                  Awareness session conducted
                 </Label>
-                <p className="text-xs text-muted-foreground">
-                  Menstrual health &amp; hygiene session conducted
-                </p>
+                <p className="text-xs text-muted-foreground">Menstrual health &amp; hygiene talk.</p>
               </div>
               <Switch
-                id="p-session"
+                id="pad-session"
                 checked={padForm.awarenessSession}
                 onCheckedChange={(v) => setPadForm({ ...padForm, awarenessSession: v })}
+                aria-label="Awareness session conducted"
               />
             </div>
-            {padForm.awarenessSession ? (
+            {padForm.awarenessSession && (
               <div className="grid gap-2">
-                <Label htmlFor="p-attendees">Session attendees</Label>
+                <Label htmlFor="pad-attendees">Session attendees</Label>
                 <Input
-                  id="p-attendees"
+                  id="pad-attendees"
                   type="number"
                   min={0}
                   value={padForm.sessionAttendees}
                   onChange={(e) => setPadForm({ ...padForm, sessionAttendees: e.target.value })}
                 />
               </div>
-            ) : null}
+            )}
+            <div className="grid gap-2">
+              <Label htmlFor="pad-notes">Notes</Label>
+              <Textarea
+                id="pad-notes"
+                rows={2}
+                value={padForm.notes}
+                onChange={(e) => setPadForm({ ...padForm, notes: e.target.value })}
+              />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPadOpen(false)}>
+            <Button variant="outline" onClick={() => setPadDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={logPadDrive} disabled={savingPad} className={cn(savingPad && "opacity-80")}>
-              {savingPad ? "Saving…" : "Log drive"}
+            <Button onClick={savePad} disabled={savingPad}>
+              {savingPad ? "Saving…" : "Record drive"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ============ DELETE PAD DRIVE CONFIRM ============ */}
-      <Dialog open={!!padDeleteTarget} onOpenChange={(o) => !o && setPadDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Delete pad drive record?</DialogTitle>
-            <DialogDescription>
-              {padDeleteTarget?.schoolName ?? "Community"} · {padDeleteTarget?.area} ·{" "}
-              {padDeleteTarget?.padsDistributed} pads. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPadDeleteTarget(null)}>
-              Keep
-            </Button>
-            <Button variant="destructive" onClick={removePad}>
+      {/* ============================ DELETE CONFIRMS =========================== */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this distribution?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `${titleCase(deleteTarget.type)} × ${deleteTarget.quantity} at ${deleteTarget.location ?? "unknown location"}.`
+                : ""}{" "}
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep record</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                removeDist();
+              }}
+            >
               Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deletePad} onOpenChange={(o) => !o && setDeletePad(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this pad drive?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletePad
+                ? `${deletePad.area} — ${deletePad.padsDistributed} pads, ${deletePad.girlsCount} girls.`
+                : ""}{" "}
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep record</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                removePad();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

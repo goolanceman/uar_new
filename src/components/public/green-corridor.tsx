@@ -3,11 +3,13 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@/lib/router";
+import { get } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Section, HelplineCard } from "@/components/public/shared";
 import {
   ResponsiveContainer,
@@ -21,7 +23,6 @@ import {
 } from "recharts";
 import {
   Ambulance,
-  ArrowDown,
   ArrowRight,
   Bluetooth,
   Car,
@@ -30,8 +31,10 @@ import {
   Play,
   Phone,
   Radio,
+  RadioTower,
   RotateCcw,
   Siren,
+  Smartphone,
   Timer,
   Volume2,
   Waves,
@@ -69,7 +72,7 @@ const META: Record<Congestion, CongestionMeta> = {
   LOW: {
     label: "Low",
     color: "#10b981",
-    chip: "bg-emerald-100 text-emerald-700",
+    chip: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     method: "FM RDS",
     methodBadge: "bg-zinc-800 text-white",
     saved: [2, 4],
@@ -77,7 +80,7 @@ const META: Record<Congestion, CongestionMeta> = {
   MODERATE: {
     label: "Moderate",
     color: "#f59e0b",
-    chip: "bg-amber-100 text-amber-700",
+    chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     method: "BLE Mesh",
     methodBadge: "bg-teal-600 text-white",
     saved: [5, 10],
@@ -85,7 +88,7 @@ const META: Record<Congestion, CongestionMeta> = {
   HEAVY: {
     label: "Heavy",
     color: "#f97316",
-    chip: "bg-orange-100 text-orange-700",
+    chip: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
     method: "Cell Broadcast",
     methodBadge: "bg-orange-600 text-white",
     saved: [15, 25],
@@ -93,7 +96,7 @@ const META: Record<Congestion, CongestionMeta> = {
   GRIDLOCK: {
     label: "Gridlock",
     color: "#ef4444",
-    chip: "bg-red-100 text-red-700",
+    chip: "bg-red-500/15 text-red-600 dark:text-red-400",
     method: "V2X 5G + BLE",
     methodBadge: "bg-red-600 text-white",
     saved: [30, 45],
@@ -259,7 +262,7 @@ export function LiveCorridorDemo() {
             </p>
           </div>
         </div>
-        <Badge className={cn("border-0", method === "—" ? "bg-zinc-200 text-zinc-600" : method === "Mission complete" ? "bg-emerald-600 text-white" : "bg-red-600 text-white")}>
+        <Badge className={cn("border-0", method === "—" ? "bg-muted text-muted-foreground" : method === "Mission complete" ? "bg-emerald-600 text-white" : "bg-red-600 text-white")}>
           <Radio className="mr-1 size-3" aria-hidden />
           {method}
         </Badge>
@@ -286,9 +289,9 @@ export function LiveCorridorDemo() {
 
       {/* Road */}
       <div className="px-3 pt-2 sm:px-5">
-        <div className="relative h-32 overflow-hidden rounded-xl bg-zinc-300 sm:h-36" role="img" aria-label="Road simulation with an ambulance crossing five segments">
+        <div className="relative h-32 overflow-hidden rounded-xl bg-zinc-200 dark:bg-zinc-800 sm:h-36" role="img" aria-label="Road simulation with an ambulance crossing five segments">
           {/* Asphalt + lanes */}
-          <div className="absolute inset-x-0 top-6 bottom-6 bg-zinc-500" />
+          <div className="absolute inset-x-0 top-6 bottom-6 bg-zinc-500 dark:bg-zinc-600" />
           <div className="absolute inset-x-0 top-[calc(50%+1px)] border-t-2 border-dashed border-white/70" aria-hidden />
 
           {/* Congestion tints */}
@@ -334,7 +337,9 @@ export function LiveCorridorDemo() {
                   key={`${i}-${j}`}
                   className={cn(
                     "absolute flex size-5 -translate-x-1/2 items-center justify-center rounded-full transition-all duration-700 sm:size-6",
-                    isAlerted ? "bg-emerald-500 text-white shadow-md" : "bg-zinc-400 text-zinc-600"
+                    isAlerted
+                      ? "bg-emerald-500 text-white shadow-md"
+                      : "bg-zinc-100 text-zinc-500 ring-1 ring-zinc-400/60"
                   )}
                   style={{
                     left: `${pos}%`,
@@ -370,7 +375,7 @@ export function LiveCorridorDemo() {
           <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
             <Timer className="size-3.5" aria-hidden /> Time saved
           </p>
-          <p className="text-lg font-bold text-emerald-700">{savedSec}s</p>
+          <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{savedSec}s</p>
         </div>
         <div className="rounded-lg border bg-card p-3">
           <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
@@ -428,9 +433,9 @@ export function LiveCorridorDemo() {
                     {META[e.congestion].label}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-medium">{e.segment}</span>
-                  <span className="hidden font-semibold text-zinc-600 sm:inline">{e.method}</span>
+                  <span className="hidden font-semibold text-muted-foreground sm:inline">{e.method}</span>
                   <span className="text-muted-foreground">{e.vehicles} veh</span>
-                  <span className="font-bold text-emerald-700">−{e.saved}s</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400">−{e.saved}s</span>
                 </li>
               ))}
             </ul>
@@ -442,6 +447,94 @@ export function LiveCorridorDemo() {
 }
 
 /* ================================================================== */
+/* CorridorLiveStats — /api/corridor-stats (graceful when signed out)  */
+/* ================================================================== */
+
+interface CorridorStats {
+  missions?: { total?: number; completed?: number; active?: number };
+  vehiclesAlerted?: number;
+  timeSavedMin?: number;
+  avgSavedSec?: number;
+  byMethod?: { method: string; count: number; savedSec: number }[];
+}
+
+function CorridorLiveStats() {
+  const [stats, setStats] = useState<CorridorStats | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    get<CorridorStats>("/api/corridor-stats")
+      .then((d) => alive && setStats(d ?? null))
+      .catch(() => {
+        if (alive) {
+          setFailed(true);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (failed) {
+    return (
+      <Card className="p-5">
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <Radio className="mt-0.5 size-4 shrink-0 text-red-600 dark:text-red-400" aria-hidden />
+          Live ops-desk counters are visible to signed-in volunteers and admins. The pilot
+          benchmarks below and the simulation above tell the story meanwhile — every corridor
+          event is timestamped per segment and fully auditable.
+        </p>
+      </Card>
+    );
+  }
+
+  if (stats === null) {
+    return (
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  const kpis = [
+    { label: "corridor missions", value: stats.missions?.total ?? 0 },
+    { label: "completed", value: stats.missions?.completed ?? 0 },
+    { label: "minutes saved", value: stats.timeSavedMin ?? 0 },
+    { label: "vehicles alerted", value: stats.vehiclesAlerted ?? 0 },
+  ];
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {kpis.map((k) => (
+          <Card key={k.label} className="p-4 text-center sm:p-5">
+            <p className="text-2xl font-extrabold text-red-600 dark:text-red-400">
+              {k.value.toLocaleString("en-IN")}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{k.label}</p>
+          </Card>
+        ))}
+      </div>
+      {stats.byMethod && stats.byMethod.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+            Alerts by layer
+          </span>
+          {stats.byMethod.map((m) => (
+            <Badge key={m.method} variant="outline" className="gap-1 text-[10px]">
+              {m.method} · {m.count}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================== */
 /* GreenCorridorPage                                                   */
 /* ================================================================== */
 
@@ -449,30 +542,37 @@ const MESH_LAYERS = [
   {
     n: 1,
     icon: Radio,
-    title: "V2X 5G + Cell Broadcast",
+    title: "V2X 5G",
     reach: "2 km ahead",
-    desc: "The ambulance's route is broadcast to connected cars and nav apps over 5G/4G V2X and cell broadcast. Highest capacity layer — reroutes modern fleets before they ever see the siren.",
+    desc: "Connected cars and nav apps receive the ambulance's route broadcast over 5G V2X. Highest-capacity layer — reroutes modern fleets before they ever hear a siren.",
   },
   {
     n: 2,
+    icon: Smartphone,
+    title: "Cell Broadcast",
+    reach: "5 km radius",
+    desc: "If V2X coverage drops, the alert falls back to cell broadcast — the same channel as severe-weather warnings. Every phone in the corridor buzzes, no app required.",
+  },
+  {
+    n: 3,
     icon: Bluetooth,
-    title: "Roadside Units + BLE Mesh",
+    title: "BLE Mesh (offline-proof)",
     reach: "800 m hops",
     desc: "₹500 Bluetooth beacons on poles pass the alert hop-by-hop with NO internet, no SIM, no tower. Built for dead zones, tunnels and flood days when networks fail.",
   },
   {
-    n: 3,
-    icon: Radio,
+    n: 4,
+    icon: RadioTower,
     title: "FM-RDS Break-in",
-    reach: "5 km radius",
+    reach: "every radio",
     desc: "Legacy cars and radios receive a break-in alert on the FM band. Old technology, near-universal reach — no smart car required.",
   },
   {
-    n: 4,
-    icon: Volume2,
-    title: "Smart Adaptive Siren",
-    reach: "Last resort",
-    desc: "A siren that adapts pattern and direction by congestion, with junction approach-lights. Replaces panic-blare with a structured sound corridor.",
+    n: 5,
+    icon: Siren,
+    title: "Adaptive Siren",
+    reach: "last resort",
+    desc: "If every network layer fails, a siren that adapts pattern and direction by congestion, with junction approach-lights — a structured sound corridor, not panic-blare.",
   },
 ];
 
@@ -543,6 +643,11 @@ export function GreenCorridorPage() {
         </div>
       </section>
 
+      {/* Live ops stats */}
+      <Section title="Live from the ops desk" subtitle="Real counters from logged corridor missions — updated as events land." className="pb-0">
+        <CorridorLiveStats />
+      </Section>
+
       {/* Live demo */}
       <Section
         title="Run a live mission"
@@ -552,54 +657,64 @@ export function GreenCorridorPage() {
         <LiveCorridorDemo />
       </Section>
 
-      {/* 4-layer mesh */}
+      {/* 5-layer mesh */}
       <Section
-        title="The 4-layer alert mesh"
-        subtitle="No single technology covers India's mixed traffic. Four independent layers do — each one catches what the others miss."
+        title="The 5-layer alert mesh"
+        subtitle="No single technology covers India's mixed traffic. Five independent layers do — if one fails, the next takes over automatically, and the siren is always the last resort."
         className="pt-12"
       >
-        <div className="flex flex-col items-stretch gap-3 lg:flex-row">
-          {MESH_LAYERS.map((l, i) => (
-            <React.Fragment key={l.n}>
-              <Card className="flex-1 p-5">
-                <div className="flex items-center gap-3">
-                  <span className="flex size-10 items-center justify-center rounded-xl bg-red-100 text-red-700">
-                    <l.icon className="size-5" aria-hidden />
-                  </span>
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-wide text-red-600">
-                      Layer {l.n}
-                    </p>
-                    <Badge variant="outline" className="mt-0.5 border-red-200 text-[10px] text-red-700">
-                      {l.reach}
-                    </Badge>
-                  </div>
+        {/* Fallback chain explainer */}
+        <div
+          className="mb-5 flex flex-wrap items-center gap-1.5 rounded-xl border bg-muted/40 p-3 text-xs font-semibold text-muted-foreground"
+          aria-label="Layer fallback order"
+        >
+          <span className="mr-1 text-[11px] font-bold uppercase tracking-wide">Fallback order</span>
+          {["V2X / 5G", "Cell broadcast", "BLE mesh (offline)", "FM-RDS", "Adaptive siren"].map(
+            (s, i, arr) => (
+              <React.Fragment key={s}>
+                <span className="rounded-full border bg-card px-2.5 py-1 text-foreground">{s}</span>
+                {i < arr.length - 1 && (
+                  <ArrowRight className="size-3.5 text-red-500/70" aria-hidden />
+                )}
+              </React.Fragment>
+            )
+          )}
+          <span className="ml-1 text-[11px] font-normal">
+            — each layer catches what the previous one misses.
+          </span>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {MESH_LAYERS.map((l) => (
+            <Card key={l.n} className="flex flex-col p-5">
+              <div className="flex items-center gap-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-600 dark:text-red-400">
+                  <l.icon className="size-5" aria-hidden />
+                </span>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400">
+                    Layer {l.n}
+                  </p>
+                  <Badge variant="outline" className="mt-0.5 border-red-500/25 text-[10px] text-red-600 dark:text-red-400">
+                    {l.reach}
+                  </Badge>
                 </div>
-                <h3 className="mt-3 font-semibold leading-snug">{l.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{l.desc}</p>
-              </Card>
-              {i < MESH_LAYERS.length - 1 && (
-                <div
-                  aria-hidden
-                  className="flex items-center justify-center text-red-400 lg:flex-col"
-                >
-                  <ArrowRight className="hidden size-5 lg:block" />
-                  <ArrowDown className="size-5 lg:hidden" />
-                </div>
-              )}
-            </React.Fragment>
+              </div>
+              <h3 className="mt-3 font-semibold leading-snug">{l.title}</h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{l.desc}</p>
+            </Card>
           ))}
         </div>
 
         {/* Why Bluetooth matters */}
-        <Card className="mt-6 border-teal-200 bg-teal-50/60 p-6">
+        <Card className="mt-6 border-teal-500/25 bg-teal-500/10 p-6">
           <div className="flex items-start gap-4">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-teal-100 text-teal-700">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-teal-500/15 text-teal-600 dark:text-teal-400">
               <Bluetooth className="size-6" aria-hidden />
             </span>
             <div>
-              <h3 className="font-semibold text-teal-900">Why Bluetooth matters</h3>
-              <ul className="mt-3 grid gap-2 text-sm leading-relaxed text-teal-900/80 sm:grid-cols-2">
+              <h3 className="font-semibold text-teal-700 dark:text-teal-400">Why Bluetooth matters</h3>
+              <ul className="mt-3 grid gap-2 text-sm leading-relaxed text-muted-foreground sm:grid-cols-2">
                 <li>• Works with no internet, no SIM, no tower — exactly when floods and storms cut networks.</li>
                 <li>• A beacon costs ~₹500; a city corridor needs dozens, not crores.</li>
                 <li>• Messages hop car-to-car and beacon-to-beacon, bending around obstacles.</li>
@@ -629,7 +744,7 @@ export function GreenCorridorPage() {
             >
               <span className="font-semibold">{h.jn}</span>
               <span className="text-muted-foreground">{h.peak}</span>
-              <span className="font-medium text-red-700">{h.layer}</span>
+              <span className="font-medium text-red-600 dark:text-red-400">{h.layer}</span>
             </div>
           ))}
         </Card>
@@ -650,7 +765,7 @@ export function GreenCorridorPage() {
               { k: "100%", v: "of corridor events logged & auditable" },
             ].map((s) => (
               <Card key={s.k} className="p-4">
-                <p className="text-xl font-extrabold text-red-700">{s.k}</p>
+                <p className="text-xl font-extrabold text-red-600 dark:text-red-400">{s.k}</p>
                 <p className="mt-1 text-xs leading-snug text-muted-foreground">{s.v}</p>
               </Card>
             ))}
@@ -688,13 +803,13 @@ function CorridorLineChart() {
       <div className="mt-4 h-56 sm:h-72">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: -8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#98989d" strokeOpacity={0.3} />
             <XAxis
               dataKey="congestion"
               tick={{ fontSize: 11, fill: "#71717a" }}
               interval={0}
               tickLine={false}
-              axisLine={{ stroke: "#e4e4e7" }}
+              axisLine={{ stroke: "#98989d", strokeOpacity: 0.4 }}
             />
             <YAxis
               tick={{ fontSize: 11, fill: "#71717a" }}

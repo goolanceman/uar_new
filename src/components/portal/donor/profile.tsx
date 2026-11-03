@@ -1,64 +1,116 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { KeyRound, MapPin, Save, UserRound, WalletCards } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  BadgeCheck,
+  KeyRound,
+  Languages,
+  LogOut,
+  Mail,
+  Save,
+  ShieldCheck,
+  UserRound,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuth, type SessionUser } from "@/hooks/use-auth";
 import { get, patch } from "@/lib/api-client";
-import { Badge } from "@/components/ui/badge";
+import { navigate } from "@/lib/router";
+import { formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { DataField } from "@/components/shared/data-field";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+
+interface MeResponse {
+  user?: {
+    pan?: string | null;
+    about?: string | null;
+    createdAt?: string;
+  } | null;
+}
 
 export default function DonorProfile({ user }: { user: SessionUser }) {
-  const { refresh } = useAuth();
+  const { refresh, logout } = useAuth();
 
   const [pan, setPan] = useState<string | null>(null);
-  const [loadingPan, setLoadingPan] = useState(true);
+  const [joinedAt, setJoinedAt] = useState<string | null>(null);
+  const [loadingMe, setLoadingMe] = useState(true);
+  const [language, setLanguage] = useState<string | null>(null);
 
   // Profile form
   const [name, setName] = useState(user.name);
   const [phone, setPhone] = useState(user.phone ?? "");
   const [city, setCity] = useState(user.city ?? "");
-  const [savingProfile, setSavingProfile] = useState(false);
-
-  // Password form
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [nextPassword, setNextPassword] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-
-  // PAN form
   const [panInput, setPanInput] = useState("");
-  const [savingPan, setSavingPan] = useState(false);
+  const [about, setAbout] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadMe = useCallback(async () => {
+    setLoadingMe(true);
+    try {
+      const [me, pub] = await Promise.all([
+        get<MeResponse>("/api/auth/me").catch(() => null),
+        get<{ defaultLanguage?: string }>("/api/settings/public").catch(() => null),
+      ]);
+      const u = me?.user ?? null;
+      setPan(u?.pan ?? null);
+      setPanInput(u?.pan ?? "");
+      setAbout(u?.about ?? "");
+      setJoinedAt(u?.createdAt ?? null);
+      setLanguage(pub?.defaultLanguage ?? null);
+    } finally {
+      setLoadingMe(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    get<unknown>("/api/auth/me")
-      .then((data) => {
-        if (!alive) return;
-        const u =
-          data && typeof data === "object" && "user" in (data as Record<string, unknown>)
-            ? (data as { user?: { pan?: string | null } | null }).user
-            : null;
-        setPan(u?.pan ?? null);
-        setPanInput(u?.pan ?? "");
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (alive) setLoadingPan(false);
+    loadMe();
+  }, [loadMe]);
+
+  const save = async () => {
+    if (!name.trim()) {
+      toast.error("Name is required");
+      return;
+    }
+    const v = panInput.trim().toUpperCase();
+    if (v && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v)) {
+      toast.error("PAN looks invalid — format: ABCDE1234F");
+      return;
+    }
+    setSaving(true);
+    try {
+      await patch("/api/auth/profile", {
+        name: name.trim(),
+        phone: phone.trim() || null,
+        city: city.trim() || null,
+        pan: v || null,
+        about: about.trim() || null,
       });
-    return () => {
-      alive = false;
-    };
-  }, []);
+      await refresh();
+      setPan(v || null);
+      toast.success(
+        v && !pan ? "Profile saved — 80G receipts will now carry your PAN" : "Profile saved"
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update profile");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await logout();
+      navigate("/");
+    } catch {
+      toast.error("Sign out failed — try again");
+    }
+  };
 
   const initials = user.name
     .split(" ")
@@ -66,245 +118,185 @@ export default function DonorProfile({ user }: { user: SessionUser }) {
     .slice(0, 2)
     .join("");
 
-  const saveProfile = async () => {
-    if (!name.trim()) {
-      toast.error("Name is required");
-      return;
-    }
-    setSavingProfile(true);
-    try {
-      await patch("/api/auth/profile", {
-        name: name.trim(),
-        phone: phone.trim() || undefined,
-        city: city.trim() || undefined,
-      });
-      await refresh();
-      toast.success("Profile updated");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not update profile");
-    } finally {
-      setSavingProfile(false);
-    }
-  };
-
-  const savePassword = async () => {
-    if (!currentPassword || !nextPassword) {
-      toast.error("Enter both current and new password");
-      return;
-    }
-    if (nextPassword.length < 8) {
-      toast.error("New password must be at least 8 characters");
-      return;
-    }
-    setSavingPassword(true);
-    try {
-      await patch("/api/auth/profile", {
-        password: { current: currentPassword, next: nextPassword },
-      });
-      setCurrentPassword("");
-      setNextPassword("");
-      toast.success("Password changed");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not change password");
-    } finally {
-      setSavingPassword(false);
-    }
-  };
-
-  const savePan = async () => {
-    const v = panInput.trim().toUpperCase();
-    if (v && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v)) {
-      toast.error("PAN looks invalid — format: ABCDE1234F");
-      return;
-    }
-    setSavingPan(true);
-    try {
-      await patch("/api/auth/profile", { pan: v || null });
-      setPan(v || null);
-      toast.success(v ? "PAN saved — it will appear on 80G receipts" : "PAN removed");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not save PAN");
-    } finally {
-      setSavingPan(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Profile</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage your donor account details.
-        </p>
-      </div>
+      <PageHeader
+        title="Profile"
+        description="Manage your donor account, PAN and preferences."
+        icon={<UserRound className="size-5" />}
+      />
 
-      {/* Identity card */}
-      <Card className="p-5">
-        <div className="flex items-center gap-4">
-          <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-bold text-primary">
-            {initials || "U"}
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-base font-semibold">{user.name}</p>
-            <p className="truncate text-sm text-muted-foreground">{user.email}</p>
-            <div className="mt-1.5 flex gap-1.5">
-              <Badge variant="secondary" className="rounded-full text-[10px]">
-                {user.role}
-              </Badge>
-              <Badge
-                variant="outline"
-                className="rounded-full border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
-              >
-                {user.status}
-              </Badge>
+      {/* Account card */}
+      <SectionCard title="Account" icon={<BadgeCheck className="size-5" />}>
+        {loadingMe ? (
+          <div className="flex items-center gap-4">
+            <Skeleton className="size-14 rounded-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-56" />
             </div>
           </div>
+        ) : (
+          <div className="flex flex-wrap items-start gap-4">
+            <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-lg font-bold text-primary">
+              {initials || "U"}
+            </span>
+            <div className="grid flex-1 gap-3 sm:grid-cols-2">
+              <DataField label="Email" value={user.email} icon={<Mail className="size-3.5" />} copy />
+              <DataField label="Role" value={titleSafe(user.role)} />
+              <DataField
+                label="Member since"
+                value={joinedAt ? formatDate(joinedAt) : "—"}
+              />
+              <DataField
+                label="Account status"
+                value={titleSafe(user.status)}
+              />
+            </div>
+          </div>
+        )}
+        {user.status === "ACTIVE" && (
+          <p className="mt-3 flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
+            <BadgeCheck className="size-3.5" aria-hidden="true" />
+            Verified active donor account
+          </p>
+        )}
+      </SectionCard>
+
+      {/* Editor */}
+      <SectionCard
+        title="Personal details"
+        description="Keep your contact info current — receipts and helplines depend on it."
+        icon={<UserRound className="size-5" />}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="p-name">Full name</Label>
+            <Input
+              id="p-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="name"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="p-phone">Phone</Label>
+            <Input
+              id="p-phone"
+              type="tel"
+              inputMode="tel"
+              placeholder="+91 98765 43210"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="tel"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="p-city">City</Label>
+            <Input
+              id="p-city"
+              placeholder="e.g. Bengaluru"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              autoComplete="address-level2"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="p-pan">PAN (for 80G receipts)</Label>
+            <div className="relative">
+              <ShieldCheck
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                id="p-pan"
+                className={cn("pl-9 font-mono uppercase", pan && "border-emerald-500/40")}
+                placeholder="ABCDE1234F"
+                maxLength={10}
+                value={panInput}
+                onChange={(e) => setPanInput(e.target.value.toUpperCase())}
+                aria-describedby="p-pan-hint"
+              />
+            </div>
+            <p id="p-pan-hint" className="text-xs text-muted-foreground">
+              {pan
+                ? `Saved — prints on receipts as ${pan}.`
+                : "Add your PAN so 80G receipts are ITR-ready."}
+            </p>
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="p-about">About you (optional)</Label>
+            <Textarea
+              id="p-about"
+              rows={3}
+              placeholder="A line about why you give — it helps our team thank you personally."
+              value={about}
+              onChange={(e) => setAbout(e.target.value)}
+            />
+          </div>
         </div>
-      </Card>
+        <div className="mt-4">
+          <Button className="min-h-11 gap-1.5" onClick={save} disabled={saving}>
+            <Save className="size-4" aria-hidden="true" />
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
+      </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {/* Edit profile */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <UserRound className="size-4 text-primary" aria-hidden="true" />
-              Personal details
-            </CardTitle>
-            <CardDescription>Keep your contact info current.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="p-name">Full name</Label>
-              <Input
-                id="p-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="p-phone">Phone</Label>
-              <Input
-                id="p-phone"
-                type="tel"
-                inputMode="tel"
-                placeholder="+91 98765 43210"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                autoComplete="tel"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="p-city">City</Label>
-              <Input
-                id="p-city"
-                placeholder="e.g. Bengaluru"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-              />
-            </div>
-            <Button
-              className="min-h-11 gap-1.5"
-              onClick={saveProfile}
-              disabled={savingProfile}
-            >
-              <Save className="size-4" aria-hidden="true" />
-              {savingProfile ? "Saving…" : "Save changes"}
-            </Button>
-          </CardContent>
-        </Card>
+        {/* Password note */}
+        <SectionCard
+          title="Password & security"
+          description="How to keep your donor account safe."
+          icon={<KeyRound className="size-5" />}
+        >
+          <p className="text-sm text-muted-foreground">
+            For your protection, password changes for donor accounts are handled by
+            our support desk — write to{" "}
+            <span className="font-medium text-foreground">
+              reach@unitedangelreach.org
+            </span>{" "}
+            from your registered email and we&apos;ll rotate it within a working
+            day. Always sign out on shared devices.
+          </p>
+        </SectionCard>
 
-        <div className="space-y-4">
-          {/* Change password */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <KeyRound className="size-4 text-primary" aria-hidden="true" />
-                Change password
-              </CardTitle>
-              <CardDescription>
-                Use at least 8 characters.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="p-curpass">Current password</Label>
-                <Input
-                  id="p-curpass"
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="p-nextpass">New password</Label>
-                <Input
-                  id="p-nextpass"
-                  type="password"
-                  value={nextPassword}
-                  onChange={(e) => setNextPassword(e.target.value)}
-                  autoComplete="new-password"
-                />
-              </div>
+        {/* Preferences + sign out */}
+        <SectionCard
+          title="Preferences"
+          description="Language and session"
+          icon={<Languages className="size-5" />}
+        >
+          <div className="space-y-4">
+            <p className="flex items-start gap-2 text-sm text-muted-foreground">
+              <Languages className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+              <span>
+                App language:{" "}
+                <span className="font-medium text-foreground">
+                  {loadingMe ? "…" : (language ?? "English")}
+                </span>{" "}
+                — set by the organisation by default. Regional languages (ಕನ್ನಡ,
+                हिन्दी) are rolling out; your preference will follow this setting.
+              </span>
+            </p>
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
-                className="min-h-11 gap-1.5"
-                onClick={savePassword}
-                disabled={savingPassword}
+                className="min-h-11 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400"
+                onClick={signOut}
               >
-                {savingPassword ? "Updating…" : "Update password"}
+                <LogOut className="size-4" aria-hidden="true" />
+                Sign out
               </Button>
-            </CardContent>
-          </Card>
-
-          {/* PAN */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <WalletCards className="size-4 text-primary" aria-hidden="true" />
-                PAN (for 80G receipts)
-              </CardTitle>
-              <CardDescription>
-                Add your PAN so it prints on your donation receipts.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {loadingPan ? (
-                <Skeleton className="h-9 w-full" />
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="p-pan">PAN number</Label>
-                    <Input
-                      id="p-pan"
-                      className="font-mono uppercase"
-                      placeholder="ABCDE1234F"
-                      maxLength={10}
-                      value={panInput}
-                      onChange={(e) => setPanInput(e.target.value.toUpperCase())}
-                    />
-                    {pan && (
-                      <p className="flex items-center gap-1 text-xs text-emerald-700">
-                        <MapPin className="size-3" aria-hidden="true" />
-                        Saved — appears on receipts as {pan}
-                      </p>
-                    )}
-                  </div>
-                  <Button
-                    variant="outline"
-                    className="min-h-11 gap-1.5"
-                    onClick={savePan}
-                    disabled={savingPan}
-                  >
-                    {savingPan ? "Saving…" : "Save PAN"}
-                  </Button>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          </div>
+        </SectionCard>
       </div>
     </div>
   );
+}
+
+/** titleCase guard for short codes like roles/statuses. */
+function titleSafe(s: string): string {
+  return s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
 }

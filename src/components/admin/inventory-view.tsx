@@ -2,141 +2,237 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Boxes, Minus, Pencil, Plus, RefreshCw, Search, Trash2, TriangleAlert, X,
+  AlertTriangle,
+  Boxes,
+  CalendarClock,
+  Package,
+  PackagePlus,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { del, get, patch, post } from "@/lib/api-client";
-import { useMasters } from "@/hooks/use-masters";
-import { cn, formatINR, formatNumber, titleCase } from "@/lib/utils";
+import { labelOf, useMasters } from "@/hooks/use-masters";
+import { formatDate, formatINR, titleCase } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { StatCard } from "@/components/shared/stat-card";
+import { DataField } from "@/components/shared/data-field";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from "@/components/ui/table";
+
+/* ---------------------------------- types ---------------------------------- */
 
 interface InventoryItem {
   id: string;
   name: string;
+  description?: string | null;
   category: string;
   unit: string;
   quantity: number;
   minStock: number;
   pricePerUnit?: number | null;
   location?: string | null;
+  expiryDate?: string | null;
 }
 
 interface ItemForm {
   name: string;
+  description: string;
   category: string;
   unit: string;
   quantity: string;
   minStock: string;
   pricePerUnit: string;
   location: string;
+  expiryDate: string;
 }
 
-const CATEGORY_CLS: Record<string, string> = {
-  FOOD_KIT: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  RATION: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  SANITARY_PADS: "border-pink-200 bg-pink-50 text-pink-800",
-  HYGIENE: "border-pink-200 bg-pink-50 text-pink-800",
-  MEDICINE: "border-teal-200 bg-teal-50 text-teal-800",
-  ANIMAL_FEED: "border-lime-200 bg-lime-50 text-lime-800",
-  EQUIPMENT: "border-amber-200 bg-amber-50 text-amber-800",
-  CLOTHING: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
-  OTHER: "border-zinc-200 bg-zinc-100 text-zinc-600",
-};
+interface StockForm {
+  quantity: string;
+  pricePerUnit: string;
+  supplier: string;
+  invoiceNumber: string;
+}
 
-const EMPTY_FORM: ItemForm = {
+const EMPTY_ITEM_FORM: ItemForm = {
   name: "",
+  description: "",
   category: "FOOD_KIT",
-  unit: "pcs",
+  unit: "pack",
   quantity: "0",
   minStock: "10",
   pricePerUnit: "",
   location: "",
+  expiryDate: "",
 };
+
+const EMPTY_STOCK_FORM: StockForm = {
+  quantity: "",
+  pricePerUnit: "",
+  supplier: "",
+  invoiceNumber: "",
+};
+
+function isLowStock(i: InventoryItem): boolean {
+  return i.quantity <= i.minStock;
+}
+
+function isExpiring(i: InventoryItem): boolean {
+  if (!i.expiryDate) return false;
+  const d = new Date(i.expiryDate);
+  if (Number.isNaN(d.getTime())) return false;
+  const in30 = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  return d.getTime() <= in30;
+}
+
+/* ---------------------------------- view ----------------------------------- */
 
 export default function InventoryView() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState("");
-  const [appliedQ, setAppliedQ] = useState("");
-  const [category, setCategory] = useState("all");
 
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [sheet, setSheet] = useState<InventoryItem | null>(null);
+  const [itemDialog, setItemDialog] = useState(false);
   const [editing, setEditing] = useState<InventoryItem | null>(null);
-  const [form, setForm] = useState<ItemForm>(EMPTY_FORM);
+  const [form, setForm] = useState<ItemForm>(EMPTY_ITEM_FORM);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
 
+  const [stockTarget, setStockTarget] = useState<InventoryItem | null>(null);
+  const [stockForm, setStockForm] = useState<StockForm>(EMPTY_STOCK_FORM);
+  const [addingStock, setAddingStock] = useState(false);
+
   const categoryOptions = useMasters("INVENTORY_CATEGORY");
+  const unitOptions = useMasters("UNIT");
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (appliedQ.trim()) params.set("q", appliedQ.trim());
-      if (category !== "all") params.set("category", category);
-      const data = await get<InventoryItem[]>(`/api/inventory?${params.toString()}`);
+      const data = await get<InventoryItem[]>("/api/inventory");
       setItems(Array.isArray(data) ? data : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load inventory");
     } finally {
       setLoading(false);
     }
-  }, [appliedQ, category]);
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  const stats = useMemo(
+    () => ({
+      total: items.length,
+      low: items.filter(isLowStock).length,
+      value: items.reduce((s, i) => s + (i.pricePerUnit ?? 0) * i.quantity, 0),
+    }),
+    [items]
+  );
+
+  /* ------------------------------ form actions ----------------------------- */
+
   const openCreate = () => {
     setEditing(null);
-    setForm({ ...EMPTY_FORM, category: category !== "all" ? category : "FOOD_KIT" });
-    setDialogOpen(true);
+    setForm({ ...EMPTY_ITEM_FORM, unit: unitOptions.options[0]?.value ?? "pack" });
+    setItemDialog(true);
   };
 
-  const openEdit = (it: InventoryItem) => {
-    setEditing(it);
+  const openEdit = (i: InventoryItem) => {
+    setEditing(i);
     setForm({
-      name: it.name ?? "",
-      category: it.category ?? "OTHER",
-      unit: it.unit ?? "pcs",
-      quantity: String(it.quantity ?? 0),
-      minStock: String(it.minStock ?? 10),
-      pricePerUnit: it.pricePerUnit != null ? String(it.pricePerUnit) : "",
-      location: it.location ?? "",
+      name: i.name ?? "",
+      description: i.description ?? "",
+      category: i.category ?? "OTHER",
+      unit: i.unit ?? "pack",
+      quantity: String(i.quantity ?? 0),
+      minStock: String(i.minStock ?? 0),
+      pricePerUnit: i.pricePerUnit != null ? String(i.pricePerUnit) : "",
+      location: i.location ?? "",
+      expiryDate: i.expiryDate ? i.expiryDate.slice(0, 10) : "",
     });
-    setDialogOpen(true);
+    setItemDialog(true);
+  };
+
+  const validate = (): string | null => {
+    if (!form.name.trim()) return "Item name is required";
+    const qty = Number(form.quantity);
+    if (!Number.isFinite(qty) || qty < 0) return "Quantity must be 0 or more";
+    const min = Number(form.minStock);
+    if (!Number.isFinite(min) || min < 0) return "Minimum stock must be 0 or more";
+    if (form.pricePerUnit) {
+      const price = Number(form.pricePerUnit);
+      if (!Number.isFinite(price) || price < 0) return "Price per unit must be 0 or more";
+    }
+    return null;
   };
 
   const save = async () => {
-    if (!form.name.trim()) {
-      toast.error("Item name is required");
+    const problem = validate();
+    if (problem) {
+      toast.error(problem);
       return;
     }
     setSaving(true);
     try {
       const body = {
         name: form.name.trim(),
+        description: form.description.trim() || undefined,
         category: form.category,
-        unit: form.unit.trim() || "pcs",
-        quantity: Number(form.quantity) || 0,
-        minStock: Number(form.minStock) || 0,
-        pricePerUnit: form.pricePerUnit ? Number(form.pricePerUnit) : null,
-        location: form.location.trim(),
+        unit: form.unit,
+        quantity: Math.trunc(Number(form.quantity)),
+        minStock: Math.trunc(Number(form.minStock)),
+        pricePerUnit: form.pricePerUnit === "" ? undefined : Number(form.pricePerUnit),
+        location: form.location.trim() || undefined,
+        expiryDate: form.expiryDate || undefined,
       };
       if (editing) {
         await patch(`/api/inventory/${editing.id}`, body);
@@ -145,7 +241,8 @@ export default function InventoryView() {
         await post("/api/inventory", body);
         toast.success(`${body.name} added to inventory`);
       }
-      setDialogOpen(false);
+      setItemDialog(false);
+      setSheet(null);
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
@@ -154,17 +251,31 @@ export default function InventoryView() {
     }
   };
 
-  const adjustStock = async (it: InventoryItem, delta: number) => {
-    if (delta < 0 && (it.quantity || 0) <= 0) {
-      toast.error(`${it.name} is already out of stock`);
+  const addStock = async () => {
+    if (!stockTarget) return;
+    const qty = Math.trunc(Number(stockForm.quantity));
+    if (!Number.isFinite(qty) || qty <= 0) {
+      toast.error("Quantity to add must be at least 1");
       return;
     }
+    setAddingStock(true);
     try {
-      await patch(`/api/inventory/${it.id}`, { addQuantity: delta });
-      toast.success(`${it.name}: ${delta > 0 ? "+" : ""}${delta} ${it.unit}`);
+      const body: Record<string, unknown> = { addQuantity: qty };
+      if (stockForm.pricePerUnit !== "") body.pricePerUnit = Number(stockForm.pricePerUnit);
+      await patch(`/api/inventory/${stockTarget.id}`, body);
+      toast.success(
+        `+${qty} ${stockTarget.unit} added to ${stockTarget.name}${
+          stockForm.supplier ? ` (supplier: ${stockForm.supplier.trim()})` : ""
+        }`
+      );
+      setStockTarget(null);
+      setStockForm(EMPTY_STOCK_FORM);
+      setSheet(null);
       load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Stock update failed");
+      toast.error(e instanceof Error ? e.message : "Add stock failed");
+    } finally {
+      setAddingStock(false);
     }
   };
 
@@ -172,334 +283,330 @@ export default function InventoryView() {
     if (!deleteTarget) return;
     try {
       await del(`/api/inventory/${deleteTarget.id}`);
-      toast.success(`${deleteTarget.name} removed`);
+      toast.success(`${deleteTarget.name} removed from inventory`);
       setDeleteTarget(null);
+      setSheet(null);
       load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
-  const lowItems = useMemo(
-    () => items.filter((it) => (it.quantity || 0) <= (it.minStock || 0)),
-    [items]
+  const stockCell = (i: InventoryItem) => (
+    <span className={cn("inline-flex items-center gap-1 font-medium", isLowStock(i) && "text-amber-700 dark:text-amber-400")}>
+      {isLowStock(i) && <AlertTriangle className="size-3.5" aria-hidden="true" />}
+      {i.quantity} {i.unit}
+    </span>
   );
 
-  return (
-    <div className="space-y-4">
-      {/* search + filters */}
-      <form
-        className="flex flex-wrap items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setAppliedQ(q);
-        }}
+  const expiryChip = (i: InventoryItem) =>
+    i.expiryDate ? (
+      <Badge
+        variant="outline"
+        className={cn(
+          isExpiring(i)
+            ? "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
+            : "text-muted-foreground"
+        )}
       >
-        <div className="relative min-w-0 flex-1 sm:max-w-xs">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search items…"
-            className="pl-8"
-            aria-label="Search inventory"
-          />
-        </div>
-        <Button type="submit" variant="outline" aria-label="Run search">
-          Search
-        </Button>
-        {appliedQ ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Clear search"
-            onClick={() => {
-              setQ("");
-              setAppliedQ("");
-            }}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : null}
-        <div className="ml-auto flex gap-2">
-          <Button variant="outline" size="icon" onClick={load} aria-label="Refresh inventory">
-            <RefreshCw className="size-4" />
-          </Button>
-          <Button onClick={openCreate}>
-            <Plus className="size-4" /> Add item
-          </Button>
-        </div>
-      </form>
+        <CalendarClock className="size-3" aria-hidden="true" />
+        {isExpiring(i) ? "Expires " : "Exp. "}
+        {formatDate(i.expiryDate)}
+      </Badge>
+    ) : (
+      <span className="text-xs text-muted-foreground">—</span>
+    );
 
-      {/* category chips */}
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by category">
-        <Button
-          type="button"
-          size="sm"
-          variant={category === "all" ? "default" : "outline"}
-          className="h-8 rounded-full"
-          onClick={() => setCategory("all")}
-        >
-          All
-        </Button>
-        {categoryOptions.options.map((o) => (
-          <Button
-            key={o.value}
-            type="button"
-            size="sm"
-            variant={category === o.value ? "default" : "outline"}
-            className="h-8 rounded-full"
-            onClick={() => setCategory(o.value)}
-          >
-            {o.label}
-          </Button>
-        ))}
+  const rowActions = (i: InventoryItem) => (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setStockTarget(i)} aria-label={`Add stock to ${i.name}`}>
+        <PackagePlus className="size-3.5" aria-hidden="true" />
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => openEdit(i)} aria-label={`Edit ${i.name}`}>
+        <Pencil className="size-3.5" aria-hidden="true" />
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+        onClick={() => setDeleteTarget(i)}
+        aria-label={`Delete ${i.name}`}
+      >
+        <Trash2 className="size-3.5" aria-hidden="true" />
+      </Button>
+    </>
+  );
+
+  /* --------------------------------- render -------------------------------- */
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Inventory"
+        description="Stock of ration supplies, sanitary pads, medicine and equipment."
+        icon={<Boxes className="size-5" aria-hidden="true" />}
+        actions={
+          <>
+            <Button variant="outline" onClick={load} aria-label="Refresh inventory">
+              <RefreshCw className="size-4" aria-hidden="true" /> Refresh
+            </Button>
+            <Button onClick={openCreate}>
+              <Plus className="size-4" aria-hidden="true" /> New item
+            </Button>
+          </>
+        }
+      />
+
+      {/* stats */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Total items" value={stats.total} accent="emerald" icon={<Boxes className="size-5" aria-hidden="true" />} loading={loading} />
+        <StatCard
+          label="Low stock"
+          value={stats.low}
+          accent="amber"
+          icon={<AlertTriangle className="size-5" aria-hidden="true" />}
+          loading={loading}
+          hint="At or below minimum"
+        />
+        <StatCard label="Stock value" value={formatINR(stats.value)} accent="teal" icon={<Package className="size-5" aria-hidden="true" />} loading={loading} hint="Qty × unit price" />
+        <StatCard
+          label="Expiring ≤30 days"
+          value={items.filter(isExpiring).length}
+          accent="red"
+          icon={<CalendarClock className="size-5" aria-hidden="true" />}
+          loading={loading}
+        />
       </div>
 
-      {/* low-stock banner */}
-      {!loading && lowItems.length > 0 ? (
-        <div
-          className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
-          role="status"
-        >
-          <TriangleAlert className="size-4 shrink-0" />
-          <span className="font-semibold">
-            {lowItems.length} item{lowItems.length === 1 ? "" : "s"} at or below minimum stock:
-          </span>
-          <span className="min-w-0 truncate text-xs">
-            {lowItems.map((it) => `${it.name} (${it.quantity} ${it.unit})`).join(" · ")}
-          </span>
-        </div>
-      ) : null}
-
+      {/* table */}
       {loading ? (
-        <div className="space-y-2">
+        <div className="space-y-2" aria-busy="true">
           {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-14 rounded-lg" />
+            <Skeleton key={i} className="h-12 rounded-lg" />
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-center">
-          <Boxes className="size-8 text-muted-foreground/50" />
-          <p className="text-sm font-medium">No inventory items found</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            {appliedQ || category !== "all"
-              ? "Try a different search or category filter."
-              : "Add your first stock item to start tracking."}
-          </p>
-        </div>
+        <EmptyState
+          icon={<Boxes className="size-8" aria-hidden="true" />}
+          title="Inventory is empty"
+          hint="Add the first stock item — ration kits, pads, medicine or equipment."
+        >
+          <Button onClick={openCreate}>
+            <Plus className="size-4" aria-hidden="true" /> New item
+          </Button>
+        </EmptyState>
       ) : (
         <>
+          {/* mobile cards */}
+          <ul className="space-y-2 sm:hidden">
+            {items.map((i) => (
+              <li
+                key={i.id}
+                className={cn("rounded-lg border p-3", isLowStock(i) && "border-amber-500/40 bg-amber-500/5")}
+              >
+                <button type="button" className="w-full text-left" onClick={() => setSheet(i)} aria-label={`Open ${i.name}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-semibold">{i.name}</span>
+                    {isLowStock(i) && <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />}
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {labelOf(categoryOptions.options, i.category)} · {i.location || "—"}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    {stockCell(i)}
+                    <span className="text-xs text-muted-foreground">min {i.minStock}</span>
+                    {expiryChip(i)}
+                  </div>
+                </button>
+                <div className="mt-2 flex gap-1.5">{rowActions(i)}</div>
+              </li>
+            ))}
+          </ul>
           {/* desktop table */}
-          <div className="hidden overflow-x-auto rounded-lg border md:block">
+          <div className="hidden overflow-x-auto rounded-lg border sm:block">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Item</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Min stock</TableHead>
-                  <TableHead className="w-40">Level</TableHead>
+                  <TableHead className="text-right">Min</TableHead>
+                  <TableHead className="text-right">Unit price</TableHead>
                   <TableHead>Location</TableHead>
-                  <TableHead className="text-right">Quick stock</TableHead>
+                  <TableHead>Expiry</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((it) => {
-                  const low = (it.quantity || 0) <= (it.minStock || 0);
-                  const pct = Math.min(
-                    100,
-                    Math.round(((it.quantity || 0) / Math.max((it.minStock || 0) * 4, it.quantity || 1)) * 100)
-                  );
-                  return (
-                    <TableRow key={it.id}>
-                      <TableCell>
-                        <span className="block font-medium">{it.name}</span>
-                        {it.pricePerUnit != null ? (
-                          <span className="text-xs text-muted-foreground">
-                            {formatINR(it.pricePerUnit)} / {it.unit}
-                          </span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={cn("whitespace-nowrap", CATEGORY_CLS[it.category] ?? CATEGORY_CLS.OTHER)}>
-                          {titleCase(it.category)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-right font-semibold">
-                        {formatNumber(it.quantity)} {it.unit}
-                        {low ? (
-                          <Badge variant="outline" className="ml-1.5 border-red-200 bg-red-50 text-red-800">
-                            LOW
-                          </Badge>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="text-right">{formatNumber(it.minStock)}</TableCell>
-                      <TableCell>
-                        <Progress
-                          value={pct}
-                          className={cn("h-2", low ? "[&>div]:bg-amber-500" : "[&>div]:bg-emerald-600")}
-                          aria-label={`${it.name} stock level ${pct}%`}
-                        />
-                        <span className="mt-0.5 block text-[10px] text-muted-foreground">{pct}%</span>
-                      </TableCell>
-                      <TableCell>{it.location ?? "—"}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2"
-                            onClick={() => adjustStock(it, 10)}
-                            aria-label={`Add 10 ${it.unit} to ${it.name}`}
-                          >
-                            +10
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2"
-                            onClick={() => adjustStock(it, 50)}
-                            aria-label={`Add 50 ${it.unit} to ${it.name}`}
-                          >
-                            +50
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2"
-                            onClick={() => adjustStock(it, -1)}
-                            disabled={(it.quantity || 0) <= 0}
-                            aria-label={`Remove 1 ${it.unit} from ${it.name}`}
-                          >
-                            <Minus className="size-3" />1
-                          </Button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1.5">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEdit(it)}
-                            aria-label={`Edit ${it.name}`}
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                            onClick={() => setDeleteTarget(it)}
-                            aria-label={`Delete ${it.name}`}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
+                {items.map((i) => (
+                  <TableRow key={i.id} className={cn(isLowStock(i) && "bg-amber-500/5")}>
+                    <TableCell>
+                      <button type="button" className="text-left font-medium hover:text-primary" onClick={() => setSheet(i)} aria-label={`Open ${i.name}`}>
+                        {i.name}
+                      </button>
+                      {isLowStock(i) ? (
+                        <span className="block text-xs text-amber-700 dark:text-amber-400">Low stock — reorder</span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{labelOf(categoryOptions.options, i.category)}</TableCell>
+                    <TableCell className="text-right">{stockCell(i)}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">{i.minStock}</TableCell>
+                    <TableCell className="text-right">{i.pricePerUnit != null ? formatINR(i.pricePerUnit) : "—"}</TableCell>
+                    <TableCell className="max-w-36 truncate">{i.location || "—"}</TableCell>
+                    <TableCell>{expiryChip(i)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1.5">{rowActions(i)}</div>
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
-          </div>
-
-          {/* mobile cards */}
-          <div className="grid gap-3 md:hidden">
-            {items.map((it) => {
-              const low = (it.quantity || 0) <= (it.minStock || 0);
-              const pct = Math.min(
-                100,
-                Math.round(((it.quantity || 0) / Math.max((it.minStock || 0) * 4, it.quantity || 1)) * 100)
-              );
-              return (
-                <Card key={it.id}>
-                  <CardContent className="space-y-2 p-4">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <p className="min-w-0 flex-1 truncate font-semibold">{it.name}</p>
-                      <Badge
-                        variant="outline"
-                        className={cn("whitespace-nowrap", CATEGORY_CLS[it.category] ?? CATEGORY_CLS.OTHER)}
-                      >
-                        {titleCase(it.category)}
-                      </Badge>
-                      {low ? (
-                        <Badge variant="outline" className="border-red-200 bg-red-50 text-red-800">
-                          LOW
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-semibold">
-                        {formatNumber(it.quantity)} {it.unit}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        min {formatNumber(it.minStock)} · {it.location ?? "no location"}
-                      </span>
-                    </div>
-                    <Progress
-                      value={pct}
-                      className={cn("h-2", low ? "[&>div]:bg-amber-500" : "[&>div]:bg-emerald-600")}
-                      aria-label={`${it.name} stock level ${pct}%`}
-                    />
-                    <div className="flex flex-wrap gap-1.5 border-t pt-2">
-                      <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => adjustStock(it, 10)} aria-label={`Add 10 ${it.unit} to ${it.name}`}>
-                        +10
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-8 px-2" onClick={() => adjustStock(it, 50)} aria-label={`Add 50 ${it.unit} to ${it.name}`}>
-                        +50
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 px-2"
-                        onClick={() => adjustStock(it, -1)}
-                        disabled={(it.quantity || 0) <= 0}
-                        aria-label={`Remove 1 ${it.unit} from ${it.name}`}
-                      >
-                        <Minus className="size-3" />1
-                      </Button>
-                      <Button size="sm" variant="outline" className="ml-auto" onClick={() => openEdit(it)} aria-label={`Edit ${it.name}`}>
-                        <Pencil className="size-3.5" /> Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                        onClick={() => setDeleteTarget(it)}
-                        aria-label={`Delete ${it.name}`}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
           </div>
         </>
       )}
 
-      {/* ============ CREATE / EDIT DIALOG ============ */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      {/* ============================== DETAIL SHEET ============================= */}
+      <Sheet open={!!sheet} onOpenChange={(o) => !o && setSheet(null)}>
+        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+          {sheet && (
+            <div className="space-y-5 p-5">
+              <SheetHeader className="p-0 text-left">
+                <SheetTitle>{sheet.name}</SheetTitle>
+                <SheetDescription>{labelOf(categoryOptions.options, sheet.category)}</SheetDescription>
+              </SheetHeader>
+
+              {isLowStock(sheet) && (
+                <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="size-4" aria-hidden="true" />
+                  At or below minimum stock ({sheet.minStock} {sheet.unit}) — reorder soon.
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <DataField label="In stock" value={`${sheet.quantity} ${sheet.unit}`} />
+                <DataField label="Minimum stock" value={`${sheet.minStock} ${sheet.unit}`} />
+                <DataField label="Price per unit" value={sheet.pricePerUnit != null ? formatINR(sheet.pricePerUnit) : "—"} />
+                <DataField label="Stock value" value={formatINR((sheet.pricePerUnit ?? 0) * sheet.quantity)} />
+                <DataField label="Location" value={sheet.location || "—"} />
+                <DataField label="Expiry" value={sheet.expiryDate ? formatDate(sheet.expiryDate) : "No expiry"} />
+              </div>
+
+              {sheet.description ? (
+                <SectionCard title="Description">
+                  <p className="text-sm leading-relaxed text-muted-foreground">{sheet.description}</p>
+                </SectionCard>
+              ) : null}
+
+              <div className="rounded-lg border border-dashed bg-muted/40 p-3 text-xs text-muted-foreground">
+                Purchase history is not exposed by the inventory API yet — stock movements are
+                applied directly with “Add stock”.
+              </div>
+
+              <div className="flex flex-wrap gap-2 border-t pt-4">
+                <Button size="sm" onClick={() => setStockTarget(sheet)}>
+                  <PackagePlus className="size-3.5" aria-hidden="true" /> Add stock
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => openEdit(sheet)}>
+                  <Pencil className="size-3.5" aria-hidden="true" /> Edit
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                  onClick={() => setDeleteTarget(sheet)}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" /> Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* ============================== ADD STOCK =============================== */}
+      <Dialog open={!!stockTarget} onOpenChange={(o) => !o && setStockTarget(null)}>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Boxes className="size-4" />
-              {editing ? `Edit ${editing.name}` : "Add inventory item"}
-            </DialogTitle>
-            <DialogDescription>Stock tracked for kits, pads, medicine and animal feed.</DialogDescription>
+            <DialogTitle>Add stock — {stockTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Currently {stockTarget?.quantity} {stockTarget?.unit} in stock. The quantity is added
+              immediately; supplier and invoice are noted in the activity log.
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="i-name">Item name *</Label>
+              <Label htmlFor="stock-qty">Quantity to add *</Label>
               <Input
-                id="i-name"
+                id="stock-qty"
+                type="number"
+                min={1}
+                value={stockForm.quantity}
+                onChange={(e) => setStockForm({ ...stockForm, quantity: e.target.value })}
+                placeholder="50"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="stock-price">Price per unit (₹)</Label>
+              <Input
+                id="stock-price"
+                type="number"
+                min={0}
+                value={stockForm.pricePerUnit}
+                onChange={(e) => setStockForm({ ...stockForm, pricePerUnit: e.target.value })}
+                placeholder="Leave blank to keep current"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="stock-supplier">Supplier</Label>
+                <Input
+                  id="stock-supplier"
+                  value={stockForm.supplier}
+                  onChange={(e) => setStockForm({ ...stockForm, supplier: e.target.value })}
+                  placeholder="Sri Traders"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="stock-invoice">Invoice number</Label>
+                <Input
+                  id="stock-invoice"
+                  value={stockForm.invoiceNumber}
+                  onChange={(e) => setStockForm({ ...stockForm, invoiceNumber: e.target.value })}
+                  placeholder="INV-2026-0042"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Note: the inventory API currently applies stock as a direct quantity increment; a
+              purchase-log endpoint can be attached later without UI changes.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStockTarget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={addStock} disabled={addingStock}>
+              {addingStock ? "Adding…" : "Add stock"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============================ CREATE / EDIT ============================= */}
+      <Dialog open={itemDialog} onOpenChange={setItemDialog}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editing ? `Edit ${editing.name}` : "New inventory item"}</DialogTitle>
+            <DialogDescription>Categories and units come from the Masters (MDM) registry.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="inv-name">Name *</Label>
+              <Input
+                id="inv-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Rice (per kg packs)"
+                placeholder="Rice (5 kg bags)"
               />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -507,7 +614,7 @@ export default function InventoryView() {
                 <Label>Category</Label>
                 <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
                   <SelectTrigger aria-label="Category">
-                    <SelectValue placeholder="Select category" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {categoryOptions.options.map((o) => (
@@ -519,20 +626,26 @@ export default function InventoryView() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="i-unit">Unit</Label>
-                <Input
-                  id="i-unit"
-                  value={form.unit}
-                  onChange={(e) => setForm({ ...form, unit: e.target.value })}
-                  placeholder="kg / pcs / litre / box"
-                />
+                <Label>Unit</Label>
+                <Select value={form.unit} onValueChange={(v) => setForm({ ...form, unit: v })}>
+                  <SelectTrigger aria-label="Unit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {unitOptions.options.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="i-qty">Quantity</Label>
+                <Label htmlFor="inv-qty">Quantity</Label>
                 <Input
-                  id="i-qty"
+                  id="inv-qty"
                   type="number"
                   min={0}
                   value={form.quantity}
@@ -540,9 +653,9 @@ export default function InventoryView() {
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="i-min">Min stock</Label>
+                <Label htmlFor="inv-min">Minimum stock</Label>
                 <Input
-                  id="i-min"
+                  id="inv-min"
                   type="number"
                   min={0}
                   value={form.minStock}
@@ -552,30 +665,47 @@ export default function InventoryView() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
-                <Label htmlFor="i-price">Price per unit (₹)</Label>
+                <Label htmlFor="inv-price">Price per unit (₹)</Label>
                 <Input
-                  id="i-price"
+                  id="inv-price"
                   type="number"
                   min={0}
-                  step="0.01"
                   value={form.pricePerUnit}
                   onChange={(e) => setForm({ ...form, pricePerUnit: e.target.value })}
-                  placeholder="42"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="i-location">Location</Label>
+                <Label htmlFor="inv-expiry">Expiry date</Label>
                 <Input
-                  id="i-location"
-                  value={form.location}
-                  onChange={(e) => setForm({ ...form, location: e.target.value })}
-                  placeholder="Main godown, rack B2"
+                  id="inv-expiry"
+                  type="date"
+                  value={form.expiryDate}
+                  onChange={(e) => setForm({ ...form, expiryDate: e.target.value })}
+                  aria-label="Expiry date"
                 />
               </div>
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="inv-location">Location</Label>
+              <Input
+                id="inv-location"
+                value={form.location}
+                onChange={(e) => setForm({ ...form, location: e.target.value })}
+                placeholder="Main godown — Rack B2"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="inv-desc">Description</Label>
+              <Textarea
+                id="inv-desc"
+                rows={2}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+              />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setItemDialog(false)}>
               Cancel
             </Button>
             <Button onClick={save} disabled={saving}>
@@ -585,25 +715,29 @@ export default function InventoryView() {
         </DialogContent>
       </Dialog>
 
-      {/* ============ DELETE CONFIRM ============ */}
-      <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Remove {deleteTarget?.name}?</DialogTitle>
-            <DialogDescription>
-              This permanently removes the item and its stock history links.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              Keep
-            </Button>
-            <Button variant="destructive" onClick={remove}>
-              Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ============================ DELETE CONFIRM ============================ */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The item and its purchase history are removed permanently.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep item</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                remove();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

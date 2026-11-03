@@ -346,6 +346,109 @@ async function main() {
     await db.setting.upsert({ where: { key }, update: { value }, create: { key, value, description } });
   }
 
+  // ── Settings — Round-2 canonical keys (create-only: never clobber admin edits) ─
+  const canonicalSettings: [string, string, string][] = [
+    ["org.name", "United Angel Reach", "Organisation name"],
+    ["org.hq", "Bengaluru, Karnataka", "Headquarters"],
+    ["org.address", "Seva Sadana, 42, 7th Cross, Jayanagar 4th Block, Bengaluru — 560070, Karnataka", "Registered office address"],
+    ["org.email", "care@unitedangelreach.org", "Contact email"],
+    ["org.phone", "+91 80 4712 0000", "Office phone"],
+    ["org.pan", "AABTU4521K", "Trust PAN"],
+    ["org.80g", "UAR/80G/2019/BLR", "80G registration number"],
+    ["org.reg12a", "UAR/12A/2019/BLR", "12A registration number"],
+    ["org.darpan", "KA/2019/0245678", "NITI Aayog Darpan ID"],
+    ["org.website", "https://unitedangelreach.org", "Public website"],
+    ["org.vision", "To scale our service model to serve all of India", "Vision statement"],
+    ["receipts.signatoryName", "Anjali Rao", "Default signatory on receipts & certificates"],
+    ["receipts.signatoryRole", "Managing Trustee", "Signatory role"],
+    ["receipts.footer", "United Angel Reach is a registered charitable trust. Donations are eligible for deduction u/s 80G of the Income-tax Act, 1961. This document is system-generated and valid without a physical signature when it carries the trust seal and registration numbers.", "Receipt/certificate footer note"],
+    ["finance.upiId", "unitedangelreach@upi", "Donation UPI ID"],
+    ["finance.razorpayKeyId", "rzp_test_\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022", "Payment gateway key id (masked placeholder)"],
+    ["finance.gatewayEnabled", "true", "Online payment gateway enabled"],
+    ["finance.currency", "INR", "Donation currency"],
+    ["notify.email.enabled", "true", "Email notifications enabled"],
+    ["notify.email.host", "smtp.unitedangelreach.org", "SMTP host"],
+    ["notify.email.port", "587", "SMTP port"],
+    ["notify.email.from", "care@unitedangelreach.org", "From address"],
+    ["notify.email.fromName", "United Angel Reach", "From name"],
+    ["notify.email.secure", "true", "STARTTLS/secure SMTP"],
+    ["notify.sms.enabled", "true", "SMS notifications enabled"],
+    ["notify.sms.provider", "msg91", "SMS provider"],
+    ["notify.sms.senderId", "UARNGO", "DLT sender ID"],
+    ["notify.sms.endpoint", "https://api.msg91.com/api/v5/flow/", "SMS API endpoint"],
+    ["notify.whatsapp.enabled", "true", "WhatsApp updates enabled"],
+    ["notify.whatsapp.number", "+91 80 4712 0000", "WhatsApp Business number"],
+    ["logs.enabled", "true", "Activity logging enabled"],
+    ["logs.level", "info", "Application log level"],
+    ["logs.retentionDays", "90", "Log retention days"],
+    ["app.language", "en", "Default language (en/hi/kn)"],
+    ["app.timezone", "Asia/Kolkata", "Display timezone"],
+    ["assist.model", "glm-4.5-air", "AI assistant model"],
+  ];
+  for (const [key, value, description] of canonicalSettings) {
+    const exists = await db.setting.findUnique({ where: { key } });
+    if (!exists) await db.setting.create({ data: { key, value, description } });
+  }
+  console.log("  ✓ settings (canonical keys ensured)");
+
+  // ── Certificates (Round-2) ─────────────────────────────────────────────
+  const certYear = new Date().getFullYear();
+  const certificates = [
+    {
+      code: `UAR-CERT-${certYear}-00001`,
+      type: "DONOR_APPRECIATION",
+      recipientName: "Ananya Rao",
+      recipientEmail: "ananya.rao@donors.uar.org",
+      title: "Certificate of Appreciation",
+      description: "In grateful recognition of generous and sustained support towards the Ration Kit Mission and the Adopt-a-Medicine programme of United Angel Reach.",
+      refType: "DONATION",
+      meta: JSON.stringify({ programmes: "Ration Kits · Adopt-a-Medicine", fy: "FY 2025-26" }),
+    },
+    {
+      code: `UAR-CERT-${certYear}-00002`,
+      type: "VOLUNTEER_SERVICE",
+      recipientName: "Kiran Kumar",
+      recipientEmail: "kiran.kumar@volunteers.uar.org",
+      title: "Certificate of Volunteer Service",
+      description: "For 120+ hours of dedicated field service across ration-kit drives, school safety workshops and animal feeding routes in Bengaluru South.",
+      refType: "VOLUNTEER",
+      meta: JSON.stringify({ hours: "120", area: "Bengaluru South" }),
+    },
+    {
+      code: `UAR-CERT-${certYear}-00003`,
+      type: "ANIMAL_ADOPTION",
+      recipientName: "Rohit Sharma",
+      recipientEmail: "rohit.sharma@adopters.uar.org",
+      title: "Animal Adoption Certificate",
+      description: "For opening their heart and home to Brownie, a rescued Indie dog rehabilitated by the Angel Paws programme.",
+      refType: "ANIMAL",
+      meta: JSON.stringify({ animal: "Brownie", species: "DOG" }),
+    },
+  ];
+  for (const c of certificates) {
+    await db.certificate.upsert({
+      where: { code: c.code },
+      update: {},
+      create: { ...c, issuedBy: "Anjali Rao" },
+    });
+  }
+  console.log(`  ✓ certificates (${certificates.length})`);
+
+  // ── Notifications (Round-2: global + admin-targeted) ───────────────────
+  if ((await db.notification.count()) === 0) {
+    await db.notification.createMany({
+      data: [
+        { userId: users.admin, type: "INVENTORY", title: "Low stock: Diabetes tablets (Metformin)", message: "Only 60 packs left against a minimum stock of 80 — raise a purchase order with the Jan Aushadhi bulk supplier.", isRead: false, actionUrl: "#/inventory" },
+        { userId: users.admin, type: "VOLUNTEER", title: "Volunteer approval pending", message: "Arjun Kumar (Mysuru) applied with field-ops and teaching skills and is awaiting your review.", isRead: false, actionUrl: "#/volunteers" },
+        { userId: users.admin, type: "DONATION", title: "New donation received", message: "Rahul Sharma donated ₹900 to Angel Paws via UPI — receipt UAR-RCPT-2026-00010 issued.", isRead: false, actionUrl: "#/donations" },
+        { userId: null, type: "SYSTEM", title: "Green corridor mission completed", message: "Mission M-1004 reached the hospital 14 minutes early — the corridor mesh alerted 1,240 vehicles en route.", isRead: false, actionUrl: "#/green-corridor" },
+        { userId: null, type: "SYSTEM", title: "Monthly impact report ready", message: "The consolidated FY impact report is live on the Impact page — donation totals, kit scans and corridor minutes saved.", isRead: false, actionUrl: "#/impact" },
+      ],
+    });
+  }
+  console.log("  ✓ notifications (5)");
+
+
   // ── Activity log ───────────────────────────────────────────────────────
   if ((await db.activityLog.count()) === 0) {
     await db.activityLog.createMany({
@@ -357,6 +460,7 @@ async function main() {
   }
 
   console.log("✅ Seed complete. Logins: admin@unitedangelreach.org/Admin@123 · donor@demo.org/Donor@123 · volunteer@demo.org/Volun@123 · applicant@demo.org/Temp@12345");
+  console.log("   Certificates: UAR-CERT-" + certYear + "-00001/2/3 · Settings: canonical keys ensured · Notifications: 5");
 }
 
 main()

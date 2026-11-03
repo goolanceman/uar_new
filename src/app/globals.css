@@ -229,3 +229,124 @@ html {
 .dark .glass {
   background: oklch(0.16 0.015 145 / 0.8);
 }
+
+/* ==========================================================================
+   Enhancement Round 2 — design system additions (Agent R2-B)
+   ========================================================================== */
+
+/* Global :focus-visible ring using the brand --ring token */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Emerald selection tint (light + dark variants) */
+::selection {
+  background: oklch(0.7 0.15 145 / 0.25);
+  color: inherit;
+}
+
+.dark ::selection {
+  background: oklch(0.65 0.15 145 / 0.4);
+  color: inherit;
+}
+
+/* Dark-mode scrollbar polish — slightly darker thumb for contrast */
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.42 0.04 145 / 0.6);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0.06 145 / 0.8);
+}
+
+/* Card hover lift — shared hover treatment for tiles/cards */
+.card-hover {
+  transition-property: box-shadow, transform;
+  transition-duration: 200ms;
+  transition-timing-function: ease-out;
+}
+
+.card-hover:hover {
+  box-shadow: 0 4px 12px -2px oklch(0.2 0.02 145 / 0.12);
+  transform: translateY(-2px);
+}
+
+.dark .card-hover:hover {
+  box-shadow: 0 4px 12px -2px oklch(0 0 0 / 0.5);
+}
+
+/* Shimmer skeleton effect (light + dark) */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    oklch(1 0 0 / 0.45),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+
+.dark .shimmer::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    oklch(1 0 0 / 0.08),
+    transparent
+  );
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Balanced headline text */
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Reduced motion — honour user preference, disable decorative animation */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* In-app printing: mark the printable region with .print-sheet and hide
+   chrome (buttons/toolbars) with .no-print. Print sheets opened from API
+   routes carry their own inline CSS — these classes serve in-app printing. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-sheet,
+  .print-sheet * {
+    visibility: visible;
+  }
+  .print-sheet {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

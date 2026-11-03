@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { AssistantWidget } from "@/components/shared/assistant-widget";
 
 export interface PortalNavItem {
@@ -94,6 +95,8 @@ export function PortalLayout({
   const { logout } = useAuth();
   const a = ACCENTS[accent] ?? ACCENTS.emerald;
 
+  const activeLabel = nav.find((n) => n.key === active)?.label;
+
   const initials = user.name
     .split(" ")
     .map((w) => w.charAt(0).toUpperCase())
@@ -134,6 +137,17 @@ export function PortalLayout({
             >
               {user.role}
             </Badge>
+            {activeLabel && (
+              <span
+                className="hidden items-center gap-2 text-sm text-muted-foreground md:flex"
+                aria-hidden="true"
+              >
+                <span className="h-4 w-px bg-border" />
+                <span className="max-w-[16rem] truncate font-medium text-foreground/80">
+                  {activeLabel}
+                </span>
+              </span>
+            )}
           </button>
 
           {/* Nav tabs — wrap on mobile, horizontally scrollable if still tight */}
@@ -165,7 +179,8 @@ export function PortalLayout({
           </nav>
 
           {/* Right actions */}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <ThemeToggle align="end" />
             <Button
               variant="outline"
               size="sm"

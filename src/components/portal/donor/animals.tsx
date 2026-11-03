@@ -1,34 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Award,
   Bird,
   Cat,
   Dog,
   HeartHandshake,
   Home,
-  Info,
+  Mail,
   MapPin,
   PawPrint,
   ShieldCheck,
-  Stethoscope,
   Syringe,
   Utensils,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
-import { get, patch, post } from "@/lib/api-client";
-import { cn, formatINR, titleCase } from "@/lib/utils";
+import { get, post } from "@/lib/api-client";
+import { formatINR, titleCase } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shared/page-header";
+import { SectionCard } from "@/components/shared/section-card";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -37,15 +34,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -62,6 +50,7 @@ interface Animal {
   location: string;
   status: string; // AVAILABLE | FOSTERED | ADOPTED | CRITICAL
   monthlyFood: number;
+  adoptedByName?: string | null;
 }
 
 interface AnimalPledge {
@@ -73,10 +62,20 @@ interface AnimalPledge {
   animal?: { name: string; species: string } | null;
 }
 
+interface Certificate {
+  id: string;
+  code: string;
+  type: string;
+  title: string;
+  meta?: string | null;
+}
+
 function asArray<T>(data: unknown): T[] {
   if (Array.isArray(data)) return data as T[];
   if (data && typeof data === "object" && Array.isArray((data as { data?: unknown }).data))
     return (data as { data: T[] }).data;
+  if (data && typeof data === "object" && Array.isArray((data as { certificates?: unknown }).certificates))
+    return (data as { certificates: T[] }).certificates;
   return [];
 }
 
@@ -88,12 +87,11 @@ const SPECIES_ICONS: Record<string, LucideIcon> = {
   OTHER: PawPrint,
 };
 
-const KIND_ICONS: Record<string, LucideIcon> = {
-  FOOD: Utensils,
-  MEDICAL: Stethoscope,
-  VACCINATION: Syringe,
-  SHELTER: Home,
-};
+function ageLabel(months: number): string {
+  if (months < 12) return `${months} mo`;
+  const yrs = Math.floor(months / 12);
+  return `${yrs} yr${yrs >= 2 ? "s" : ""}`;
+}
 
 function AnimalStatusBadge({ status }: { status: string }) {
   return (
@@ -101,10 +99,14 @@ function AnimalStatusBadge({ status }: { status: string }) {
       variant="outline"
       className={cn(
         "rounded-full text-[10px]",
-        status === "AVAILABLE" && "border-lime-200 bg-lime-50 text-lime-700",
-        status === "FOSTERED" && "border-amber-200 bg-amber-50 text-amber-700",
-        status === "ADOPTED" && "border-teal-200 bg-teal-50 text-teal-700",
-        status === "CRITICAL" && "border-red-200 bg-red-50 text-red-700"
+        status === "AVAILABLE" &&
+          "border-lime-500/30 bg-lime-500/10 text-lime-700 dark:text-lime-400",
+        status === "FOSTERED" &&
+          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+        status === "ADOPTED" &&
+          "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
+        status === "CRITICAL" &&
+          "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400"
       )}
     >
       {titleCase(status)}
@@ -112,29 +114,31 @@ function AnimalStatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function DonorAnimals(_props: { user: SessionUser }) {
+export default function DonorAnimals({ user }: { user: SessionUser }) {
   const [animals, setAnimals] = useState<Animal[]>([]);
   const [pledges, setPledges] = useState<AnimalPledge[]>([]);
+  const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [sponsorAnimal, setSponsorAnimal] = useState<Animal | null>(null);
-  const [kind, setKind] = useState("FOOD");
-  const [amount, setAmount] = useState("");
-  const [frequency, setFrequency] = useState("MONTHLY");
-  const [submitting, setSubmitting] = useState(false);
+  // Sponsor-food dialog
+  const [foodAnimal, setFoodAnimal] = useState<Animal | null>(null);
+  const [sponsoring, setSponsoring] = useState(false);
 
-  const [cancelPledge, setCancelPledge] = useState<AnimalPledge | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  // Adopt-interest dialog
+  const [adoptAnimal, setAdoptAnimal] = useState<Animal | null>(null);
+  const [registering, setRegistering] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [a, p] = await Promise.all([
+      const [a, p, c] = await Promise.all([
         get<unknown>("/api/animals"),
         get<unknown>("/api/animals/pledges?mine=1"),
+        get<unknown>("/api/certificates?limit=50").catch(() => []),
       ]);
       setAnimals(asArray<Animal>(a));
       setPledges(asArray<AnimalPledge>(p));
+      setCertificates(asArray<Certificate>(c));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not load animals");
     } finally {
@@ -146,84 +150,85 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
     load();
   }, [load]);
 
-  const defaultAmountFor = (a: Animal, k: string) => {
-    if (k === "FOOD") return String(Math.round(a.monthlyFood || 500));
-    if (k === "MEDICAL") return "500";
-    if (k === "VACCINATION") return "300";
-    return "400"; // SHELTER
-  };
-
-  const openSponsor = (a: Animal) => {
-    setSponsorAnimal(a);
-    setKind("FOOD");
-    setAmount(defaultAmountFor(a, "FOOD"));
-    setFrequency("MONTHLY");
-  };
-
-  const changeKind = (k: string) => {
-    setKind(k);
-    if (sponsorAnimal) setAmount(defaultAmountFor(sponsorAnimal, k));
-  };
-
-  const submitSponsor = async () => {
-    if (!sponsorAnimal) return;
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt < 50) {
-      toast.error("Minimum sponsorship is ₹50");
-      return;
-    }
-    setSubmitting(true);
+  const submitFoodSponsorship = async () => {
+    if (!foodAnimal) return;
+    setSponsoring(true);
     try {
       await post("/api/animals/pledges", {
-        animalId: sponsorAnimal.id,
-        kind,
-        amount: amt,
-        frequency,
+        animalId: foodAnimal.id,
+        kind: "FOOD",
+        amount: Math.max(1, Math.round(foodAnimal.monthlyFood || 500)),
+        frequency: "MONTHLY",
       });
       toast.success(
-        `Thank you! Your ${frequency === "MONTHLY" ? "monthly" : "one-time"} ${kind.toLowerCase()} sponsorship for ${sponsorAnimal.name} is recorded.`
+        `Thank you! You're covering ${foodAnimal.name}'s food at ${formatINR(foodAnimal.monthlyFood)}/month.`
       );
-      setSponsorAnimal(null);
+      setFoodAnimal(null);
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not create sponsorship");
+      toast.error(e instanceof Error ? e.message : "Could not record sponsorship");
     } finally {
-      setSubmitting(false);
+      setSponsoring(false);
     }
   };
 
-  const submitCancel = async () => {
-    if (!cancelPledge) return;
-    setCancelling(true);
+  const registerAdoptionInterest = async () => {
+    if (!adoptAnimal) return;
+    setRegistering(true);
     try {
-      await patch(`/api/animal-pledges/${cancelPledge.id}`, {
-        status: "CANCELLED",
+      await post("/api/contact-queries", {
+        name: user.name,
+        email: user.email,
+        phone: user.phone || undefined,
+        subject: `Adoption interest — ${adoptAnimal.name} (${titleCase(adoptAnimal.species)})`,
+        message: `I would like to adopt ${adoptAnimal.name}, the ${titleCase(adoptAnimal.species)} at ${adoptAnimal.location}. Please arrange the shelter follow-up visit. — ${user.name}`,
       });
-      toast.success("Sponsorship cancelled.");
-      setCancelPledge(null);
-      await load();
+      toast.success(
+        `Interest registered for ${adoptAnimal.name}! Our shelter team will call you to arrange the follow-up visit.`
+      );
+      setAdoptAnimal(null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not cancel sponsorship");
+      toast.error(e instanceof Error ? e.message : "Could not register interest");
     } finally {
-      setCancelling(false);
+      setRegistering(false);
     }
   };
+
+  const openCertificate = (code: string) => {
+    window.open(`/api/certificates/${encodeURIComponent(code)}/html`, "_blank", "noopener");
+  };
+
+  const browsable = animals.filter((a) => a.status !== "ADOPTED");
+  const myAdoptions = animals.filter((a) => a.adoptedByName === user.name);
+
+  /** Certificate matching an adopted animal by name mention in title/meta. */
+  const certForAnimal = useCallback(
+    (animalName: string) =>
+      certificates.find(
+        (c) =>
+          c.type === "ANIMAL_ADOPTION" &&
+          `${c.title} ${c.meta ?? ""}`.toLowerCase().includes(animalName.toLowerCase())
+      ) ?? null,
+    [certificates]
+  );
+
+  const activeSponsorships = useMemo(
+    () => pledges.filter((p) => p.status === "ACTIVE"),
+    [pledges]
+  );
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-          Animal sponsorship
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Feed, heal and shelter rescued animals at the UAR shelter.
-        </p>
-      </div>
+      <PageHeader
+        title="Animal sponsorship"
+        description="Feed, heal and shelter rescued animals at the UAR shelter — sponsor food in one tap, or register to adopt."
+        icon={<PawPrint className="size-5" />}
+      />
 
       {/* ---------- Meet the animals ---------- */}
       <section aria-label="Meet the animals">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          <PawPrint className="size-4" aria-hidden="true" /> Meet the animals
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Meet the animals
         </h2>
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -231,49 +236,46 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
               <Skeleton key={i} className="h-60 rounded-xl" />
             ))}
           </div>
-        ) : animals.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center gap-2 p-10 text-center">
-              <PawPrint className="size-8 text-primary/60" aria-hidden="true" />
-              <p className="text-sm text-muted-foreground">
-                The shelter roster is being updated — check back soon.
-              </p>
-            </CardContent>
-          </Card>
+        ) : browsable.length === 0 ? (
+          <SectionCard title="Shelter roster" icon={<PawPrint className="size-5" />}>
+            <EmptyState
+              icon={<PawPrint className="size-5" />}
+              title="The shelter roster is being updated"
+              hint="New rescues are added after their health checks — check back soon."
+            />
+          </SectionCard>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {animals.map((a) => {
+            {browsable.map((a) => {
               const SpeciesIcon = SPECIES_ICONS[a.species] ?? PawPrint;
+              const sponsoredKinds = activeSponsorships
+                .filter((p) => p.animal?.name === a.name)
+                .map((p) => p.kind);
               return (
-                <Card key={a.id} className="flex flex-col p-5">
+                <div key={a.id} className="flex flex-col rounded-xl border bg-card p-5 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-3">
-                      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-lime-100 text-lime-700">
+                      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-lime-500/15 text-lime-700 dark:text-lime-400">
                         <SpeciesIcon className="size-5" aria-hidden="true" />
                       </span>
                       <div className="min-w-0">
-                        <CardTitle className="truncate text-base">{a.name}</CardTitle>
-                        <CardDescription className="truncate text-xs">
+                        <p className="truncate text-base font-semibold">{a.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
                           {titleCase(a.species)}
-                          {a.breed ? ` · ${a.breed}` : ""} ·{" "}
-                          {a.ageMonths < 12
-                            ? `${a.ageMonths} mo`
-                            : `${Math.floor(a.ageMonths / 12)} yr${a.ageMonths >= 24 ? "s" : ""}`}
-                        </CardDescription>
+                          {a.breed ? ` · ${a.breed}` : ""} · {ageLabel(a.ageMonths)}
+                        </p>
                       </div>
                     </div>
                     <AnimalStatusBadge status={a.status} />
                   </div>
 
-                  <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">
-                    {a.story}
-                  </p>
+                  <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{a.story}</p>
 
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {a.vaccinated && (
                       <Badge
                         variant="outline"
-                        className="gap-1 rounded-full border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
+                        className="gap-1 rounded-full border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-700 dark:text-emerald-400"
                       >
                         <ShieldCheck className="size-3" aria-hidden="true" /> Vaccinated
                       </Badge>
@@ -281,19 +283,25 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
                     {a.sterilized && (
                       <Badge
                         variant="outline"
-                        className="gap-1 rounded-full border-teal-200 bg-teal-50 text-[10px] text-teal-700"
+                        className="gap-1 rounded-full border-teal-500/30 bg-teal-500/10 text-[10px] text-teal-700 dark:text-teal-400"
                       >
                         <Syringe className="size-3" aria-hidden="true" /> Sterilized
                       </Badge>
                     )}
+                    {sponsoredKinds.includes("FOOD") && (
+                      <Badge
+                        variant="outline"
+                        className="gap-1 rounded-full border-primary/30 bg-primary/10 text-[10px] text-primary"
+                      >
+                        <Utensils className="size-3" aria-hidden="true" /> You feed {a.name}
+                      </Badge>
+                    )}
                   </div>
 
-                  <div className="mt-auto flex items-center justify-between gap-2 pt-4">
+                  <div className="mt-4 flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-sm">
-                        <span className="font-bold text-primary">
-                          {formatINR(a.monthlyFood)}
-                        </span>
+                        <span className="font-bold text-primary">{formatINR(a.monthlyFood)}</span>
                         <span className="text-muted-foreground">/mo food</span>
                       </p>
                       <p className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -301,15 +309,27 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
                         <span className="truncate">{a.location}</span>
                       </p>
                     </div>
-                    <Button
-                      className="min-h-11 gap-1.5 sm:min-h-9"
-                      onClick={() => openSponsor(a)}
-                    >
-                      <HeartHandshake className="size-4" aria-hidden="true" />
-                      Sponsor
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="min-h-11 gap-1.5 sm:min-h-9"
+                        onClick={() => setAdoptAnimal(a)}
+                        aria-label={`Register adoption interest for ${a.name}`}
+                      >
+                        <Home className="size-4" aria-hidden="true" />
+                        Adopt
+                      </Button>
+                      <Button
+                        className="min-h-11 gap-1.5 sm:min-h-9"
+                        onClick={() => setFoodAnimal(a)}
+                        aria-label={`Sponsor food for ${a.name}`}
+                      >
+                        <Utensils className="size-4" aria-hidden="true" />
+                        Sponsor food
+                      </Button>
+                    </div>
                   </div>
-                </Card>
+                </div>
               );
             })}
           </div>
@@ -317,6 +337,53 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
       </section>
 
       <Separator />
+
+      {/* ---------- Adoption confirmations ---------- */}
+      {myAdoptions.length > 0 && (
+        <section aria-label="My adoptions">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            My adoptions
+          </h2>
+          <div className="grid gap-3">
+            {myAdoptions.map((a) => {
+              const cert = certForAnimal(a.name);
+              return (
+                <div
+                  key={a.id}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-teal-500/30 bg-teal-500/10 p-4"
+                >
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-400">
+                    <Award className="size-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-teal-900 dark:text-teal-200">
+                      {a.name} is officially adopted by you
+                    </p>
+                    <p className="text-xs text-teal-800/80 dark:text-teal-300/80">
+                      {titleCase(a.species)} · {a.location}
+                    </p>
+                  </div>
+                  {cert ? (
+                    <Button
+                      size="sm"
+                      className="min-h-11 gap-1.5 sm:min-h-9"
+                      onClick={() => openCertificate(cert.code)}
+                      aria-label={`Open adoption certificate for ${a.name}`}
+                    >
+                      <Award className="size-4" aria-hidden="true" />
+                      Adoption certificate
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-teal-900/80 dark:text-teal-200/80">
+                      Adoption certificate will appear here once issued by the team.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ---------- My sponsorships ---------- */}
       <section aria-label="My sponsorships">
@@ -326,17 +393,26 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
         {loading ? (
           <Skeleton className="h-28 w-full rounded-xl" />
         ) : pledges.length === 0 ? (
-          <Card>
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              No sponsorships yet. Pick a friend above — even ₹50/mo feeds a tail.
-            </CardContent>
-          </Card>
+          <SectionCard title="Sponsorships" icon={<HeartHandshake className="size-5" />}>
+            <EmptyState
+              icon={<PawPrint className="size-5" />}
+              title="No sponsorships yet"
+              hint="Pick a friend above — sponsoring a month of meals starts at their monthly food cost."
+            />
+          </SectionCard>
         ) : (
           <div className="grid gap-3">
             {pledges.map((p) => {
-              const KindIcon = KIND_ICONS[p.kind] ?? PawPrint;
+              const KindIcon =
+                p.kind === "FOOD"
+                  ? Utensils
+                  : p.kind === "MEDICAL"
+                    ? HeartHandshake
+                    : p.kind === "VACCINATION"
+                      ? Syringe
+                      : Home;
               return (
-                <Card key={p.id} className="p-4 sm:p-5">
+                <div key={p.id} className="rounded-xl border bg-card p-4 shadow-sm sm:p-5">
                   <div className="flex flex-wrap items-start gap-3">
                     <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                       <KindIcon className="size-4" aria-hidden="true" />
@@ -358,147 +434,120 @@ export default function DonorAnimals(_props: { user: SessionUser }) {
                           className={cn(
                             "rounded-full text-[10px]",
                             p.status === "ACTIVE" &&
-                              "border-emerald-200 bg-emerald-50 text-emerald-700",
+                              "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
                             p.status === "COMPLETED" &&
-                              "border-teal-200 bg-teal-50 text-teal-700",
+                              "border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-400",
                             p.status === "CANCELLED" &&
-                              "border-zinc-200 bg-zinc-50 text-zinc-600"
+                              "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
                           )}
                         >
-                          {p.status}
+                          {titleCase(p.status)}
                         </Badge>
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {formatINR(p.amount)} · {titleCase(p.frequency)}
                       </p>
                     </div>
-                    {p.status === "ACTIVE" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="min-h-11 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 sm:min-h-9"
-                        onClick={() => setCancelPledge(p)}
-                      >
-                        Cancel
-                      </Button>
-                    )}
                   </div>
-                </Card>
+                </div>
               );
             })}
+            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <Mail className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              To pause or change a sponsorship, mail the shelter team at
+              shelter@unitedangelreach.org — they action requests the same day.
+            </p>
           </div>
         )}
       </section>
 
-      {/* ---------- Sponsor dialog ---------- */}
+      {/* ---------- Sponsor food dialog ---------- */}
       <Dialog
-        open={sponsorAnimal !== null}
-        onOpenChange={(open) => !open && setSponsorAnimal(null)}
+        open={foodAnimal !== null}
+        onOpenChange={(openDlg) => !openDlg && setFoodAnimal(null)}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Sponsor {sponsorAnimal?.name}</DialogTitle>
+            <DialogTitle>Sponsor {foodAnimal?.name}&apos;s food</DialogTitle>
             <DialogDescription>
-              {sponsorAnimal &&
-                `${titleCase(sponsorAnimal.species)} at ${sponsorAnimal.location} · food cost ${formatINR(sponsorAnimal.monthlyFood)}/mo`}
+              {foodAnimal &&
+                `${titleCase(foodAnimal.species)} at ${foodAnimal.location} · ${formatINR(foodAnimal.monthlyFood)}/month food cost`}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="sponsor-kind">What are you covering?</Label>
-              <Select value={kind} onValueChange={changeKind}>
-                <SelectTrigger id="sponsor-kind" className="w-full">
-                  <SelectValue placeholder="Select kind" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="FOOD">Food</SelectItem>
-                  <SelectItem value="MEDICAL">Medical care</SelectItem>
-                  <SelectItem value="VACCINATION">Vaccination</SelectItem>
-                  <SelectItem value="SHELTER">Shelter</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label htmlFor="sponsor-amount">Amount (₹)</Label>
-                <Input
-                  id="sponsor-amount"
-                  type="number"
-                  min={50}
-                  inputMode="numeric"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sponsor-freq">Frequency</Label>
-                <Select value={frequency} onValueChange={setFrequency}>
-                  <SelectTrigger id="sponsor-freq" className="w-full">
-                    <SelectValue placeholder="Frequency" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MONTHLY">Monthly</SelectItem>
-                    <SelectItem value="ONE_TIME">One time</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
-              <Info className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden="true" />
-              <p>
-                Want to adopt {sponsorAnimal?.name ?? "them"} home? Adoption is
-                confirmed via a <strong>shelter follow-up visit</strong> — our team
-                marks your interest and contacts you.
-              </p>
-            </div>
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              Your monthly sponsorship of{" "}
+              <span className="font-semibold text-foreground">
+                {formatINR(foodAnimal?.monthlyFood ?? 0)}
+              </span>{" "}
+              covers this friend&apos;s meals for a month — bowls, feed and the
+              occasional birthday egg.
+            </p>
+            <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs">
+              Frequency: <strong className="text-foreground">MONTHLY</strong> · Kind:{" "}
+              <strong className="text-foreground">FOOD</strong> — managed by the
+              shelter team; you&apos;ll see it under &quot;My sponsorships&quot;.
+            </p>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
               className="min-h-11 sm:min-h-9"
-              onClick={() => setSponsorAnimal(null)}
+              onClick={() => setFoodAnimal(null)}
             >
               Cancel
             </Button>
             <Button
               className="min-h-11"
-              onClick={submitSponsor}
-              disabled={submitting}
+              onClick={submitFoodSponsorship}
+              disabled={sponsoring}
             >
-              {submitting ? "Recording…" : "Confirm sponsorship"}
+              {sponsoring ? "Recording…" : "Confirm monthly food"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ---------- Cancel sponsorship dialog ---------- */}
+      {/* ---------- Adopt interest dialog ---------- */}
       <Dialog
-        open={cancelPledge !== null}
-        onOpenChange={(open) => !open && setCancelPledge(null)}
+        open={adoptAnimal !== null}
+        onOpenChange={(openDlg) => !openDlg && setAdoptAnimal(null)}
       >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Cancel this sponsorship?</DialogTitle>
+            <DialogTitle>Adopt {adoptAnimal?.name}</DialogTitle>
             <DialogDescription>
-              {cancelPledge &&
-                `Your ${cancelPledge.frequency === "MONTHLY" ? "monthly" : "one-time"} ${cancelPledge.kind.toLowerCase()} support of ${formatINR(cancelPledge.amount)} for ${cancelPledge.animal?.name ?? "the shelter"} will stop.`}
+              {adoptAnimal &&
+                `${titleCase(adoptAnimal.species)} · ${ageLabel(adoptAnimal.ageMonths)} · ${adoptAnimal.location}`}
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              Adoption is confirmed through a <strong>shelter follow-up visit</strong>{" "}
+              — our team checks the home match, shares care notes and completes the
+              handover. Registering your interest reserves {adoptAnimal?.name} while
+              the visit is arranged.
+            </p>
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
+              We&apos;ll use <strong>{user.email}</strong>
+              {user.phone ? ` and ${user.phone}` : ""} to reach you within 2 working
+              days.
+            </p>
+          </div>
           <DialogFooter>
             <Button
               variant="outline"
               className="min-h-11 sm:min-h-9"
-              onClick={() => setCancelPledge(null)}
+              onClick={() => setAdoptAnimal(null)}
             >
-              Keep sponsoring
+              Not now
             </Button>
             <Button
-              variant="destructive"
               className="min-h-11"
-              onClick={submitCancel}
-              disabled={cancelling}
+              onClick={registerAdoptionInterest}
+              disabled={registering}
             >
-              {cancelling ? "Cancelling…" : "Yes, cancel"}
+              {registering ? "Registering…" : "Register interest"}
             </Button>
           </DialogFooter>
         </DialogContent>

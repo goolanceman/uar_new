@@ -2,9 +2,10 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "@/lib/router";
+import { Link, navigate } from "@/lib/router";
 import { get, post } from "@/lib/api-client";
-import { cn, formatINR, formatNumber, titleCase } from "@/lib/utils";
+import { cn, formatNumber, timeAgo, titleCase } from "@/lib/utils";
+import { formatINR, formatINRCompact } from "@/lib/format";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Accordion,
   AccordionContent,
@@ -38,20 +40,23 @@ import {
 } from "@/components/ui/select";
 import {
   Section,
-  Stat,
   StepFlow,
   ChartBox,
   EmptyState,
   CheckItem,
   CampaignIcon,
-  accentClasses,
-  askAngel,
 } from "@/components/public/shared";
 import { LiveCorridorDemo } from "@/components/public/green-corridor";
-import { CAMPAIGN_CONTENT } from "@/components/public/campaign-data";
+import {
+  CAMPAIGN_CONTENT,
+  DONOR_FAQS,
+  IMPACT_BULLETS,
+  accentSoft,
+} from "@/components/public/campaign-data";
 import {
   Ban,
   BookOpenCheck,
+  ChartNoAxesCombined,
   Check,
   CheckCircle2,
   Dog,
@@ -59,7 +64,9 @@ import {
   Heart,
   HeartPulse,
   Link2,
+  MessageCircleHeart,
   Phone,
+  Share2,
   Sparkles,
   Syringe,
   X,
@@ -115,30 +122,40 @@ interface Animal {
   monthlyFood: number;
 }
 
+interface PublicDonation {
+  id: string;
+  donorName: string;
+  amount: number;
+  isAnonymous?: boolean;
+  type?: string;
+  createdAt?: string;
+  campaign?: { title?: string } | null;
+}
+
 /* ------------------------------------------------------------------ */
-/* Status badge colours                                                */
+/* Status badge colours (dark-safe)                                    */
 /* ------------------------------------------------------------------ */
 
 const CAUSE_STATUS: Record<string, string> = {
-  SEEKING: "bg-amber-100 text-amber-700",
-  PARTIAL: "bg-orange-100 text-orange-700",
-  ADOPTED: "bg-emerald-100 text-emerald-700",
-  PAUSED: "bg-zinc-100 text-zinc-600",
+  SEEKING: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  PARTIAL: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+  ADOPTED: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  PAUSED: "bg-muted text-muted-foreground",
 };
 
 const ANIMAL_STATUS: Record<string, string> = {
-  AVAILABLE: "bg-emerald-100 text-emerald-700",
-  FOSTERED: "bg-amber-100 text-amber-700",
-  ADOPTED: "bg-zinc-100 text-zinc-600",
-  CRITICAL: "bg-red-100 text-red-700",
+  AVAILABLE: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  FOSTERED: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  ADOPTED: "bg-muted text-muted-foreground",
+  CRITICAL: "bg-red-500/15 text-red-600 dark:text-red-400",
 };
 
 const SPECIES_BADGE: Record<string, string> = {
-  DOG: "bg-lime-100 text-lime-700",
-  CAT: "bg-amber-100 text-amber-700",
-  COW: "bg-orange-100 text-orange-700",
-  BIRD: "bg-cyan-100 text-cyan-700",
-  OTHER: "bg-zinc-100 text-zinc-600",
+  DOG: "bg-lime-500/15 text-lime-600 dark:text-lime-400",
+  CAT: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  COW: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+  BIRD: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400",
+  OTHER: "bg-muted text-muted-foreground",
 };
 
 /* ================================================================== */
@@ -182,17 +199,41 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
     );
   }
 
-  const a = accentClasses(content.accent);
+  const a = accentSoft(content.accent);
   const accent = content.accent;
   const pct =
     live && live.targetAmount > 0
       ? Math.min(100, Math.round((live.raisedAmount / live.targetAmount) * 100))
       : 0;
 
+  const shareCampaign = async () => {
+    const url = `${window.location.origin}${window.location.pathname}#/campaigns/${content.slug}`;
+    const payload = {
+      title: content.title,
+      text: `${content.title} — United Angel Reach. ${content.heroTag}`,
+      url,
+    };
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share(payload);
+        return;
+      }
+      throw new Error("no-share");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success("Link copied — share it with anyone");
+      } catch {
+        toast.error("Couldn't share — copy the URL from the address bar");
+      }
+    }
+  };
+
   return (
-    <>
+    <div className="pb-4">
       {/* ================= HERO ================= */}
-      <section className={cn("text-white", a.bg600)}>
+      <section className={cn("text-white", a.solid)}>
         <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
           <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-2xl">
@@ -225,12 +266,10 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button
                   size="lg"
-                  className="border-0 bg-white text-zinc-900 hover:bg-white/90"
-                  asChild
+                  className="border-0 bg-white text-foreground hover:bg-white/90"
+                  onClick={() => navigate(`/donate?campaign=${content.slug}`)}
                 >
-                  <Link href={`/donate?campaign=${content.slug}`}>
-                    <Heart className="size-5" aria-hidden /> Donate
-                  </Link>
+                  <Heart className="size-5" aria-hidden /> Donate
                 </Button>
                 <Button
                   size="lg"
@@ -244,7 +283,18 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
                   size="lg"
                   variant="outline"
                   className="border-white bg-transparent text-white hover:bg-white/10"
-                  onClick={askAngel}
+                  onClick={shareCampaign}
+                >
+                  <Share2 className="size-5" aria-hidden /> Share
+                </Button>
+                <Button
+                  size="lg"
+                  variant="ghost"
+                  className="text-white hover:bg-white/10"
+                  onClick={() => {
+                    const ev = new CustomEvent("open-assistant");
+                    window.dispatchEvent(ev);
+                  }}
                 >
                   <Sparkles className="size-5" aria-hidden /> Ask Angel
                 </Button>
@@ -294,86 +344,193 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
         </div>
       </section>
 
-      {/* ================= OVERVIEW ================= */}
-      <Section title="Understanding the problem">
-        <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
-          <div className="space-y-4">
-            {content.overview.map((p, i) => (
-              <p key={i} className="text-sm leading-relaxed text-muted-foreground sm:text-base">
-                {p}
+      {/* ================= TABS: Story / Impact / FAQ ================= */}
+      <Section className="pt-8">
+        <Tabs defaultValue="story">
+          <TabsList className="h-11 w-full justify-start overflow-x-auto sm:h-10 sm:justify-center">
+            <TabsTrigger value="story" className="min-h-[40px] px-4">
+              Story
+            </TabsTrigger>
+            <TabsTrigger value="impact" className="min-h-[40px] px-4">
+              Impact
+            </TabsTrigger>
+            <TabsTrigger value="faq" className="min-h-[40px] px-4">
+              FAQ
+            </TabsTrigger>
+          </TabsList>
+
+          {/* ---------- STORY ---------- */}
+          <TabsContent value="story" className="space-y-10 pt-6">
+            <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+              <div className="space-y-4">
+                {content.overview.map((p, i) => (
+                  <p key={i} className="text-sm leading-relaxed text-muted-foreground sm:text-base">
+                    {p}
+                  </p>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3 self-start">
+                {content.keyFacts.map((f, i) => (
+                  <Card
+                    key={i}
+                    className={cn("col-span-1 p-4", i === 0 && "col-span-2")}
+                  >
+                    <p className={cn("text-2xl font-extrabold tracking-tight", a.text)}>
+                      {f.value}
+                      <span className="text-sm font-bold">{f.suffix}</span>
+                    </p>
+                    <p className="mt-1 text-xs leading-snug text-muted-foreground">{f.label}</p>
+                  </Card>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="flex items-center gap-2 text-xl font-bold tracking-tight">
+                <ChartNoAxesCombined className="size-5 text-muted-foreground" aria-hidden />{" "}
+                The data
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Real India-context datasets behind this programme.
               </p>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-3 self-start">
-            {content.keyFacts.map((f, i) => (
-              <Card
-                key={i}
-                className={cn("col-span-1 p-4", i === 0 && "col-span-2")}
-              >
-                <p className={cn("text-2xl font-extrabold tracking-tight", a.text700)}>
-                  {f.value}
-                  <span className="text-sm font-bold">{f.suffix}</span>
+              <div className={cn("mt-4 grid gap-4", content.charts.length > 1 && "lg:grid-cols-2")}>
+                {content.charts.map((ch, i) => (
+                  <ChartBox
+                    key={i}
+                    title={ch.title}
+                    desc={ch.desc}
+                    type={ch.type}
+                    data={ch.data}
+                    xKey={ch.xKey}
+                    nameKey={ch.nameKey}
+                    valueKey={ch.valueKey}
+                    colors={ch.colors}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-xl font-bold tracking-tight">Why this matters</h3>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {content.whyItMatters.map((w, i) => (
+                  <Card key={i} className="flex gap-3 p-4">
+                    <span
+                      className={cn(
+                        "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full",
+                        a.chip,
+                        a.text
+                      )}
+                    >
+                      <Check className="size-4" aria-hidden />
+                    </span>
+                    <p className="text-sm leading-relaxed text-muted-foreground">{w}</p>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* ---------- IMPACT ---------- */}
+          <TabsContent value="impact" className="space-y-10 pt-6">
+            {/* Live stats */}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {loading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-[74px] rounded-xl" />
+                ))
+              ) : live ? (
+                <>
+                  {[
+                    { label: "Raised so far", value: formatINRCompact(live.raisedAmount) },
+                    { label: "Of target", value: formatINRCompact(live.targetAmount) },
+                    { label: "Beneficiaries", value: formatNumber(live.beneficiaries) },
+                    { label: "Volunteers engaged", value: formatNumber(live.volunteersEngaged) },
+                  ].map((s) => (
+                    <Card key={s.label} className="p-4 sm:p-5">
+                      <p className={cn("text-xl font-extrabold tracking-tight sm:text-2xl", a.text)}>
+                        {s.value}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">{s.label}</p>
+                    </Card>
+                  ))}
+                </>
+              ) : (
+                <p className="col-span-2 text-sm text-muted-foreground lg:col-span-4">
+                  Live programme numbers are syncing — the outcome bullets below describe how
+                  every rupee converts into field action.
                 </p>
-                <p className="mt-1 text-xs leading-snug text-muted-foreground">{f.label}</p>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </Section>
+              )}
+            </div>
 
-      {/* ================= CHARTS ================= */}
-      <Section
-        title="The data"
-        subtitle="Real India-context datasets behind this programme."
-        className="bg-muted/40"
-      >
-        <div className={cn("grid gap-4", content.charts.length > 1 && "lg:grid-cols-2")}>
-          {content.charts.map((ch, i) => (
-            <ChartBox
-              key={i}
-              title={ch.title}
-              desc={ch.desc}
-              type={ch.type}
-              data={ch.data}
-              xKey={ch.xKey}
-              nameKey={ch.nameKey}
-              valueKey={ch.valueKey}
-              colors={ch.colors}
-            />
-          ))}
-        </div>
-      </Section>
-
-      {/* ================= SPECIAL EMBEDS ================= */}
-      {slug === "medicine-adoption" && <MedicineAdoptionEmbed />}
-      {slug === "animal-welfare" && <AnimalWelfareEmbed />}
-      {slug === "green-corridor" && (
-        <Section
-          title="Live corridor demo"
-          subtitle="Run a simulated Hebbal → Tin Factory mission. Watch the four-layer mesh clear the road in real time."
-        >
-          <LiveCorridorDemo />
-        </Section>
-      )}
-
-      {/* ================= WHY IT MATTERS ================= */}
-      <Section title="Why this matters">
-        <div className="grid gap-3 sm:grid-cols-2">
-          {content.whyItMatters.map((w, i) => (
-            <Card key={i} className="flex gap-3 p-4">
-              <span
-                className={cn(
-                  "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full",
-                  a.bg100,
-                  a.text700
-                )}
+            {/* Outcome bullets */}
+            <div className="rounded-xl border bg-muted/40 p-5">
+              <h3 className="font-semibold">How your gift converts into action</h3>
+              <ul className="mt-3 space-y-2.5">
+                {(IMPACT_BULLETS[content.slug] ?? []).map((b, i) => (
+                  <li key={i} className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
+                    <CheckCircle2
+                      className={cn("mt-0.5 size-4 shrink-0", a.text)}
+                      aria-hidden
+                    />
+                    {b}
+                  </li>
+                ))}
+              </ul>
+              <Button
+                className={cn("mt-4 text-white", a.solid)}
+                onClick={() => navigate(`/donate?campaign=${content.slug}`)}
               >
-                <Check className="size-4" aria-hidden />
-              </span>
-              <p className="text-sm leading-relaxed text-muted-foreground">{w}</p>
-            </Card>
-          ))}
-        </div>
+                <Heart className="size-4" aria-hidden /> Fund this programme
+              </Button>
+            </div>
+
+            {/* Special embeds */}
+            {slug === "medicine-adoption" && <MedicineAdoptionEmbed />}
+            {slug === "animal-welfare" && <AnimalWelfareEmbed />}
+            {slug === "green-corridor" && (
+              <div>
+                <h3 className="text-xl font-bold tracking-tight">Live corridor demo</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Run a simulated Hebbal → Tin Factory mission. Watch the four-layer mesh clear
+                  the road in real time.
+                </p>
+                <div className="mt-4">
+                  <LiveCorridorDemo />
+                </div>
+              </div>
+            )}
+
+            {/* Recent support wall */}
+            <SupportWall slug={slug} campaignTitle={live?.title ?? null} accent={accent} />
+          </TabsContent>
+
+          {/* ---------- FAQ ---------- */}
+          <TabsContent value="faq" className="pt-6">
+            <Accordion type="single" collapsible className="mx-auto max-w-3xl">
+              {DONOR_FAQS.map((f, i) => (
+                <AccordionItem key={`donor-${i}`} value={`donor-faq-${i}`}>
+                  <AccordionTrigger className="text-left text-sm sm:text-base">
+                    {f.q}
+                  </AccordionTrigger>
+                  <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
+                    {f.a}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
+              {content.faqs.map((f, i) => (
+                <AccordionItem key={`faq-${i}`} value={`faq-${i}`}>
+                  <AccordionTrigger className="text-left text-sm sm:text-base">
+                    {f.q}
+                  </AccordionTrigger>
+                  <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
+                    {f.a}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
+            </Accordion>
+          </TabsContent>
+        </Tabs>
       </Section>
 
       {/* ================= PLAYBOOK ================= */}
@@ -390,9 +547,9 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
       {/* ================= DOS & DON'TS ================= */}
       <Section title="Do this, not that">
         <div className="grid gap-4 md:grid-cols-2">
-          <Card className="border-emerald-200 bg-emerald-50/60 p-5">
-            <h3 className="flex items-center gap-2 font-semibold text-emerald-800">
-              <CheckCircle2 className="size-5 text-emerald-600" aria-hidden /> Do
+          <Card className="border-emerald-500/25 bg-emerald-500/10 p-5">
+            <h3 className="flex items-center gap-2 font-semibold text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 className="size-5" aria-hidden /> Do
             </h3>
             <ul className="mt-4 space-y-3">
               {content.dosDonts.dos.map((d, i) => (
@@ -402,14 +559,14 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
               ))}
             </ul>
           </Card>
-          <Card className="border-red-200 bg-red-50/60 p-5">
-            <h3 className="flex items-center gap-2 font-semibold text-red-800">
-              <Ban className="size-5 text-red-600" aria-hidden /> Don&rsquo;t
+          <Card className="border-red-500/25 bg-red-500/10 p-5">
+            <h3 className="flex items-center gap-2 font-semibold text-red-700 dark:text-red-400">
+              <Ban className="size-5" aria-hidden /> Don&rsquo;t
             </h3>
             <ul className="mt-4 space-y-3">
               {content.dosDonts.donts.map((d, i) => (
                 <li key={i} className="flex items-start gap-2 text-sm leading-relaxed">
-                  <X className="mt-0.5 size-4 shrink-0 text-red-600" aria-hidden />
+                  <X className="mt-0.5 size-4 shrink-0 text-red-600 dark:text-red-400" aria-hidden />
                   <span>{d}</span>
                 </li>
               ))}
@@ -425,7 +582,7 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
             <AccordionItem key={i} value={`myth-${i}`}>
               <AccordionTrigger className="text-left text-sm sm:text-base">
                 <span className="flex items-start gap-2">
-                  <Badge className="mt-0.5 shrink-0 border-0 bg-red-100 text-[10px] uppercase text-red-700 hover:bg-red-100">
+                  <Badge className="mt-0.5 shrink-0 border-0 bg-red-500/15 text-[10px] uppercase text-red-600 dark:text-red-400">
                     Myth
                   </Badge>
                   {m.myth}
@@ -433,7 +590,7 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
               </AccordionTrigger>
               <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
                 <span className="flex items-start gap-2">
-                  <Badge className="mt-0.5 shrink-0 border-0 bg-emerald-100 text-[10px] uppercase text-emerald-700 hover:bg-emerald-100">
+                  <Badge className="mt-0.5 shrink-0 border-0 bg-emerald-500/15 text-[10px] uppercase text-emerald-600 dark:text-emerald-400">
                     Fact
                   </Badge>
                   {m.fact}
@@ -447,26 +604,12 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
       {/* ================= TOOLKIT ================= */}
       <ToolkitSection accent={accent} toolkit={content.toolkit} />
 
-      {/* ================= FAQS ================= */}
-      <Section title="Frequently asked questions" className="bg-muted/40">
-        <Accordion type="single" collapsible className="mx-auto max-w-3xl">
-          {content.faqs.map((f, i) => (
-            <AccordionItem key={i} value={`faq-${i}`}>
-              <AccordionTrigger className="text-left text-sm sm:text-base">{f.q}</AccordionTrigger>
-              <AccordionContent className="text-sm leading-relaxed text-muted-foreground">
-                {f.a}
-              </AccordionContent>
-            </AccordionItem>
-          ))}
-        </Accordion>
-      </Section>
-
       {/* ================= LINKS BAND ================= */}
       <Section>
-        <Card className={cn("flex flex-col gap-4 border p-6 sm:flex-row sm:items-center sm:justify-between", a.border200, a.bg50)}>
+        <Card className={cn("flex flex-col gap-4 border p-6 sm:flex-row sm:items-center sm:justify-between", a.border, a.chip)}>
           <div>
             <h3 className="flex items-center gap-2 font-semibold">
-              <Link2 className={cn("size-5", a.text700)} aria-hidden /> Official links & further reading
+              <Link2 className={cn("size-5", a.text)} aria-hidden /> Official links & further reading
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
               Verified government and institutional resources for this programme.
@@ -480,9 +623,9 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
-                  "inline-flex min-h-[40px] items-center gap-1.5 rounded-full border bg-white px-3.5 py-2 text-xs font-semibold transition hover:shadow-sm",
-                  a.border200,
-                  a.text700
+                  "inline-flex min-h-[40px] items-center gap-1.5 rounded-full border bg-card px-3.5 py-2 text-xs font-semibold transition hover:shadow-sm",
+                  a.border,
+                  a.text
                 )}
               >
                 {l.label}
@@ -492,7 +635,148 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
           </div>
         </Card>
       </Section>
-    </>
+
+      {/* ================= STICKY DONATE CTA ================= */}
+      <div
+        className="sticky bottom-4 z-30 mx-auto w-full max-w-6xl px-4 sm:px-6"
+        style={{ marginTop: "-1rem" }}
+      >
+        <div className="flex items-center justify-between gap-3 rounded-2xl border bg-background/90 p-3 shadow-lg backdrop-blur sm:px-4">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold leading-tight">{content.title}</p>
+            <p className="text-xs text-muted-foreground">
+              {live ? (
+                <>
+                  <span className="font-semibold text-foreground">
+                    {formatINRCompact(live.raisedAmount)}
+                  </span>{" "}
+                  raised · {pct}%
+                </>
+              ) : (
+                "Every rupee QR-traced to a doorstep"
+              )}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-[44px]"
+              onClick={shareCampaign}
+              aria-label="Share this programme"
+            >
+              <Share2 className="size-4" aria-hidden />
+              <span className="hidden sm:inline">Share</span>
+            </Button>
+            <Button
+              size="sm"
+              className="min-h-[44px] bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => navigate(`/donate?campaign=${content.slug}`)}
+            >
+              <Heart className="size-4" aria-hidden /> Donate
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* Recent support wall (public donations feed, campaign-filtered)       */
+/* ================================================================== */
+
+function SupportWall({
+  slug,
+  campaignTitle,
+  accent,
+}: {
+  slug: string;
+  campaignTitle: string | null;
+  accent: string;
+}) {
+  const a = accentSoft(accent);
+  const [donations, setDonations] = useState<PublicDonation[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    get<PublicDonation[]>("/api/donations?public=1")
+      .then((d) => alive && setDonations(Array.isArray(d) ? d : []))
+      .catch(() => alive && setDonations([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const wall = React.useMemo(() => {
+    if (donations === null) return null;
+    if (!campaignTitle) return donations.slice(0, 6);
+    const own = donations.filter((d) => d.campaign?.title === campaignTitle);
+    return own.length > 0 ? own : [];
+  }, [donations, campaignTitle]);
+
+  return (
+    <div>
+      <h3 className="flex items-center gap-2 text-xl font-bold tracking-tight">
+        <MessageCircleHeart className="size-5 text-muted-foreground" aria-hidden /> Recent
+        support
+      </h3>
+      {wall === null ? (
+        <div className="mt-4 space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 rounded-lg" />
+          ))}
+        </div>
+      ) : wall.length === 0 ? (
+        <EmptyState
+          icon={Heart}
+          title="Be the first to support this programme"
+          hint="Every gift appears here — anonymously if you prefer — with its QR-traced outcome."
+          className="mt-4"
+          action={
+            <Button className={cn("text-white", a.solid)} onClick={() => navigate(`/donate?campaign=${slug}`)}>
+              <Heart className="size-4" aria-hidden /> Donate now
+            </Button>
+          }
+        />
+      ) : (
+        <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+          {wall.map((d) => (
+            <li
+              key={d.id}
+              className="flex items-center gap-3 rounded-lg border bg-card p-3"
+            >
+              <span
+                className={cn(
+                  "flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+                  a.chip,
+                  a.text
+                )}
+              >
+                {(d.isAnonymous ? "A" : d.donorName?.[0] ?? "?").toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold">
+                  {d.isAnonymous ? "Anonymous" : d.donorName}
+                  {d.type === "RECURRING" && (
+                    <Badge variant="outline" className="ml-1.5 px-1 py-0 text-[9px]">
+                      monthly
+                    </Badge>
+                  )}
+                </span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {timeAgo(d.createdAt)}
+                  {d.campaign?.title ? ` · ${d.campaign.title}` : ""}
+                </span>
+              </span>
+              <span className={cn("shrink-0 text-sm font-bold", a.text)}>
+                {formatINR(d.amount)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -507,7 +791,7 @@ function ToolkitSection({
   accent: string;
   toolkit: { title: string; items: string[] }[];
 }) {
-  const a = accentClasses(accent);
+  const a = accentSoft(accent);
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
   const total = toolkit.reduce((n, g) => n + g.items.length, 0);
@@ -544,7 +828,7 @@ function ToolkitSection({
             <Card key={gi} className="flex flex-col p-5">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-semibold leading-snug">{g.title}</h3>
-                <Badge variant="outline" className={cn("shrink-0", a.border200, a.text700)}>
+                <Badge variant="outline" className={cn("shrink-0", a.border, a.text)}>
                   {groupDone}/{g.items.length}
                 </Badge>
               </div>
@@ -598,19 +882,20 @@ function MedicineAdoptionEmbed() {
     }
   }, []);
 
-   
   useEffect(() => {
     const t = setTimeout(load, 0);
     return () => clearTimeout(t);
   }, [load]);
 
   return (
-    <Section
-      title="Patients waiting for adoption"
-      subtitle="Pharmacist-verified prescriptions, Jan Aushadhi pricing, QR'd doorstep delivery. Adopt fully or share a pledge."
-    >
+    <div>
+      <h3 className="text-xl font-bold tracking-tight">Patients waiting for adoption</h3>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Pharmacist-verified prescriptions, Jan Aushadhi pricing, QR&rsquo;d doorstep delivery.
+        Adopt fully or share a pledge.
+      </p>
       {causes === null ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-64 rounded-xl" />
           ))}
@@ -620,6 +905,7 @@ function MedicineAdoptionEmbed() {
           icon={HeartPulse}
           title="No open causes right now"
           hint="Every listed patient has been adopted. New verified causes appear within a week — or donate to the general medicine fund."
+          className="mt-4"
           action={
             <Button asChild className="bg-teal-600 hover:bg-teal-700">
               <Link href="/donate?campaign=medicine-adoption">Fund medicines generally</Link>
@@ -627,7 +913,7 @@ function MedicineAdoptionEmbed() {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {causes.map((cause) => {
             const needed = cause.monthlyCost * cause.durationMonths;
             const pct = needed > 0 ? Math.min(100, Math.round((cause.raised / needed) * 100)) : 0;
@@ -640,13 +926,13 @@ function MedicineAdoptionEmbed() {
                   <Badge
                     className={cn(
                       "border-0 text-[10px] hover:opacity-90",
-                      CAUSE_STATUS[cause.status] ?? "bg-zinc-100 text-zinc-600"
+                      CAUSE_STATUS[cause.status] ?? "bg-muted text-muted-foreground"
                     )}
                   >
                     {titleCase(cause.status)}
                   </Badge>
                 </div>
-                <h3 className="mt-3 font-semibold">{cause.patientName}</h3>
+                <h4 className="mt-3 font-semibold">{cause.patientName}</h4>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {cause.age} yrs · {titleCase(cause.condition)} · {cause.city}
                 </p>
@@ -654,7 +940,7 @@ function MedicineAdoptionEmbed() {
                   {cause.story}
                 </p>
                 <div className="mt-3 flex items-baseline gap-1">
-                  <span className="text-xl font-bold text-teal-700">
+                  <span className="text-xl font-bold text-teal-600 dark:text-teal-400">
                     {formatINR(cause.monthlyCost)}
                   </span>
                   <span className="text-xs text-muted-foreground">/ month</span>
@@ -677,7 +963,7 @@ function MedicineAdoptionEmbed() {
       )}
 
       <AdoptDialog cause={adopting} onClose={() => setAdopting(null)} onDone={load} />
-    </Section>
+    </div>
   );
 }
 
@@ -817,7 +1103,6 @@ function AnimalWelfareEmbed() {
     }
   }, []);
 
-   
   useEffect(() => {
     const t = setTimeout(load, 0);
     return () => clearTimeout(t);
@@ -836,12 +1121,14 @@ function AnimalWelfareEmbed() {
   };
 
   return (
-    <Section
-      title="Animals ready for sponsorship & adoption"
-      subtitle="Vaccinated, sterilised, and fed by trained volunteers. Sponsor food monthly or open your home."
-    >
+    <div>
+      <h3 className="text-xl font-bold tracking-tight">Animals ready for sponsorship & adoption</h3>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Vaccinated, sterilised, and fed by trained volunteers. Sponsor food monthly or open your
+        home.
+      </p>
       {animals === null ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-72 rounded-xl" />
           ))}
@@ -851,6 +1138,7 @@ function AnimalWelfareEmbed() {
           icon={Dog}
           title="No animals listed right now"
           hint="Our rescue partners are updating the board. Sponsor the general food fund meanwhile."
+          className="mt-4"
           action={
             <Button asChild className="bg-lime-600 hover:bg-lime-700">
               <Link href="/donate?campaign=animal-welfare">Fund animal food</Link>
@@ -858,24 +1146,29 @@ function AnimalWelfareEmbed() {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {animals.map((an) => (
             <Card key={an.id} className="flex flex-col p-5">
               <div className="flex items-center justify-between gap-2">
-                <Badge className={cn("border-0 text-xs capitalize hover:opacity-90", SPECIES_BADGE[an.species] ?? "bg-zinc-100 text-zinc-600")}>
+                <Badge
+                  className={cn(
+                    "border-0 text-xs hover:opacity-90",
+                    SPECIES_BADGE[an.species] ?? "bg-muted text-muted-foreground"
+                  )}
+                >
                   {speciesIcon(an.species)}
                   <span className="ml-1">{titleCase(an.species)}</span>
                 </Badge>
                 <Badge
                   className={cn(
                     "border-0 text-[10px] hover:opacity-90",
-                    ANIMAL_STATUS[an.status] ?? "bg-zinc-100 text-zinc-600"
+                    ANIMAL_STATUS[an.status] ?? "bg-muted text-muted-foreground"
                   )}
                 >
                   {titleCase(an.status)}
                 </Badge>
               </div>
-              <h3 className="mt-3 font-semibold">{an.name}</h3>
+              <h4 className="mt-3 font-semibold">{an.name}</h4>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {ageLabel(an.ageMonths)} · {titleCase(an.gender)}
                 {an.breed ? ` · ${an.breed}` : ""} · {an.location}
@@ -886,7 +1179,9 @@ function AnimalWelfareEmbed() {
                   variant="outline"
                   className={cn(
                     "gap-1 text-[10px]",
-                    an.vaccinated ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-muted-foreground"
+                    an.vaccinated
+                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : "text-muted-foreground"
                   )}
                 >
                   <Syringe className="size-3" aria-hidden />
@@ -896,7 +1191,9 @@ function AnimalWelfareEmbed() {
                   variant="outline"
                   className={cn(
                     "gap-1 text-[10px]",
-                    an.sterilized ? "border-teal-200 bg-teal-50 text-teal-700" : "text-muted-foreground"
+                    an.sterilized
+                      ? "border-teal-500/25 bg-teal-500/10 text-teal-600 dark:text-teal-400"
+                      : "text-muted-foreground"
                   )}
                 >
                   <Check className="size-3" aria-hidden />
@@ -904,7 +1201,9 @@ function AnimalWelfareEmbed() {
                 </Badge>
               </div>
               <div className="mt-3 flex items-baseline gap-1">
-                <span className="text-lg font-bold text-lime-700">{formatINR(an.monthlyFood)}</span>
+                <span className="text-lg font-bold text-lime-600 dark:text-lime-400">
+                  {formatINR(an.monthlyFood)}
+                </span>
                 <span className="text-xs text-muted-foreground">/ month of food</span>
               </div>
               <Button
@@ -920,7 +1219,7 @@ function AnimalWelfareEmbed() {
       )}
 
       <SponsorDialog animal={sponsoring} onClose={() => setSponsoring(null)} onDone={load} />
-    </Section>
+    </div>
   );
 }
 

@@ -9,6 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -16,15 +22,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ThemeToggle } from "@/components/shared/theme-toggle";
 import {
   ChevronDown,
   Clock,
+  FileBarChart,
   Heart,
   Landmark,
   LogOut,
   Mail,
   MapPin,
   Menu,
+  Phone,
+  ScrollText,
   ShieldCheck,
   Siren,
   Sparkles,
@@ -53,15 +63,25 @@ const EMERGENCY_NUMBERS = [
   { number: "14446", label: "De-addiction" },
 ];
 
-const FOOTER_HELPLINES = [
-  { number: "112", label: "Emergency (police/fire)" },
+const HELPLINE_STRIP = [
+  { number: "112", label: "Emergency" },
   { number: "108", label: "Ambulance" },
   { number: "1930", label: "Cyber fraud" },
   { number: "181", label: "Women helpline" },
   { number: "1098", label: "CHILDLINE" },
+];
+
+const MORE_HELPLINES = [
   { number: "14446", label: "De-addiction" },
-  { number: "1933", label: "Drug trafficking (NCB)" },
+  { number: "1933", label: "Drug trafficking (NCB MANAS)" },
   { number: "1962", label: "Animal rescue (AWBI)" },
+];
+
+const TRANSPARENCY_LINKS = [
+  { label: "Impact dashboard", href: "/impact", icon: FileBarChart },
+  { label: "Green Corridor live ops", href: "/green-corridor", icon: Siren },
+  { label: "All campaigns", href: "/campaigns", icon: ScrollText },
+  { label: "Volunteer with us", href: "/volunteer", icon: Heart },
 ];
 
 function isActive(path: string, href: string): boolean {
@@ -79,12 +99,6 @@ function initials(name?: string | null): string {
     .join("");
 }
 
-const ROLE_PORTALS: Record<string, { label: string; href: string }> = {
-  DONOR: { label: "Donor Portal", href: "/donor" },
-  VOLUNTEER: { label: "Volunteer Portal", href: "/volunteer" },
-  ADMIN: { label: "Admin", href: "/admin" },
-};
-
 export function PublicLayout({
   children,
   path,
@@ -95,6 +109,7 @@ export function PublicLayout({
   const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [stripVisible, setStripVisible] = useState(true);
+  const year = new Date().getFullYear();
 
   const handleLogout = async () => {
     try {
@@ -108,14 +123,13 @@ export function PublicLayout({
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      {/* ============ Sticky header ============ */}
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      {/* ============ Sticky glass header ============ */}
+      <header className="glass sticky top-0 z-40 border-b border-border/60">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center gap-2 px-4 sm:px-6">
           {/* Logo */}
           <Link
             href="/"
             className="flex min-w-0 items-center gap-2.5"
-            onClick={() => setMobileOpen(false)}
             aria-label="United Angel Reach home"
           >
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
@@ -125,7 +139,7 @@ export function PublicLayout({
               <span className="block truncate text-base font-bold tracking-tight sm:text-lg">
                 United Angel Reach
               </span>
-              <span className="block text-[11px] font-medium text-emerald-700">
+              <span className="block text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
                 Bengaluru → India
               </span>
             </span>
@@ -140,10 +154,11 @@ export function PublicLayout({
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={isActive(path, item.href) ? "page" : undefined}
                 className={cn(
                   "rounded-full px-3 py-2 text-sm transition-colors",
                   isActive(path, item.href)
-                    ? "bg-emerald-50 font-semibold text-emerald-700"
+                    ? "bg-emerald-500/10 font-semibold text-emerald-700 dark:text-emerald-400"
                     : "font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
               >
@@ -153,13 +168,14 @@ export function PublicLayout({
           </nav>
 
           {/* Right actions (desktop) */}
-          <div className="ml-auto hidden items-center gap-2 lg:ml-0 lg:flex">
+          <div className="ml-auto hidden items-center gap-1.5 lg:ml-0 lg:flex">
+            <ThemeToggle align="end" />
             {user ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
-                    className="h-10 gap-2 pl-1.5 pr-2"
+                    className="h-11 gap-2 pl-1.5 pr-2"
                     aria-label="Account menu"
                   >
                     <span className="flex size-8 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white">
@@ -213,7 +229,7 @@ export function PublicLayout({
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={handleLogout}
-                    className="text-red-600 focus:text-red-600"
+                    className="text-red-600 focus:text-red-600 dark:text-red-400 dark:focus:text-red-400"
                   >
                     <LogOut className="size-4" aria-hidden /> Logout
                   </DropdownMenuItem>
@@ -224,8 +240,13 @@ export function PublicLayout({
                 <Button variant="ghost" asChild>
                   <Link href="/login">Sign in</Link>
                 </Button>
-                <Button asChild className="bg-emerald-600 hover:bg-emerald-700">
-                  <Link href="/donate">Donate</Link>
+                <Button
+                  asChild
+                  className="bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+                >
+                  <Link href="/donate">
+                    <Heart className="size-4" aria-hidden /> Donate
+                  </Link>
                 </Button>
               </>
             )}
@@ -237,7 +258,7 @@ export function PublicLayout({
               <Button
                 asChild
                 size="sm"
-                className="hidden bg-emerald-600 hover:bg-emerald-700 sm:inline-flex"
+                className="hidden bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600 sm:inline-flex"
               >
                 <Link href="/donate">Donate</Link>
               </Button>
@@ -245,107 +266,149 @@ export function PublicLayout({
             <Button
               variant="ghost"
               size="icon"
-              className="size-10"
+              className="size-11"
               aria-label={mobileOpen ? "Close menu" : "Open menu"}
               aria-expanded={mobileOpen}
+              aria-haspopup="dialog"
               onClick={() => setMobileOpen((o) => !o)}
             >
               {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
             </Button>
           </div>
         </div>
+      </header>
 
-        {/* Mobile dropdown menu */}
-        {mobileOpen && (
-          <div className="border-t bg-background lg:hidden">
-            <nav aria-label="Mobile" className="mx-auto max-w-7xl px-2 py-2">
+      {/* ============ Mobile sheet (sectioned links) ============ */}
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="right" className="flex w-80 flex-col gap-0 p-0 sm:w-84">
+          <SheetHeader className="border-b px-5 py-4 text-left">
+            <SheetTitle className="flex items-center gap-2.5">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-emerald-600 text-white">
+                <ShieldCheck className="size-5" aria-hidden />
+              </span>
+              <span className="leading-tight">
+                <span className="block text-sm font-bold">United Angel Reach</span>
+                <span className="block text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                  Bengaluru → India
+                </span>
+              </span>
+            </SheetTitle>
+          </SheetHeader>
+
+          <div className="flex-1 overflow-y-auto px-3 py-3 scrollbar-thin safe-bottom">
+            <p className="px-2 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              Explore
+            </p>
+            <nav aria-label="Mobile" className="space-y-0.5">
               {NAV_ITEMS.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileOpen(false)}
+                  aria-current={isActive(path, item.href) ? "page" : undefined}
                   className={cn(
-                    "block rounded-lg px-3 py-3 text-sm font-medium",
+                    "flex min-h-11 items-center rounded-xl px-3 text-sm font-medium",
                     isActive(path, item.href)
-                      ? "bg-emerald-50 text-emerald-700"
+                      ? "bg-emerald-500/10 font-semibold text-emerald-700 dark:text-emerald-400"
                       : "text-foreground hover:bg-muted"
                   )}
                 >
                   {item.label}
                 </Link>
               ))}
-              <Separator className="my-2" />
-              {user ? (
-                <div className="space-y-1 px-1 pb-2">
-                  <p className="px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {user.name} · {user.role}
-                  </p>
-                  <Link
-                    href="/profile"
-                    onClick={() => setMobileOpen(false)}
-                    className="block rounded-lg px-2 py-2.5 text-sm font-medium hover:bg-muted"
-                  >
-                    Profile
-                  </Link>
-                  {user.role === "DONOR" && (
-                    <Link
-                      href="/donor"
-                      onClick={() => setMobileOpen(false)}
-                      className="block rounded-lg px-2 py-2.5 text-sm font-medium hover:bg-muted"
-                    >
-                      Donor Portal
-                    </Link>
-                  )}
-                  {user.role === "VOLUNTEER" && (
-                    <Link
-                      href="/volunteer"
-                      onClick={() => setMobileOpen(false)}
-                      className="block rounded-lg px-2 py-2.5 text-sm font-medium hover:bg-muted"
-                    >
-                      Volunteer Portal
-                    </Link>
-                  )}
-                  {user.role === "ADMIN" && (
-                    <Link
-                      href="/admin"
-                      onClick={() => setMobileOpen(false)}
-                      className="block rounded-lg px-2 py-2.5 text-sm font-medium hover:bg-muted"
-                    >
-                      Admin
-                    </Link>
-                  )}
-                  <button
-                    onClick={handleLogout}
-                    className="block w-full rounded-lg px-2 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50"
-                  >
-                    Logout
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2 px-1 pb-3 pt-1">
-                  <Button variant="outline" className="flex-1" asChild>
-                    <Link href="/login" onClick={() => setMobileOpen(false)}>
-                      Sign in
-                    </Link>
-                  </Button>
-                  <Button
-                    className="flex-1 bg-emerald-600 hover:bg-emerald-700"
-                    asChild
-                  >
-                    <Link href="/donate" onClick={() => setMobileOpen(false)}>
-                      Donate
-                    </Link>
-                  </Button>
-                </div>
-              )}
             </nav>
+
+            <Separator className="my-3" />
+
+            <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              Appearance
+            </p>
+            <div className="flex min-h-11 items-center justify-between rounded-xl px-3">
+              <span className="text-sm font-medium text-muted-foreground">
+                Light / Dark
+              </span>
+              <ThemeToggle align="start" />
+            </div>
+
+            <Separator className="my-3" />
+
+            <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              Account
+            </p>
+            {user ? (
+              <div className="space-y-0.5">
+                <p className="truncate px-3 py-2 text-xs font-semibold text-muted-foreground">
+                  {user.name} · {user.role}
+                </p>
+                <Link
+                  href="/profile"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex min-h-11 items-center rounded-xl px-3 text-sm font-medium hover:bg-muted"
+                >
+                  Profile
+                </Link>
+                {user.role === "DONOR" && (
+                  <Link
+                    href="/donor"
+                    onClick={() => setMobileOpen(false)}
+                    className="flex min-h-11 items-center rounded-xl px-3 text-sm font-medium hover:bg-muted"
+                  >
+                    Donor Portal
+                  </Link>
+                )}
+                {user.role === "VOLUNTEER" && (
+                  <Link
+                    href="/volunteer"
+                    onClick={() => setMobileOpen(false)}
+                    className="flex min-h-11 items-center rounded-xl px-3 text-sm font-medium hover:bg-muted"
+                  >
+                    Volunteer Portal
+                  </Link>
+                )}
+                {user.role === "ADMIN" && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setMobileOpen(false)}
+                    className="flex min-h-11 items-center rounded-xl px-3 text-sm font-medium hover:bg-muted"
+                  >
+                    Admin Console
+                  </Link>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-medium text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2 px-1 pb-3 pt-1">
+                <Button variant="outline" className="min-h-11 flex-1" asChild>
+                  <Link href="/login" onClick={() => setMobileOpen(false)}>
+                    Sign in
+                  </Link>
+                </Button>
+                <Button
+                  className="min-h-11 flex-1 bg-emerald-600 font-semibold text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+                  asChild
+                >
+                  <Link href="/donate" onClick={() => setMobileOpen(false)}>
+                    Donate
+                  </Link>
+                </Button>
+              </div>
+            )}
           </div>
-        )}
-      </header>
+        </SheetContent>
+      </Sheet>
 
       {/* ============ Dismissible emergency strip ============ */}
       {stripVisible && (
-        <div className="border-b border-red-100 bg-red-50 text-red-700" role="region" aria-label="Emergency helplines">
+        <div
+          className="border-b border-red-500/15 bg-red-500/5 text-red-700 dark:text-red-400"
+          role="region"
+          aria-label="Emergency helplines"
+        >
           <div className="mx-auto flex w-full max-w-7xl items-center gap-1.5 overflow-x-auto px-4 py-1.5 text-xs scrollbar-thin sm:px-6">
             <Siren className="size-3.5 shrink-0" aria-hidden />
             <span className="shrink-0 font-bold uppercase tracking-wide">Emergency</span>
@@ -353,7 +416,7 @@ export function PublicLayout({
               <a
                 key={n.number}
                 href={`tel:${n.number}`}
-                className="shrink-0 whitespace-nowrap rounded-full bg-white/70 px-2 py-0.5 font-semibold ring-1 ring-red-200 transition hover:bg-red-100"
+                className="shrink-0 whitespace-nowrap rounded-full bg-background/70 px-2 py-0.5 font-semibold ring-1 ring-red-500/20 transition hover:bg-red-500/10"
               >
                 {n.number} {n.label}
               </a>
@@ -361,7 +424,7 @@ export function PublicLayout({
             <button
               onClick={() => setStripVisible(false)}
               aria-label="Dismiss emergency strip"
-              className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-full hover:bg-red-100"
+              className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-full hover:bg-red-500/10"
             >
               <X className="size-3.5" aria-hidden />
             </button>
@@ -376,7 +439,7 @@ export function PublicLayout({
       <footer className="mt-auto bg-emerald-950 text-emerald-50/80">
         <div className="mx-auto w-full max-w-7xl px-4 py-12 sm:px-6">
           <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-4">
-            {/* Brand */}
+            {/* About */}
             <div>
               <div className="flex items-center gap-2.5">
                 <span className="flex size-10 items-center justify-center rounded-xl bg-emerald-600 text-white">
@@ -420,20 +483,35 @@ export function PublicLayout({
               </ul>
             </nav>
 
-            {/* Helplines */}
-            <nav aria-label="Helplines">
+            {/* Transparency */}
+            <nav aria-label="Transparency">
               <h3 className="text-sm font-bold uppercase tracking-wider text-white">
-                Helplines
+                Transparency
               </h3>
               <ul className="mt-4 space-y-2 text-sm">
-                {FOOTER_HELPLINES.map((h) => (
-                  <li key={h.number}>
-                    <a
-                      href={`tel:${h.number}`}
-                      className="inline-flex items-baseline gap-2 transition hover:text-white"
-                    >
-                      <span className="w-12 font-bold text-emerald-300">{h.number}</span>
-                      <span>{h.label}</span>
+                {TRANSPARENCY_LINKS.map((t) => {
+                  const Icon = t.icon;
+                  return (
+                    <li key={t.href}>
+                      <Link
+                        href={t.href}
+                        className="inline-flex items-center gap-2 transition hover:text-white"
+                      >
+                        <Icon className="size-3.5 text-emerald-300" aria-hidden />
+                        {t.label}
+                      </Link>
+                    </li>
+                  );
+                })}
+                <li className="border-t border-white/10 pt-2 text-xs text-emerald-300/80">
+                  Donations to UAR are tax-exempt under Section 80G. Utilisation is
+                  reported publicly every quarter.
+                </li>
+                {MORE_HELPLINES.map((h) => (
+                  <li key={h.number} className="text-xs">
+                    <a href={`tel:${h.number}`} className="transition hover:text-white">
+                      <span className="font-bold text-emerald-300">{h.number}</span>{" "}
+                      {h.label}
                     </a>
                   </li>
                 ))}
@@ -471,10 +549,30 @@ export function PublicLayout({
             </div>
           </div>
         </div>
+
+        {/* Helpline strip */}
+        <div className="border-t border-white/10 bg-emerald-900/60" role="region" aria-label="National helplines">
+          <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-4 gap-y-1.5 px-4 py-3 text-xs sm:px-6">
+            <span className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wide text-emerald-200">
+              <Phone className="size-3.5" aria-hidden /> National helplines
+            </span>
+            {HELPLINE_STRIP.map((h) => (
+              <a
+                key={h.number}
+                href={`tel:${h.number}`}
+                className="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-full bg-emerald-950/60 px-2.5 py-1 font-semibold text-emerald-50 ring-1 ring-emerald-700/60 transition hover:bg-emerald-900"
+              >
+                <span className="text-emerald-300">{h.number}</span>
+                <span className="text-emerald-200/80">{h.label}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+
         <div className="border-t border-white/10">
           <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between gap-1 px-4 py-4 text-xs sm:flex-row sm:px-6">
-            <p>© 2026 United Angel Reach Trust · serving all of India</p>
-            <p className="text-emerald-300/70">White + green. Proof-first charity.</p>
+            <p>© {year} United Angel Reach Trust · All rights reserved</p>
+            <p className="text-emerald-300/70">Made in Bengaluru, for all of India</p>
           </div>
         </div>
       </footer>
