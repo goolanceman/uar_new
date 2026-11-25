@@ -210,3 +210,36 @@ Sidebar uses `bg-sidebar` + `text-sidebar-foreground` tokens. In light mode side
 
 ### Print documents (redesigned round-5)
 80G receipts: `/api/receipts/:receiptNumber/html` — neutral ink palette + 80G watermark. Certificates: `/api/certificates/:code/html` — ivory paper, hairline frame, UAR watermark rings, gold seal. Shared shell: `src/app/api/_lib/org.ts printDocument`. Do NOT reintroduce all-green designs.
+
+# ================= SETTINGS ROUND 3 — SINGLE SOURCE OF TRUTH =================
+
+## src/lib/settings-core.ts (client-safe; the ONLY place these live)
+- `SETTING_DEFAULTS` — every canonical key+default (org.*, brand.*, finance.*, notify.email/sms/whatsapp.*, storage.*, webhooks.*, analytics.*, captcha.*, maps.*, kits.*, logs.*, app.*, receipts.*, assist.*, matching.*, features.*).
+- `isSecretKey(key)` / `maskValue(v)` / `SECRET_KEYS` set.
+- `validateSettingValue(key, value): string | null` — per-key validation shared by PATCH endpoint AND settings view. PATCH rejects unknown keys + invalid values (400).
+- `SECTION_PREFIXES` + `keysForSection(section, keys)` — settings-card → keys mapping (incl. new "flags" section).
+- `FLAG_CATALOG: {key,label,description,effect}[]` — every feature flag + what it gates. `isFlagOn(v)`, `publicFeatures(map)`.
+- `CURRENCIES` (22 ISO currencies w/ symbol/decimals/locale), `getCurrency(code)`, `formatMoney(amount, code)`, `currencyUnitName(code)`.
+
+## src/lib/notify.ts (server-only) — real outbound transports
+- `loadSettings()` → full settings map (raw values incl. secrets).
+- sendEmail/sendSms/sendWhatsApp → `ChannelResult {ok, skipped?, latencyMs, message}`; silent no-op (skipped) when flag off/unconfigured; NEVER throw.
+- verifyEmail/verifySms/verifyWhatsApp/verifyGateway — real connectivity checks (SMTP verify, Twilio ping, WhatsApp Cloud API, Razorpay/Stripe/Cashfree REST) used by POST /api/settings/test.
+- notifyDonation / notifyContactQuery / emailShell — branded transactional helpers.
+- PATCH secret round-trip: values containing "•" are IGNORED (keep stored secret).
+
+## POST /api/settings/test — {channel: email|sms|whatsapp|gateway} → {ok, latencyMs, message} (ADMIN)
+
+## GET /api/settings/public — now also returns:
+`currency`, `currencySymbol`, `gatewayEnabled`, `gatewayProvider`, `gatewayKeyId?` (public Razorpay/Stripe key, only when gateway enabled), `features: Record<string,boolean>` (publicFlags: features.* + finance.gatewayEnabled + assist.enabled + app.maintenance).
+
+## Payments (real gateways, no SDKs — REST via fetch)
+- POST /api/payments {receiptNumber} → provider order/session: RAZORPAY (Orders API + checkout.js), STRIPE (Checkout Session redirect), CASHFREE (drop-in session). PAYU → clear unsupported error.
+- POST /api/payments/verify — Razorpay HMAC-SHA256 signature verify / Stripe session retrieve / Cashfree payments list; only PENDING→COMPLETED, idempotent.
+- Gateway donations are created PENDING (donations POST, paymentProvider set); UPI deep-link stays INR-only (UPI rails); 80G cash>₹2000 rule only when currency=INR.
+- NEVER expose gateway secrets client-side — only `gatewayKeyId` (public identifier) via /api/settings/public.
+
+## Transactional notifications (fire-and-forget, never break main flow)
+- Donation PENDING→COMPLETED (verify or admin PATCH) → notifyDonation (email+SMS+WhatsApp per flags).
+- Contact query → ack email; Volunteer application/approval/rejection → emails; Mission DISPATCHED → SMS to mission contact.
+- Feature gates: features.currencySwitcher / features.recurringDonations / features.anonymousDonations gate donate page UI; assist.enabled hides assistant widget; app.maintenance shows public banner.

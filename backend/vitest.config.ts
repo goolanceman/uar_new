@@ -1,0 +1,25 @@
+import { defineConfig } from "vitest/config";
+import path from "node:path";
+
+// The suite runs against the dedicated TEST database (uar_test) — never the
+// dev/prod `uar` database. backend/.env is NOT loaded so DATABASE_URL comes
+// solely from this file's env below.
+export default defineConfig({
+  test: {
+    environment: "node",
+    include: ["tests/**/*.test.ts"],
+    testTimeout: 30_000,
+    pool: "forks", // isolated process — the in-app server + Prisma don't leak state
+    env: {
+      DATABASE_URL: "postgresql://uar:uar_dev_password@localhost:5433/uar_test?schema=public",
+      SESSION_SECRET: "test-secret-value-at-least-16ch",
+      NODE_ENV: "test",
+      UPLOAD_DIR: "../upload-test",
+    },
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
+});

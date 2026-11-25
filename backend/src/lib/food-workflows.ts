@@ -1,0 +1,104 @@
+/**
+ * Client-safe Food programme workflow vocabularies and transition tables.
+ * Keep this module pure: client views and server routes share it without
+ * pulling in database, session, or other server-only dependencies.
+ */
+
+export const FOOD_EVENT_STATUSES = [
+  "DRAFT", "APPROVED", "PUBLISHED", "REGISTRATION_OPEN", "REGISTRATION_CLOSED",
+  "PLANNING", "STOCK_ALLOCATED", "PACKAGES_PREPARED", "READY", "IN_PROGRESS",
+  "COMPLETED", "RECONCILED", "CLOSED", "POSTPONED", "CANCELLED", "SUSPENDED",
+] as const;
+
+export const FOOD_EVENT_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ["APPROVED", "CANCELLED"],
+  APPROVED: ["PUBLISHED", "CANCELLED"],
+  PUBLISHED: ["REGISTRATION_OPEN", "CANCELLED"],
+  REGISTRATION_OPEN: ["REGISTRATION_CLOSED", "CANCELLED", "SUSPENDED"],
+  REGISTRATION_CLOSED: ["PLANNING", "REGISTRATION_OPEN", "CANCELLED"],
+  PLANNING: ["STOCK_ALLOCATED", "CANCELLED"],
+  STOCK_ALLOCATED: ["PACKAGES_PREPARED", "PLANNING", "CANCELLED"],
+  PACKAGES_PREPARED: ["READY", "CANCELLED"],
+  READY: ["IN_PROGRESS", "CANCELLED", "SUSPENDED"],
+  IN_PROGRESS: ["COMPLETED", "SUSPENDED"],
+  COMPLETED: ["RECONCILED"],
+  RECONCILED: ["CLOSED"],
+  SUSPENDED: ["IN_PROGRESS", "READY", "REGISTRATION_OPEN", "CANCELLED"],
+  POSTPONED: ["READY", "IN_PROGRESS", "REGISTRATION_OPEN", "CANCELLED"],
+  CANCELLED: [],
+  CLOSED: [],
+};
+
+export const FOOD_PUBLIC_EVENT_STATUSES = [
+  "PUBLISHED", "REGISTRATION_OPEN", "IN_PROGRESS", "COMPLETED", "RECONCILED",
+];
+
+export const FOOD_OPERATIONAL_STATUSES = [
+  "STOCK_ALLOCATED", "PACKAGES_PREPARED", "READY", "IN_PROGRESS",
+];
+
+export const FOOD_REGISTRATION_STATUSES = [
+  "REGISTERED", "APPROVED", "CONFIRMED", "CHECKED_IN", "DISTRIBUTED",
+  "PARTIALLY_DISTRIBUTED", "NOT_COLLECTED", "NO_SHOW", "CANCELLED",
+  "RESCHEDULED", "REJECTED",
+] as const;
+
+/**
+ * Donated-food pledge lifecycle. RECEIVE is deliberately allowed from
+ * SCHEDULED as well as COLLECTED for the existing direct-receipt workflow;
+ * once stock is posted as RECEIVED, rejection/cancellation is forbidden.
+ */
+export const FOOD_PLEDGE_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["SCHEDULED", "REJECTED", "CANCELLED"],
+  SCHEDULED: ["COLLECTED", "RECEIVED", "REJECTED", "CANCELLED"],
+  COLLECTED: ["RECEIVED", "CANCELLED"],
+  RECEIVED: [],
+  REJECTED: [],
+  CANCELLED: [],
+};
+
+/**
+ * Registration lifecycle shared by admin edits and the distribution desk.
+ * Completed/partial handovers are immutable here because acknowledgement
+ * records and stock movements have already been committed.
+ */
+export const FOOD_REGISTRATION_TRANSITIONS: Record<string, string[]> = {
+  REGISTERED: ["APPROVED", "CONFIRMED", "CHECKED_IN", "CANCELLED", "RESCHEDULED", "NO_SHOW", "REJECTED"],
+  APPROVED: ["CONFIRMED", "CHECKED_IN", "CANCELLED", "RESCHEDULED", "NO_SHOW", "REJECTED"],
+  CONFIRMED: ["CHECKED_IN", "CANCELLED", "RESCHEDULED", "NO_SHOW", "REJECTED"],
+  CHECKED_IN: ["DISTRIBUTED", "PARTIALLY_DISTRIBUTED", "NOT_COLLECTED", "RESCHEDULED"],
+  RESCHEDULED: ["REGISTERED", "APPROVED", "CONFIRMED", "CANCELLED", "REJECTED", "NO_SHOW"],
+  NOT_COLLECTED: ["RESCHEDULED"],
+  NO_SHOW: ["RESCHEDULED"],
+  CANCELLED: [],
+  REJECTED: [],
+  DISTRIBUTED: [],
+  PARTIALLY_DISTRIBUTED: [],
+};
+
+export const FOOD_PROGRAMME_STATUSES = [
+  "DRAFT", "REVIEW", "APPROVED", "PUBLISHED", "ACTIVE", "COMPLETED", "ARCHIVED",
+] as const;
+
+export const FOOD_PROGRAMME_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ["REVIEW"],
+  REVIEW: ["DRAFT", "APPROVED"],
+  APPROVED: ["PUBLISHED"],
+  PUBLISHED: ["ACTIVE"],
+  ACTIVE: ["COMPLETED"],
+  COMPLETED: ["ARCHIVED"],
+  ARCHIVED: [],
+};
+
+export const FOOD_BATCH_QUALITY_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["PASSED", "QUARANTINED", "REJECTED"],
+  PASSED: ["QUARANTINED", "REJECTED"],
+  QUARANTINED: ["PASSED", "REJECTED"],
+  REJECTED: [],
+};
+
+export const FOOD_ACTIVE_REG_STATUSES = [
+  "REGISTERED", "APPROVED", "CONFIRMED", "CHECKED_IN",
+];
+
+export const FOOD_ACK_METHODS = ["DIGITAL", "OTP", "SIGNATURE", "ASSISTED", "WITNESS"];

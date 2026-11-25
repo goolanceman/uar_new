@@ -1,0 +1,725 @@
+"use client";
+
+import * as React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "@/lib/router";
+import { get } from "@/lib/api-client";
+import { parseGallery, coverImageOf } from "@/lib/campaign-image";
+import { cn, formatNumber, titleCase } from "@/lib/utils";
+import { formatINRCompact, formatDate } from "@/lib/format";
+import { ViewSwitcher, useViewPref } from "@/components/shared/view-switcher";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+  PaginationEllipsis,
+} from "@/components/ui/pagination";
+import { Section, EmptyState, CampaignIcon } from "@/components/public/shared";
+import { CAMPAIGN_CONTENT, accentSoft } from "@/components/public/campaign-data";
+import {
+  CalendarDays,
+  Filter,
+  HandHeart,
+  Info,
+  Landmark,
+  List,
+  LayoutGrid,
+  Phone,
+  Search,
+  SearchX,
+  Siren,
+  Users,
+} from "lucide-react";
+
+const PAGE_SIZE = 6;
+
+/* ------------------------------------------------------------------ */
+/* Types                                                               */
+/* ------------------------------------------------------------------ */
+
+interface LiveCampaign {
+  id: string;
+  title: string;
+  slug?: string | null;
+  tagline?: string | null;
+  description?: string | null;
+  category?: string | null;
+  targetAmount: number;
+  raisedAmount: number;
+  beneficiaries: number;
+  volunteersEngaged: number;
+  helpline?: string | null;
+  icon?: string | null;
+  accent?: string | null;
+  featured?: boolean;
+  status?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  urgent?: boolean | null;
+  taxEligible?: boolean | null;
+  minDonation?: number | null;
+  gallery?: string | null;
+  images?: string | null;
+  coverImage?: string | null;
+}
+
+type StatusFilter = "all" | "active" | "urgent" | "ending";
+type SortKey = "featured" | "raised" | "ending" | "newest";
+
+/** Parses the JSON-array `gallery` column; returns [] on anything else. */
+/** Days left until endDate (ceil); null when unknown. Negative = ended. */
+function daysLeftOf(endDate?: string | null): number | null {
+  if (!endDate) return null;
+  const d = new Date(endDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+}
+
+function daysActive(startDate?: string | null): number | null {
+  if (!startDate) return null;
+  const d = new Date(startDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000));
+}
+
+function pctOf(c: LiveCampaign): number {
+  return c.targetAmount > 0
+    ? Math.min(100, Math.round((c.raisedAmount / c.targetAmount) * 100))
+    : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Badge cluster shared by grid + list views                           */
+/* ------------------------------------------------------------------ */
+
+function DaysLeftBadge({ left }: { left: number | null }) {
+  if (left === null) return null;
+  if (left < 0) {
+    return (
+      <Badge variant="outline" className="shrink-0 border-border text-[10px] text-muted-foreground">
+        Ended
+      </Badge>
+    );
+  }
+  if (left === 0) {
+    return (
+      <Badge className="shrink-0 border-0 bg-red-500/15 text-[10px] text-red-600 dark:text-red-400">
+        Ends today
+      </Badge>
+    );
+  }
+  if (left <= 7) {
+    return (
+      <Badge className="shrink-0 border-0 bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-400">
+        {left}d left · ending soon
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="shrink-0 text-[10px] text-muted-foreground">
+      {left}d left
+    </Badge>
+  );
+}
+
+function UrgentChip() {
+  return (
+    <Badge className="shrink-0 border-0 bg-red-500/15 text-[10px] font-bold text-red-600 dark:text-red-400">
+      <Siren className="mr-1 size-3" aria-hidden /> Urgent
+    </Badge>
+  );
+}
+
+function TaxEligibleChip() {
+  return (
+    <Badge className="shrink-0 border-0 bg-emerald-500/15 text-[10px] text-emerald-600 dark:text-emerald-400">
+      <Landmark className="mr-1 size-3" aria-hidden /> 80G eligible
+    </Badge>
+  );
+}
+
+/* ================================================================== */
+/* CampaignsPage                                                       */
+/* ================================================================== */
+
+export function CampaignsPage() {
+  const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState<string>("ALL");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sort, setSort] = useState<SortKey>("featured");
+  const [view, setView] = useViewPref("public-campaigns", "grid");
+  const [page, setPage] = useState(1);
+
+  // Any change to the filter/sort inputs jumps back to page 1 so results
+  // stay in sync with what's currently on screen.
+  const updateSearch = (v: string) => {
+    setSearch(v);
+    setPage(1);
+  };
+  const updateCategory = (v: string) => {
+    setCategory(v);
+    setPage(1);
+  };
+  const updateStatus = (v: StatusFilter) => {
+    setStatus(v);
+    setPage(1);
+  };
+  const updateSort = (v: SortKey) => {
+    setSort(v);
+    setPage(1);
+  };
+
+  useEffect(() => {
+    let alive = true;
+    get<LiveCampaign[]>("/api/campaigns")
+      .then((d) => alive && setCampaigns(Array.isArray(d) ? d : []))
+      .catch(() => alive && setCampaigns([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    (campaigns ?? []).forEach((c) => c.category && set.add(c.category));
+    return Array.from(set).sort();
+  }, [campaigns]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = [...(campaigns ?? [])];
+
+    if (category !== "ALL") list = list.filter((c) => c.category === category);
+    if (q) {
+      list = list.filter((c) =>
+        [c.title, c.tagline, c.description]
+          .filter(Boolean)
+          .some((s) => String(s).toLowerCase().includes(q))
+      );
+    }
+
+    switch (status) {
+      case "active":
+        list = list.filter((c) => (c.status ?? "ACTIVE") === "ACTIVE");
+        break;
+      case "urgent":
+        list = list.filter((c) => c.urgent === true);
+        break;
+      case "ending": {
+        list = list.filter((c) => {
+          const left = daysLeftOf(c.endDate);
+          return left !== null && left >= 0 && left <= 7;
+        });
+        break;
+      }
+    }
+
+    switch (sort) {
+      case "featured":
+        list.sort(
+          (a, b) =>
+            Number(b.urgent ?? false) - Number(a.urgent ?? false) ||
+            Number(b.featured ?? false) - Number(a.featured ?? false) ||
+            b.raisedAmount - a.raisedAmount
+        );
+        break;
+      case "raised":
+        list.sort((a, b) => b.raisedAmount - a.raisedAmount);
+        break;
+      case "ending":
+        list.sort((a, b) => {
+          const la = daysLeftOf(a.endDate);
+          const lb = daysLeftOf(b.endDate);
+          if (la === null && lb === null) return 0;
+          if (la === null) return 1;
+          if (lb === null) return -1;
+          return la - lb;
+        });
+        break;
+      case "newest":
+        list.sort(
+          (a, b) =>
+            (b.startDate ? new Date(b.startDate).getTime() : 0) -
+            (a.startDate ? new Date(a.startDate).getTime() : 0)
+        );
+        break;
+    }
+    return list;
+  }, [campaigns, search, category, status, sort]);
+
+  const filtersDirty = search !== "" || category !== "ALL" || status !== "all";
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paged = useMemo(
+    () => filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filtered, currentPage]
+  );
+  const pageNumbers = useMemo(() => {
+    const span = 1;
+    const nums = new Set<number>([1, totalPages]);
+    for (let i = currentPage - span; i <= currentPage + span; i++) {
+      if (i >= 1 && i <= totalPages) nums.add(i);
+    }
+    return Array.from(nums).sort((a, b) => a - b);
+  }, [currentPage, totalPages]);
+
+  return (
+    <Section
+      title="All programmes"
+      subtitle="Nine long-term campaigns — each one an educational resource, a rescue service and a funding pipeline at once."
+    >
+      {/* ---------------- Toolbar ---------------- */}
+      <Card className="mb-6 space-y-4 p-4 sm:p-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative flex-1 sm:max-w-md">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={search}
+              onChange={(e) => updateSearch(e.target.value)}
+              placeholder="Search programmes…"
+              className="h-11 pl-9"
+              aria-label="Search programmes"
+            />
+          </div>
+          <div className="flex items-center gap-2 sm:ml-auto">
+            <span className="hidden text-xs font-semibold text-muted-foreground sm:block">
+              Sort
+            </span>
+            <Select value={sort} onValueChange={(v) => updateSort(v as SortKey)}>
+              <SelectTrigger
+                className="h-11 w-full sm:w-[180px]"
+                aria-label="Sort programmes"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="featured">Featured</SelectItem>
+                <SelectItem value="raised">Most funded</SelectItem>
+                <SelectItem value="ending">Ending soon</SelectItem>
+                <SelectItem value="newest">Newest</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="hidden md:block">
+              <ViewSwitcher
+                value={view}
+                onChange={setView}
+                options={["grid", "list"]}
+                aria-label="Switch between grid and list view"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Status + cause filters — compact dropdowns instead of chip clouds */}
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3" role="group" aria-label="Filter programmes">
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            <Filter className="size-3" aria-hidden /> Filters
+          </span>
+          <Select value={status} onValueChange={(v) => updateStatus(v as StatusFilter)}>
+            <SelectTrigger className="h-9 w-[150px]" aria-label="Filter by status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="urgent">Urgent</SelectItem>
+              <SelectItem value="ending">Ending soon</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={category} onValueChange={updateCategory}>
+            <SelectTrigger className="h-9 w-[170px]" aria-label="Filter by cause">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All causes</SelectItem>
+              {categories.map((cat) => (
+                <SelectItem key={cat} value={cat}>
+                  {titleCase(cat)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {filtersDirty && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 text-xs text-muted-foreground"
+              onClick={() => {
+                setSearch("");
+                setCategory("ALL");
+                setStatus("all");
+                setPage(1);
+              }}
+            >
+              Clear filters
+            </Button>
+          )}
+          {/* Mobile view switcher */}
+          <div className="ml-auto md:hidden">
+            <ViewSwitcher value={view} onChange={setView} options={["grid", "list"]} />
+          </div>
+        </div>
+      </Card>
+
+      {/* Result count */}
+      {campaigns !== null && (
+        <p className="mb-4 text-sm text-muted-foreground" aria-live="polite">
+          Showing <span className="font-semibold text-foreground">{filtered.length}</span>{" "}
+          of {campaigns.length} programmes
+          {search.trim() ? (
+            <>
+              {" "}
+              for <span className="font-semibold text-foreground">“{search.trim()}”</span>
+            </>
+          ) : null}
+        </p>
+      )}
+
+      {/* ---------------- Content ---------------- */}
+      {campaigns === null ? (
+        view === "grid" ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-72 rounded-xl" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 rounded-xl" />
+            ))}
+          </div>
+        )
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={SearchX}
+          title="No programmes match"
+          hint={
+            filtersDirty
+              ? "Nothing matches this combination of filters. Try a different word, or clear them."
+              : "No campaigns here yet — check back soon."
+          }
+          action={
+            filtersDirty ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSearch("");
+                  setCategory("ALL");
+                  setStatus("all");
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : view === "list" ? (
+        <Card className="overflow-hidden p-0">
+          <ul className="divide-y" aria-label="Programmes list">
+            {paged.map((c) => {
+              const content = CAMPAIGN_CONTENT[c.slug ?? ""];
+              const a = accentSoft(c.accent ?? content?.accent);
+              const pct = pctOf(c);
+              const left = daysLeftOf(c.endDate);
+              const cover = coverImageOf(c);
+              return (
+                <li
+                  key={c.id}
+                  className="flex items-center gap-3 p-4 transition-colors hover:bg-muted/40"
+                >
+                  {cover ? (
+                    <img
+                      src={cover}
+                      alt=""
+                      loading="lazy"
+                      className="size-10 shrink-0 rounded-xl object-cover sm:size-11"
+                    />
+                  ) : (
+                    <span
+                      className={cn(
+                        "flex size-10 shrink-0 items-center justify-center rounded-xl sm:size-11",
+                        a.chip,
+                        a.text
+                      )}
+                      aria-hidden
+                    >
+                      <CampaignIcon icon={c.icon ?? content?.icon ?? "heart"} className="size-5" />
+                    </span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <Link
+                        href={`/campaigns/${c.slug}`}
+                        className="truncate font-semibold hover:underline"
+                      >
+                        {c.title}
+                      </Link>
+                      {c.featured && (
+                        <Badge className="shrink-0 border-0 bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-400">
+                          Featured
+                        </Badge>
+                      )}
+                      {c.urgent && <UrgentChip />}
+                      {c.taxEligible && <TaxEligibleChip />}
+                      <DaysLeftBadge left={left} />
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {titleCase(c.category)} ·{" "}
+                      <span className="font-semibold text-foreground">
+                        {formatINRCompact(c.raisedAmount)}
+                      </span>{" "}
+                      of {formatINRCompact(c.targetAmount)} ({pct}%)
+                      {c.endDate ? ` · ends ${formatDate(c.endDate)}` : ""}
+                    </p>
+                  </div>
+                  <div className="hidden text-right sm:block">
+                    <Progress value={pct} className="h-1.5 w-28" aria-label={`${pct}% raised`} />
+                    {c.minDonation && c.minDonation > 0 && (
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Min gift {formatINRCompact(c.minDonation)}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    className={cn("shrink-0 text-white", a.solid)}
+                    asChild
+                  >
+                    <Link href={`/donate?campaign=${c.slug}`}>Donate</Link>
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {paged.map((c) => {
+            const content = CAMPAIGN_CONTENT[c.slug ?? ""];
+            const a = accentSoft(c.accent ?? content?.accent);
+            const pct = pctOf(c);
+            const active = daysActive(c.startDate);
+            const left = daysLeftOf(c.endDate);
+            const cover = coverImageOf(c);
+            return (
+              <Card
+                key={c.id}
+                className={cn(
+                  "flex flex-col overflow-hidden border p-0 transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  a.border
+                )}
+              >
+                {cover ? (
+                  <img
+                    src={cover}
+                    alt=""
+                    loading="lazy"
+                    className="h-36 w-full object-cover"
+                  />
+                ) : (
+                  <div className={cn("h-1.5 w-full", a.chip)} aria-hidden />
+                )}
+                <div className="flex flex-1 flex-col gap-3 p-5">
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={cn(
+                        "flex size-11 shrink-0 items-center justify-center rounded-xl",
+                        a.chip,
+                        a.text
+                      )}
+                    >
+                      <CampaignIcon
+                        icon={c.icon ?? content?.icon ?? "heart"}
+                        className="size-6"
+                      />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h3 className="font-semibold leading-snug">{c.title}</h3>
+                        {c.featured && (
+                          <Badge className="shrink-0 border-0 bg-amber-500/15 text-[10px] text-amber-600 dark:text-amber-400">
+                            Featured
+                          </Badge>
+                        )}
+                        {pct >= 100 && (
+                          <Badge className="shrink-0 border-0 bg-emerald-500/15 text-[10px] text-emerald-600 dark:text-emerald-400">
+                            Goal reached
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {titleCase(c.category)} · {c.status ? titleCase(c.status) : "Active"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Status badge row */}
+                  {(c.urgent || c.taxEligible || left !== null) && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {c.urgent && <UrgentChip />}
+                      {c.taxEligible && <TaxEligibleChip />}
+                      <DaysLeftBadge left={left} />
+                    </div>
+                  )}
+
+                  <p className="line-clamp-3 text-sm text-muted-foreground">
+                    {c.tagline ?? content?.heroTag ?? c.description}
+                  </p>
+
+                  <div className="flex flex-wrap gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <Users className="size-3.5" aria-hidden />
+                      {formatNumber(c.beneficiaries)} beneficiaries
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <HandHeart className="size-3.5" aria-hidden />
+                      {formatNumber(c.volunteersEngaged)} volunteers
+                    </span>
+                    {active !== null && (
+                      <span className="inline-flex items-center gap-1">
+                        <CalendarDays className="size-3.5" aria-hidden />
+                        {active}d active
+                      </span>
+                    )}
+                    {c.helpline && (
+                      <a
+                        href={`tel:${c.helpline}`}
+                        className="inline-flex min-h-[44px] items-center gap-1 font-semibold text-emerald-600 hover:underline dark:text-emerald-400 sm:min-h-0"
+                        aria-label={`Call helpline ${c.helpline}`}
+                      >
+                        <Phone className="size-3.5" aria-hidden />
+                        {c.helpline}
+                      </a>
+                    )}
+                  </div>
+
+                  <div>
+                    <Progress value={pct} className="h-2" aria-label={`${pct}% raised`} />
+                    <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">
+                        {formatINRCompact(c.raisedAmount)}
+                      </span>
+                      <span>
+                        {pct}% of {formatINRCompact(c.targetAmount)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {c.minDonation && c.minDonation > 0 && (
+                    <p className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                      <Info className="size-3 shrink-0" aria-hidden />
+                      Minimum online gift {formatINRCompact(c.minDonation)}
+                    </p>
+                  )}
+
+                  {c.startDate && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Running since {formatDate(c.startDate)}
+                      {c.endDate && left !== null && left >= 0
+                        ? ` · closes ${formatDate(c.endDate)}`
+                        : ""}
+                    </p>
+                  )}
+
+                  <div className="mt-auto flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" className="flex-1" asChild>
+                      <Link href={`/campaigns/${c.slug}`}>Learn more</Link>
+                    </Button>
+                    <Button
+                      size="sm"
+                      className={cn("flex-1 text-white", a.solid)}
+                      asChild
+                    >
+                      <Link href={`/donate?campaign=${c.slug}`}>Donate</Link>
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ---------------- Pagination ---------------- */}
+      {totalPages > 1 && (
+        <Pagination className="mt-8">
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious
+                href="#"
+                aria-disabled={currentPage === 1}
+                className={currentPage === 1 ? "pointer-events-none opacity-40" : undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (currentPage > 1) setPage(currentPage - 1);
+                }}
+              />
+            </PaginationItem>
+            {pageNumbers.map((n, i) => {
+              const prev = pageNumbers[i - 1];
+              const gap = prev !== undefined && n - prev > 1;
+              return (
+                <React.Fragment key={n}>
+                  {gap && (
+                    <PaginationItem>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  )}
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      isActive={n === currentPage}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setPage(n);
+                      }}
+                    >
+                      {n}
+                    </PaginationLink>
+                  </PaginationItem>
+                </React.Fragment>
+              );
+            })}
+            <PaginationItem>
+              <PaginationNext
+                href="#"
+                aria-disabled={currentPage === totalPages}
+                className={currentPage === totalPages ? "pointer-events-none opacity-40" : undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (currentPage < totalPages) setPage(currentPage + 1);
+                }}
+              />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      )}
+    </Section>
+  );
+}
+
+/* Keep icons referenced for readability of the toolbar row */
+void List;
+void LayoutGrid;

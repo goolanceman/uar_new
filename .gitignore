@@ -13,12 +13,12 @@ node_modules
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
+# next.js (frontend/)
+/frontend/.next/
+/frontend/out/
 
 # production
-/build
+/frontend/build
 
 # misc
 .DS_Store
@@ -35,6 +35,7 @@ yarn-error.log*
 
 # vercel
 .vercel
+frontend/.vercel
 
 # typescript
 *.tsbuildinfo
@@ -49,3 +50,16 @@ prompt
 server.log
 # Skills directory
 /skills/
+# backend service
+backend/node_modules
+backend/dist
+backend/data-dump.json
+
+# uploaded files & legacy local data
+/upload
+/db
+
+# backend service
+backend/node_modules
+backend/dist
+backend/data-dump.json

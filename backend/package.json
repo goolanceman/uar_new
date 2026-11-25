@@ -1,0 +1,45 @@
+{
+  "name": "uar-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "United Angel Reach — standalone API server (Express + Prisma + PostgreSQL)",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
+    "db:migrate-data": "tsx scripts/migrate-sqlite-to-pg.ts",
+    "start:node": "node dist/src/index.js",
+    "test": "vitest run"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.11.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^10.5.0",
+    "prisma": "^6.11.1",
+    "ws": "^8.23.0",
+    "z-ai-web-dev-sdk": "^0.0.17"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^22",
+    "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.18.2",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,2566 @@
+// United Angel Reach — Charitable Trust Management System
+// Merged canonical schema: v1 modules preserved + v2 programmes (MDM, Kits,
+// Adopt-a-Medicine, Animal Welfare, Green Corridor, volunteer approvals).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER MANAGEMENT ====================
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  phone           String?
+  name            String
+  password        String // scrypt "salt:hash" (legacy plain values still verify)
+  role            String    @default("DONOR") // ADMIN | VOLUNTEER | DONOR | BENEFICIARY | DOCTOR | NURSE | PHARMACIST | LAB_TECH | HOSPITAL
+  status          String    @default("ACTIVE") // ACTIVE | PENDING | SUSPENDED (PENDING = volunteer awaiting approval)
+  avatar          String?
+  isActive        Boolean   @default(true)
+  city            String?
+  pan             String?
+  about           String?
+  // Token revocation watermark (gap A-3): every access token with an `iat`
+  // BEFORE this instant is rejected by validateSession. Set on logout (true
+  // revocation) and on password reset. NULL = no watermark (all tokens valid).
+  tokenValidAfter DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // ── Legacy mobile-app (chatter) profile fields — additive, wire-compat ──
+  // The compat layer aliases: full_name→name, bio→about, profile→avatar,
+  // identity→email. These columns carry everything else the Flutter models read.
+  username                 String?   @unique
+  emailVerifiedAt          DateTime?
+  backgroundImage          String?
+  interestIds              String? // CSV of CommunityInterest ids
+  isPushNotifications      Int       @default(1)
+  isInvitedToRoom          Int       @default(1)
+  isVerified               Int       @default(0) // 0 not | 1 pending | 2 verified | 3 subscription
+  isBlock                  Int       @default(0)
+  blockUserIds             String? // CSV of User ids
+  savedMusicIds            String? // CSV
+  savedReelIds             String? // CSV
+  isModerator              Int       @default(0)
+  loginType                Int       @default(2) // 0 google | 1 apple | 2 email
+  deviceType               Int       @default(0) // 0 android | 1 ios
+  deviceToken              String?
+  fcmToken                 String?
+  apnsToken                String?
+  lastActiveAt             DateTime?
+  // Profile V2 charity fields
+  userType                 String? // supporter | volunteer
+  volunteerStatus          String? // pending | approved | rejected
+  volunteerRequestedAt     DateTime?
+  volunteerApprovedAt      DateTime?
+  volunteerApprovedBy      String?
+  volunteerRejectionReason String?
+  totalPoints              Int       @default(0)
+  lifetimeDonated          Float     @default(0)
+  impactScore              Int       @default(0)
+  currentTier              String    @default("bronze")
+  memberSince              DateTime? @db.Date
+  followingCount           Int       @default(0)
+  followersCount           Int       @default(0)
+
+  donations                Donation[]
+  volunteer                Volunteer?
+  beneficiary              Beneficiary?
+  donorProfile             Donor?                    @relation("DonorUser")
+  ownedOrg                 HealthcareOrg?            @relation("HealthcareOrgOwner")
+  healthProfessional       HealthProfessional?       @relation("HealthProfessionalUser")
+  notifications            Notification[]
+  activities               ActivityLog[]
+  posts                    CommunityPost[]
+  comments                 CommunityComment[]
+  likes                    CommunityLike[]
+  stories                  CommunityStory[]
+  reels                    CommunityReel[]
+  reelComments             CommunityReelComment[]
+  ownedRooms               CommunityRoom[]
+  roomUsers                CommunityRoomUser[]
+  followingEdges           UserFollow[]              @relation("follower")
+  followerEdges            UserFollow[]              @relation("followed")
+  charityCard              CharityCard?
+  donationPoints           DonationPoint[]
+  userAchievements         UserAchievement[]
+  donationGoals            DonationGoal[]
+  eventParticipants        EventParticipant[]
+  profileVerifications     ProfileVerification[]
+  conversations1           Conversation[]            @relation("convo1")
+  conversations2           Conversation[]            @relation("convo2")
+  messages                 Message[]
+  conversationParticipants ConversationParticipant[]
+  audioSpaceParticipants   AudioSpaceParticipant[]
+  audioSpaceMessages       AudioSpaceMessage[]
+  causeFollows             CauseFollower[]
+  reportedReports          CommunityReport[]
+  commentLikes             LikeComment[]
+
+  @@map("users")
+}
+
+// ==================== DONATION MODULE ====================
+
+model Donor {
+  id                 String   @id @default(cuid())
+  code               String   @unique // UAR-DNR-00001
+  type               String   @default("INDIVIDUAL") // INDIVIDUAL | ORGANISATION | CORPORATE
+  organizationName   String?
+  name               String
+  email              String   @unique
+  phone              String?
+  altPhone           String?
+  address            String?
+  city               String?
+  state              String?
+  pincode            String?
+  pan                String?
+  language           String? // preferred communication language
+  source             String? // WEB | OFFLINE | IMPORT | REFERRAL | EVENT
+  category           String? // MAJOR | MONTHLY | ONE_TIME | CORPORATE | CSR
+  wants80g           Boolean  @default(true)
+  anonymousByDefault Boolean  @default(false)
+  emailOptIn         Boolean  @default(true)
+  smsOptIn           Boolean  @default(true)
+  whatsappOptIn      Boolean  @default(true)
+  tags               String? // JSON ["volunteer","board"]
+  notes              String?
+  userId             String?  @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user         User?                    @relation("DonorUser", fields: [userId], references: [id])
+  donations    Donation[]
+  sponsorships BeneficiarySponsorship[]
+
+  @@map("donors")
+}
+
+model Donation {
+  id                 String    @id @default(cuid())
+  donorId            String?
+  donorRefId         String? // → Donor (CRM link)
+  donorName          String
+  donorEmail         String
+  donorPhone         String?
+  amount             Float
+  currency           String    @default("INR")
+  type               String    @default("ONE_TIME") // ONE_TIME | RECURRING
+  recurringFrequency String? // WEEKLY | MONTHLY | QUARTERLY | YEARLY
+  nextChargeAt       DateTime?
+  category           String    @default("GENERAL") // GENERAL | MEDICAL | FOOD_DISTRIBUTION | SANITARY_PADS | EDUCATION_SUPPORT | EMERGENCY | ANIMAL_WELFARE | MOBILITY | AWARENESS
+  paymentMethod      String    @default("UPI") // UPI | RAZORPAY | CARD | CASH | BANK_TRANSFER | CHEQUE
+  paymentProvider    String? // RAZORPAY | CASHFREE | PAYU | STRIPE | MANUAL
+  paymentStatus      String    @default("COMPLETED") // PENDING | COMPLETED | FAILED | REFUNDED | CANCELLED
+  transactionId      String?
+  gatewayOrderId     String?
+  fees               Float     @default(0)
+  netAmount          Float?
+  settlementDate     DateTime?
+  receiptNumber      String    @unique
+  receiptStatus      String    @default("ISSUED") // PENDING | ISSUED | CANCELLED | REISSUED
+  receiptIssuedAt    DateTime?
+  campaignId         String?
+  message            String?
+  isAnonymous        Boolean   @default(false)
+  pan                String? // for 80G receipt
+  refundAmount       Float?
+  refundReason       String?
+  refundedAt         DateTime?
+  internalNotes      String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  donor     User?           @relation(fields: [donorId], references: [id])
+  donorRef  Donor?          @relation(fields: [donorRefId], references: [id])
+  campaign  Campaign?       @relation(fields: [campaignId], references: [id])
+  foodEvent FoodEvent?      @relation(fields: [foodEventId], references: [id])
+  causePost CommunityPost?  @relation("CausePostDonations", fields: [causePostId], references: [id])
+  points    DonationPoint[]
+
+  foodEventId String? // set when this donation sponsors a FoodEvent
+  causePostId String? // mobile cause donations → CommunityPost (type=cause)
+
+  @@index([causePostId])
+  @@map("donations")
+}
+
+// ==================== CAMPAIGN MANAGEMENT ====================
+
+model Campaign {
+  id                String    @id @default(cuid())
+  code              String    @unique // UAR-CMP-00001
+  title             String
+  slug              String    @unique
+  tagline           String    @default("")
+  description       String
+  category          String    @default("GENERAL") // see Donation.category
+  targetAmount      Float
+  raisedAmount      Float     @default(0)
+  currency          String    @default("INR")
+  startDate         DateTime  @default(now())
+  endDate           DateTime?
+  location          String?
+  images            String?
+  coverImage        String? // explicit admin-picked cover photo; falls back to gallery[0]
+  status            String    @default("ACTIVE") // DRAFT | ACTIVE | PAUSED | COMPLETED | CANCELLED
+  createdBy         String    @default("system")
+  icon              String    @default("heart") // lucide icon name
+  accent            String    @default("emerald") // orange|cyan|fuchsia|amber|teal|lime|red|emerald|pink
+  helpline          String?
+  featured          Boolean   @default(false)
+  urgent            Boolean   @default(false)
+  minDonation       Float?
+  taxEligible       Boolean   @default(true)
+  videoUrl          String?
+  gallery           String? // JSON [urls]
+  budgetBreakdown   String? // JSON [{head, amount}]
+  coordinatorName   String?
+  coordinatorPhone  String?
+  seoTitle          String?
+  seoDescription    String?
+  beneficiaries     Int       @default(0)
+  volunteersEngaged Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  donations      Donation[]
+  medicalCamps   MedicalCamp[]
+  foodProgrammes FoodProgramme[]
+  foodEvents     FoodEvent[]
+
+  @@map("campaigns")
+}
+
+// ==================== BENEFICIARY MANAGEMENT ====================
+
+model Beneficiary {
+  id                 String    @id @default(cuid())
+  code               String    @unique // UAR-BEN-00001
+  userId             String?   @unique
+  name               String
+  phone              String?
+  email              String?
+  address            String?
+  city               String?
+  state              String?
+  pincode            String?
+  category           String    @default("OTHER") // WIDOW | ORPHAN | STUDENT | ELDERLY | DISABLED | SINGLE_MOTHER | POOR_FAMILY | PATIENT | DAILY_WAGE | OTHER
+  urgencyLevel       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  familyMembers      Int       @default(1)
+  monthlyIncome      Float?
+  monthlyNeed        Float?
+  needs              String?
+  documents          String?
+  notes              String?
+  isActive           Boolean   @default(true)
+  onboardedByName    String?
+  caseStatus         String    @default("INTAKE") // INTAKE | VERIFICATION | ACTIVE | CLOSED | REJECTED
+  caseWorker         String?
+  verificationStatus String    @default("PENDING") // PENDING | DOCUMENTS_REQUESTED | VERIFIED | REJECTED
+  guardian           String?
+  age                Int?
+  gender             String?
+  photoConsent       Boolean   @default(false)
+  intakeDate         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user             User?                    @relation(fields: [userId], references: [id])
+  distributions    Distribution[]
+  padDistributions PadDistribution[]
+  caseNotes        BeneficiaryNote[]
+  requests         BeneficiaryRequest[]
+  recurringNeeds   RecurringNeed[]
+  sponsorships     BeneficiarySponsorship[]
+
+  // Healthcare extension — persistent patient identity across camps
+  bloodGroup         String?
+  allergies          String?
+  currentMedications String?
+  medicalConditions  String?
+  medicalHistory     String?
+  preferredLanguage  String?
+  emergencyContact   String?
+
+  // KYC verification workflow (gap A-4 — mirrors the legacy
+  // profile_verifications submit → admin approve/reject flow):
+  // PENDING → SUBMITTED → VERIFIED | REJECTED (REJECTED → SUBMITTED to re-apply)
+  kycStatus     String    @default("PENDING")
+  kycDocuments  String? // JSON [FileAsset ids] uploaded via /api/files
+  kycNotes      String?
+  kycReviewedAt DateTime?
+  kycReviewedBy String?
+
+  campRegistrations CampRegistration[]
+  attendances       CampAttendance[]
+  foodRegistrations FoodRegistration[]
+  householdsHead    Household[]          @relation("HouseholdHead")
+  appointments      Appointment[]
+  encounters        Encounter[]
+  vitals            VitalObservation[]
+  screenings        ScreeningRecord[]
+  prescriptions     Prescription[]
+  labOrders         DiagnosticOrder[]
+  referrals         MedicalReferral[]
+  followUps         FollowUp[]
+  medicalDocuments  MedicalDocument[]
+  dispenses         MedicationDispense[] @relation("DispenseBeneficiary")
+
+  @@map("beneficiaries")
+}
+
+// A beneficiary's standing need for a specific master inventory item on a
+// repeating cycle (e.g. "2 strips of BP tablets every month"). Drives the
+// inventory forecast and the "due this cycle" worklist admins/volunteers use
+// to fulfil recurring hand-outs via normal Distribution records.
+model RecurringNeed {
+  id              String    @id @default(cuid())
+  beneficiaryId   String
+  itemId          String
+  qtyPerCycle     Int       @default(1)
+  cycle           String    @default("MONTHLY") // WEEKLY | MONTHLY | QUARTERLY
+  status          String    @default("ACTIVE") // ACTIVE | PAUSED | COMPLETED
+  reason          String? // e.g. "BP medication", "insulin", "ration top-up"
+  startDate       DateTime  @default(now())
+  nextDueAt       DateTime  @default(now())
+  lastFulfilledAt DateTime?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  beneficiary   Beneficiary              @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  item          InventoryItem            @relation(fields: [itemId], references: [id])
+  distributions Distribution[]
+  sponsorships  BeneficiarySponsorship[]
+
+  @@index([itemId])
+  @@index([beneficiaryId])
+  @@map("recurring_needs")
+}
+
+model BeneficiarySponsorship {
+  id              String   @id @default(cuid())
+  beneficiaryId   String
+  donorId         String?
+  recurringNeedId String?
+  donorName       String
+  amountPerMonth  Float
+  months          Int      @default(6)
+  startDate       DateTime @default(now())
+  status          String   @default("ACTIVE") // ACTIVE | PAUSED | COMPLETED | CANCELLED
+  source          String   @default("MANUAL") // MANUAL | AUTO_MATCH
+  notes           String?
+  assignedByName  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  beneficiary   Beneficiary    @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  donor         Donor?         @relation(fields: [donorId], references: [id])
+  recurringNeed RecurringNeed? @relation(fields: [recurringNeedId], references: [id])
+
+  @@index([beneficiaryId])
+  @@index([donorId])
+  @@map("beneficiary_sponsorships")
+}
+
+model BeneficiaryNote {
+  id            String   @id @default(cuid())
+  beneficiaryId String
+  authorName    String?
+  note          String
+  createdAt     DateTime @default(now())
+
+  beneficiary Beneficiary @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+
+  @@map("beneficiary_notes")
+}
+
+model BeneficiaryRequest {
+  id               String    @id @default(cuid())
+  beneficiaryId    String?
+  userId           String?
+  name             String
+  phone            String?
+  category         String    @default("OTHER")
+  urgency          String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  details          String
+  status           String    @default("PENDING") // PENDING | IN_REVIEW | APPROVED | FULFILLED | REJECTED
+  reviewNote       String?
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  // Food assistance extension (category FOOD_ASSISTANCE) — public reference
+  // number + household facts. Ref code lets applicants check status without
+  // exposing row ids; phone acts as the second verification factor.
+  refCode          String?   @unique // UAR-FAR-00001
+  address          String?
+  city             String?
+  pincode          String?
+  familyMembers    Int?
+  childrenCount    Int?
+  seniorCount      Int?
+  dietary          String? // voluntarily disclosed restrictions/allergies
+  preferredContact String? // PHONE | SMS | WHATSAPP | EMAIL
+  consent          Boolean   @default(false)
+  source           String? // SELF | ASSISTED | REFERRAL | EMERGENCY
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
+
+  @@map("beneficiary_requests")
+}
+
+// ==================== VOLUNTEER MANAGEMENT ====================
+
+model Volunteer {
+  id               String   @id @default(cuid())
+  code             String   @unique // UAR-VOL-00001
+  userId           String   @unique
+  skills           String?
+  availability     String?
+  assignedArea     String?
+  emergencyContact String?
+  idProof          String?
+  status           String   @default("PENDING") // PENDING | ACTIVE | INACTIVE | SUSPENDED
+  joinedAt         DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user          User                  @relation(fields: [userId], references: [id])
+  tasks         VolunteerTask[]
+  attendances   VolunteerAttendance[]
+  distributions Distribution[]
+
+  @@map("volunteers")
+}
+
+model VolunteerApplication {
+  id           String    @id @default(cuid())
+  userId       String?
+  fullName     String
+  email        String
+  phone        String
+  city         String
+  occupation   String?
+  skills       String?
+  availability String?
+  motivation   String
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewNote   String?
+  tempCreds    String?
+  createdAt    DateTime  @default(now())
+  reviewedAt   DateTime?
+  reviewedBy   String?
+  adminNotes   String?
+
+  // ── Restored legacy fields (LEGACY_DATABASE_MAPPING.md →
+  //    volunteer_applications: migrations 2026_06_24_180001/180002) ──
+  customSkills       String? // JSON [string]
+  isFlexible         Boolean @default(false)
+  state              String?
+  country            String?
+  postalCode         String?
+  latitude           Float? // decimal(10,8)
+  longitude          Float? // decimal(11,8)
+  serviceAreas       String? // JSON [string]
+  willingToTravel    Boolean @default(false)
+  maxTravelDistance  Int? // miles
+  remoteVolunteering Boolean @default(false) // legacy remote_volunteering
+  priorExperience    String?
+  emergencyContact   String?
+  emergencyPhone     String?
+  addressLine1       String?
+  addressLine2       String?
+  // Legacy mobile wire field (VolunteerApplicationController status endpoint)
+  rejectionReason    String?
+
+  @@map("volunteer_applications")
+}
+
+model VolunteerTask {
+  id            String    @id @default(cuid())
+  volunteerId   String
+  title         String
+  description   String?
+  type          String    @default("DISTRIBUTION") // DISTRIBUTION | KIT_SCAN | INVENTORY | EVENT | RESCUE | AMBULANCE
+  priority      String    @default("MEDIUM") // LOW | MEDIUM | HIGH
+  location      String?
+  scheduledDate DateTime
+  status        String    @default("ASSIGNED") // ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  completedAt   DateTime?
+  notes         String?
+  refType       String? // DISTRIBUTION | CAMPAIGN | EVENT | MISSION — what this task serves
+  refId         String? // id of the linked record
+  createdFrom   String    @default("MANUAL") // AUTO | MANUAL
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  volunteer Volunteer @relation(fields: [volunteerId], references: [id])
+
+  @@index([refType, refId])
+  @@map("volunteer_tasks")
+}
+
+model VolunteerAttendance {
+  id          String    @id @default(cuid())
+  volunteerId String
+  date        DateTime
+  checkIn     DateTime?
+  checkOut    DateTime?
+  hours       Float?
+  location    String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  volunteer Volunteer @relation(fields: [volunteerId], references: [id])
+
+  @@unique([volunteerId, date])
+  @@map("volunteer_attendances")
+}
+
+// ==================== MDM (MASTER DATA MANAGEMENT) ====================
+
+model Master {
+  id        String  @id @default(cuid())
+  category  String // CONDITION | ANIMAL_SPECIES | CITY | AVAILABILITY | SKILL | AMBULANCE_TYPE | EMERGENCY_TYPE | INVENTORY_CATEGORY | DISTRIBUTION_TYPE | TASK_TYPE | UNIT | BENEFICIARY_CATEGORY | DONATION_CATEGORY
+  value     String
+  label     String
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  @@unique([category, value])
+  @@map("masters")
+}
+
+// ==================== ADOPT-A-MEDICINE ====================
+
+model Cause {
+  id             String   @id @default(cuid())
+  code           String   @unique // UAR-MED-0001
+  patientName    String
+  age            Int
+  city           String
+  condition      String // BP | DIABETES | THYROID | CARDIAC | ASTHMA | ARTHRITIS | OTHER
+  monthlyCost    Float
+  durationMonths Int
+  story          String
+  status         String   @default("SEEKING") // SEEKING | PARTIAL | ADOPTED | PAUSED
+  adoptedById    String?
+  adoptedByName  String?
+  raised         Float    @default(0) // sum of ACTIVE monthly pledges
+  createdAt      DateTime @default(now())
+
+  pledges Pledge[]
+
+  @@map("causes")
+}
+
+model Pledge {
+  id             String   @id @default(cuid())
+  causeId        String
+  donorId        String?
+  donorName      String
+  amountPerMonth Float
+  months         Int      @default(6)
+  startDate      DateTime @default(now())
+  status         String   @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  createdAt      DateTime @default(now())
+
+  cause Cause @relation(fields: [causeId], references: [id])
+
+  @@map("pledges")
+}
+
+// ==================== ANIMAL WELFARE ====================
+
+model Animal {
+  id            String   @id @default(cuid())
+  code          String   @unique // UAR-ANM-00001
+  name          String
+  species       String   @default("DOG") // DOG | CAT | COW | BIRD | OTHER
+  breed         String?
+  ageMonths     Int      @default(12)
+  gender        String   @default("MALE")
+  story         String
+  photos        String? // JSON array of image URLs (file manager asset urls)
+  healthStatus  String?
+  vaccinated    Boolean  @default(false)
+  sterilized    Boolean  @default(false)
+  location      String
+  status        String   @default("AVAILABLE") // AVAILABLE | FOSTERED | ADOPTED | CRITICAL
+  monthlyFood   Float    @default(0)
+  adoptedById   String?
+  adoptedByName String?
+  createdAt     DateTime @default(now())
+
+  pledges   AnimalPledge[]
+  reactions AnimalReaction[]
+
+  @@map("animals")
+}
+
+model AnimalReaction {
+  id        String   @id @default(cuid())
+  animalId  String
+  animal    Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  userId    String?
+  userName  String
+  emoji     String   @default("❤️") // ❤️ | 🙏 | 🎉 | 🐾 | ✨
+  message   String?
+  createdAt DateTime @default(now())
+
+  @@index([animalId])
+  @@map("animal_reactions")
+}
+
+model AnimalPledge {
+  id          String   @id @default(cuid())
+  animalId    String?
+  shelterFund String?
+  donorId     String?
+  donorName   String
+  kind        String   @default("FOOD") // FOOD | MEDICAL | VACCINATION | SHELTER
+  amount      Float
+  frequency   String   @default("MONTHLY") // ONE_TIME | MONTHLY
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now())
+
+  animal Animal? @relation(fields: [animalId], references: [id])
+
+  @@map("animal_pledges")
+}
+
+// ==================== AMBULANCE & AI GREEN CORRIDOR ====================
+
+model Ambulance {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  type        String  @default("BLS") // BLS | ALS | PTV | NEONATAL
+  status      String  @default("AVAILABLE") // AVAILABLE | ON_MISSION | MAINTENANCE
+  base        String
+  driverName  String
+  driverPhone String?
+  crew        String?
+  equipment   String?
+
+  missions Mission[]
+
+  @@map("ambulances")
+}
+
+model Mission {
+  id              String   @id @default(cuid())
+  requestRef      String   @unique
+  patientName     String
+  contact         String
+  emergencyType   String   @default("CARDIAC") // CARDIAC | ACCIDENT | MATERNITY | BURN | RESPIRATORY | TRANSFER
+  priority        String   @default("HIGH") // CRITICAL | HIGH | MEDIUM
+  pickup          String
+  destination     String
+  ambulanceId     String?
+  status          String   @default("REQUESTED") // REQUESTED | DISPATCHED | EN_ROUTE | ARRIVED | COMPLETED | CANCELLED
+  progress        Int      @default(0)
+  route           String? // JSON [{name, congestion, lengthKm}]
+  corridorActive  Boolean  @default(false)
+  vehiclesAlerted Int      @default(0)
+  timeSavedSec    Int      @default(0)
+  etaMin          Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ambulance Ambulance?      @relation(fields: [ambulanceId], references: [id])
+  events    CorridorEvent[]
+
+  @@map("missions")
+}
+
+model CorridorEvent {
+  id              String   @id @default(cuid())
+  missionId       String
+  segment         String
+  method          String // V2X_5G | CELL_BROADCAST | BLE_MESH | FM_RDS | SIREN
+  congestion      String // LOW | MODERATE | HEAVY | GRIDLOCK
+  vehiclesAlerted Int      @default(0)
+  timeSavedSec    Int      @default(0)
+  note            String?
+  createdAt       DateTime @default(now())
+
+  mission Mission @relation(fields: [missionId], references: [id])
+
+  @@map("corridor_events")
+}
+
+// ==================== RATION KIT SYSTEM ====================
+
+model KitTemplate {
+  id          String   @id @default(cuid())
+  code        String   @unique // UAR-KT-00001
+  name        String
+  kind        String   @default("RATION") // RATION | FOOD | EDUCATION | MEDICAL | HYGIENE | CLOTHING | EMERGENCY | CUSTOM
+  codePrefix  String? // e.g. UAR-RK, UAR-EK — derived from kind when null
+  description String?
+  image       String?
+  items       String // JSON [{name, qty, unit}]
+  costPerUnit Float    @default(0)
+  status      String   @default("ACTIVE") // ACTIVE | RETIRED
+  createdAt   DateTime @default(now())
+
+  batches    KitBatch[]
+  foodEvents FoodEvent[]
+
+  @@map("kit_templates")
+}
+
+model KitBatch {
+  id           String   @id @default(cuid())
+  templateId   String
+  name         String
+  totalUnits   Int
+  scannedUnits Int      @default(0)
+  instructions String?
+  status       String   @default("READY") // READY | IN_PROGRESS | DEPLETED
+  createdAt    DateTime @default(now())
+
+  template      KitTemplate    @relation(fields: [templateId], references: [id])
+  units         KitUnit[]
+  distributions Distribution[]
+
+  @@map("kit_batches")
+}
+
+model KitUnit {
+  id             String    @id @default(cuid())
+  batchId        String
+  code           String    @unique // UAR-RK-2026-000001
+  status         String    @default("READY") // READY | SCANNED | EXPIRED
+  scannedAt      DateTime?
+  scannedById    String?
+  scannedByName  String?
+  location       String?
+  distributionId String? // set when consumed in bulk via a Distribution record (no QR scan)
+
+  batch KitBatch @relation(fields: [batchId], references: [id])
+
+  @@map("kit_units")
+}
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+model InventoryItem {
+  id           String    @id @default(cuid())
+  code         String    @unique // UAR-ITM-00001
+  name         String
+  description  String?
+  category     String    @default("OTHER") // FOOD_KIT | SANITARY_PADS | CLOTHING | MEDICINE | ANIMAL_FEED | EQUIPMENT | EDUCATION_MATERIAL | OTHER
+  unit         String    @default("piece")
+  quantity     Int       @default(0)
+  minStock     Int       @default(10)
+  pricePerUnit Float?
+  location     String?
+  expiryDate   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  purchases       InventoryPurchase[]
+  distributions   InventoryDistribution[]
+  recurringNeeds  RecurringNeed[]
+  transactions    InventoryTransaction[]
+  dispenses       MedicationDispense[]
+  foodBatches     FoodBatch[]
+  foodAllocations FoodStockAllocation[]
+
+  @@map("inventory_items")
+}
+
+model InventoryPurchase {
+  id            String   @id @default(cuid())
+  itemId        String
+  quantity      Int
+  pricePerUnit  Float?
+  totalPrice    Float?
+  supplier      String?
+  invoiceNumber String?
+  purchaseDate  DateTime @default(now())
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@map("inventory_purchases")
+}
+
+model InventoryDistribution {
+  id             String   @id @default(cuid())
+  itemId         String
+  quantity       Int
+  distributionId String?
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  item         InventoryItem @relation(fields: [itemId], references: [id])
+  distribution Distribution? @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+
+  @@map("inventory_distributions")
+}
+
+// ==================== DISTRIBUTION TRACKING ====================
+
+model Distribution {
+  id              String   @id @default(cuid())
+  type            String   @default("FOOD") // FOOD | SANITARY_PADS | MEDICAL | EDUCATION_MATERIAL | CLOTHING | CASH | ANIMAL_FEED | OTHER
+  beneficiaryId   String?
+  volunteerId     String?
+  campaignId      String?
+  items           String?
+  quantity        Int      @default(1)
+  value           Float?
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  photos          String?
+  notes           String?
+  kitBatchId      String? // bulk hand-out from a kit batch (no individual QR scan)
+  kitQuantity     Int? // units drawn from kitBatchId for this record
+  recurringNeedId String? // set when this hand-out fulfils a beneficiary's recurring need cycle
+  distributedAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  beneficiary   Beneficiary?   @relation(fields: [beneficiaryId], references: [id])
+  volunteer     Volunteer?     @relation(fields: [volunteerId], references: [id])
+  kitBatch      KitBatch?      @relation(fields: [kitBatchId], references: [id])
+  recurringNeed RecurringNeed? @relation(fields: [recurringNeedId], references: [id])
+
+  inventoryDistributions InventoryDistribution[]
+
+  @@map("distributions")
+}
+
+// ==================== SANITARY PADS INITIATIVE ====================
+
+model PadDistribution {
+  id               String   @id @default(cuid())
+  beneficiaryId    String?
+  schoolName       String?
+  area             String
+  girlsCount       Int      @default(0)
+  padsDistributed  Int      @default(0)
+  awarenessSession Boolean  @default(false)
+  sessionAttendees Int?
+  volunteerId      String?
+  volunteerName    String?
+  distributionDate DateTime @default(now())
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  beneficiary Beneficiary? @relation(fields: [beneficiaryId], references: [id])
+
+  @@map("pad_distributions")
+}
+
+model SchoolCoverage {
+  id            String    @id @default(cuid())
+  schoolName    String
+  address       String?
+  city          String?
+  contactPerson String?
+  contactPhone  String?
+  totalGirls    Int       @default(0)
+  lastVisited   DateTime?
+  visitsCount   Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("school_coverages")
+}
+
+// ==================== FOOD SECURITY PROGRAMME ====================
+// Extends the UAR platform with the food security & community nutrition
+// lifecycle: programmes → distribution events → registrations → QR check-in →
+// handover acknowledgement → reconciliation. Reuses: Campaign (fundraising),
+// Donation (category FOOD_DISTRIBUTION), Beneficiary, KitTemplate (kind FOOD)
+// as package templates, InventoryItem (FOOD_KIT) + InventoryTransaction for
+// stock audit, VolunteerTask (refType FOOD_EVENT), Notification, ActivityLog,
+// AIInteraction. Food batch layer adds FEFO/expiry/quarantine on top of the
+// master InventoryItem quantities.
+
+model FoodProgramme {
+  id                   String    @id @default(cuid())
+  code                 String    @unique // UAR-FSP-00001
+  title                String
+  slug                 String    @unique
+  description          String
+  category             String    @default("GROCERY_KIT") // GROCERY_KIT | COOKED_MEAL | MONTHLY_RATION | CHILD_NUTRITION | SENIOR_SUPPORT | EMERGENCY | COMMUNITY_KITCHEN | FESTIVAL | RURAL | SURPLUS_RECOVERY
+  targetGroup          String?
+  geographicCoverage   String?
+  startDate            DateTime  @default(now())
+  endDate              DateTime?
+  budget               Float?
+  fundraisingTarget    Float?
+  frequency            String    @default("ONE_TIME") // ONE_TIME | WEEKLY | MONTHLY | QUARTERLY
+  assistanceCategories String? // JSON [string]
+  eligibilityCriteria  String?
+  coordinatorName      String?
+  coordinatorPhone     String?
+  campaignId           String? // linked fundraising campaign
+  publicVisible        Boolean   @default(true)
+  status               String    @default("DRAFT") // DRAFT | REVIEW | APPROVED | PUBLISHED | ACTIVE | COMPLETED | ARCHIVED
+  createdByName        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  campaign Campaign?   @relation(fields: [campaignId], references: [id])
+  events   FoodEvent[]
+
+  @@index([status])
+  @@map("food_programmes")
+}
+
+model FoodEvent {
+  id                   String    @id @default(cuid())
+  code                 String    @unique // UAR-FEVT-00001
+  programmeId          String
+  campaignId           String?
+  title                String
+  description          String?
+  eventDate            DateTime
+  startTime            String? // "09:00"
+  endTime              String?
+  venue                String
+  city                 String?
+  address              String? // exact address — ADMIN-only, stripped from public payloads
+  eventType            String    @default("COMMUNITY") // COMMUNITY | HOME_DELIVERY | DOOR_TO_DOOR | KITCHEN | MEAL_SERVING | MONTHLY_KIT | EMERGENCY | INSTITUTION | SCHOOL | RURAL | MOBILE
+  packageTemplateId    String? // KitTemplate (kind FOOD)
+  plannedUnits         Int       @default(0)
+  maxCapacity          Int?
+  coordinatorName      String?
+  coordinatorPhone     String?
+  registrationDeadline DateTime?
+  registrationOpen     Boolean   @default(true)
+  publicVisible        Boolean   @default(true)
+  specialInstructions  String?
+  status               String    @default("DRAFT") // DRAFT | APPROVED | PUBLISHED | REGISTRATION_OPEN | REGISTRATION_CLOSED | PLANNING | STOCK_ALLOCATED | PACKAGES_PREPARED | READY | IN_PROGRESS | COMPLETED | RECONCILED | CLOSED | POSTPONED | CANCELLED | SUSPENDED
+  statusReason         String?
+  budget               Float?
+  createdByName        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  programme       FoodProgramme         @relation(fields: [programmeId], references: [id])
+  campaign        Campaign?             @relation(fields: [campaignId], references: [id])
+  packageTemplate KitTemplate?          @relation(fields: [packageTemplateId], references: [id])
+  registrations   FoodRegistration[]
+  allocations     FoodStockAllocation[]
+  expenses        FoodEventExpense[]
+  donations       Donation[]
+
+  @@index([eventDate])
+  @@index([status])
+  @@index([programmeId])
+  @@map("food_events")
+}
+
+model FoodRegistration {
+  id              String    @id @default(cuid())
+  code            String    @unique // UAR-FREG-00001 (QR payload — no PII inside)
+  eventId         String
+  beneficiaryId   String
+  householdId     String?
+  unitsAllocated  Int       @default(1)
+  packageSnapshot String? // JSON of template composition at allocation time
+  status          String    @default("REGISTERED") // REGISTERED | APPROVED | CONFIRMED | CHECKED_IN | DISTRIBUTED | PARTIALLY_DISTRIBUTED | NOT_COLLECTED | NO_SHOW | CANCELLED | RESCHEDULED | REJECTED
+  unitsDelivered  Int       @default(0)
+  registeredVia   String    @default("DESK") // SELF | DESK | ASSISTED | BULK | QR | REFERRAL
+  ackMethod       String? // DIGITAL | OTP | SIGNATURE | ASSISTED | WITNESS
+  ackByName       String?
+  ackRef          String? // OTP / witness reference
+  ackAt           DateTime?
+  reason          String? // no-show / cancellation / delivery-failure reason
+  notes           String?
+  createdByName   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  event       FoodEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  beneficiary Beneficiary  @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  household   Household?   @relation(fields: [householdId], references: [id])
+  checkIn     FoodCheckIn?
+
+  @@unique([eventId, beneficiaryId])
+  @@index([status])
+  @@map("food_registrations")
+}
+
+model FoodCheckIn {
+  id             String    @id @default(cuid())
+  registrationId String    @unique
+  eventId        String
+  method         String    @default("QR") // QR | ID | PHONE | MANUAL | OFFLINE
+  operatorId     String?
+  operatorName   String?
+  checkedInAt    DateTime  @default(now())
+  offlineRef     String?   @unique // client idempotency key from offline mode
+  syncAt         DateTime?
+
+  registration FoodRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("food_check_ins")
+}
+
+model Household {
+  id                String   @id @default(cuid())
+  code              String   @unique // UAR-HOU-00001
+  name              String // e.g. "<head> household"
+  headBeneficiaryId String?
+  primaryPhone      String?
+  address           String?
+  city              String?
+  pincode           String?
+  size              Int      @default(1)
+  childrenCount     Int      @default(0)
+  seniorCount       Int      @default(0)
+  incomeRange       String? // optional, voluntarily provided
+  notes             String?
+  createdByName     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  headBeneficiary Beneficiary?       @relation("HouseholdHead", fields: [headBeneficiaryId], references: [id])
+  members         HouseholdMember[]
+  registrations   FoodRegistration[]
+
+  @@index([city])
+  @@map("households")
+}
+
+model HouseholdMember {
+  id            String  @id @default(cuid())
+  householdId   String
+  beneficiaryId String? @unique
+  name          String
+  age           Int?
+  relation      String? // HEAD | SPOUSE | CHILD | PARENT | OTHER
+  notes         String?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@index([householdId])
+  @@map("household_members")
+}
+
+model FoodBatch {
+  id               String    @id @default(cuid())
+  itemId           String
+  batchNo          String
+  source           String    @default("PURCHASED") // DONATED | PURCHASED | CSR | PARTNER | RECOVERED
+  donorName        String?
+  supplierName     String?
+  quantityReceived Int
+  quantityReserved Int       @default(0)
+  quantityConsumed Int       @default(0) // issued into event packages
+  quantityWasted   Int       @default(0)
+  quantityReturned Int       @default(0)
+  mfgDate          DateTime?
+  expiryDate       DateTime?
+  storageNotes     String?
+  tempRequirement  String? // AMBIENT | COOL | FROZEN | HOT_HOLD
+  qualityStatus    String    @default("PENDING") // PENDING | PASSED | QUARANTINED | REJECTED
+  inspectedByName  String?
+  inspectedAt      DateTime?
+  rejectionReason  String?
+  status           String    @default("ACTIVE") // ACTIVE | DEPLETED | BLOCKED
+  createdByName    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  item        InventoryItem         @relation(fields: [itemId], references: [id])
+  allocations FoodStockAllocation[]
+
+  @@unique([itemId, batchNo])
+  @@index([expiryDate])
+  @@index([qualityStatus])
+  @@map("food_batches")
+}
+
+model FoodStockAllocation {
+  id           String    @id @default(cuid())
+  eventId      String
+  itemId       String
+  batchId      String
+  quantity     Int
+  status       String    @default("RESERVED") // RESERVED | ISSUED | RETURNED | CANCELLED
+  issuedAt     DateTime?
+  issuedByName String?
+  returnedAt   DateTime?
+  notes        String?
+  createdAt    DateTime  @default(now())
+
+  event FoodEvent     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  item  InventoryItem @relation(fields: [itemId], references: [id])
+  batch FoodBatch     @relation(fields: [batchId], references: [id])
+
+  @@index([eventId])
+  @@index([batchId])
+  @@map("food_stock_allocations")
+}
+
+model FoodEventExpense {
+  id          String   @id @default(cuid())
+  eventId     String
+  head        String
+  amount      Float
+  notes       String?
+  spentByName String?
+  spentAt     DateTime @default(now())
+
+  event FoodEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("food_event_expenses")
+}
+
+// Food donation pledge — a donor/restaurant/store offers actual groceries or
+// cooked food; the logistics desk schedules a pickup, and warehouse receipt
+// converts the pledge into a traceable FoodBatch (§7.2 + §18.D of docs/food.md).
+model FoodDonationPledge {
+  id              String    @id @default(cuid())
+  code            String    @unique // UAR-FDP-00001
+  userId          String? // linked donor user when submitted while signed in
+  donorName       String
+  phone           String
+  email           String?
+  orgName         String? // restaurant / store / CSR partner
+  items           String // human-readable description or JSON [{name, qty, unit}]
+  pickupAddress   String
+  city            String?
+  pincode         String?
+  availability    String? // when the food can be collected
+  storageNotes    String? // temperature / packaging notes
+  status          String    @default("PENDING") // PENDING | SCHEDULED | COLLECTED | RECEIVED | REJECTED | CANCELLED
+  scheduledFor    DateTime?
+  assignedToName  String?
+  receivedBatchNo String? // batch created at warehouse receipt
+  rejectionReason String?
+  notes           String?
+  createdByName   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status])
+  @@map("food_donation_pledges")
+}
+
+// ==================== PASSWORD RESET (OTP) ====================
+// One row per forgot-password request (gap A-2). The 6-digit OTP is NEVER
+// stored in plaintext — only its scrypt hash — and expires after 15 minutes.
+// A successful reset marks every row for the email as used.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  email     String
+  otpHash   String // scrypt "salt:hash" of the 6-digit OTP
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@map("password_resets")
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id          String    @id @default(cuid())
+  userId      String?
+  title       String
+  message     String
+  type        String    @default("SYSTEM") // DONATION | CAMPAIGN | DISTRIBUTION | VOLUNTEER | INVENTORY | SYSTEM
+  isRead      Boolean   @default(false)
+  actionUrl   String?
+  sentVia     String?
+  createdAt   DateTime  @default(now())
+  // Mobile push notification fields — legacy wire compat
+  data        String? // JSON payload (post_id, room_id, conversation_id, ...)
+  platform    String? // ios | android
+  deviceToken String?
+  readAt      DateTime?
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+// ==================== ACTIVITY LOGS ====================
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  actorName  String?
+  action     String
+  entityType String
+  entityId   String?
+  details    String?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("activity_logs")
+}
+
+// ==================== SETTINGS ====================
+
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  isSecret    Boolean  @default(false) // masked in API responses
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ==================== CERTIFICATES (80G receipts live on Donation.receiptNumber) ====================
+
+model Certificate {
+  id             String   @id @default(cuid())
+  code           String   @unique // UAR-CERT-2026-00001
+  type           String // DONOR_APPRECIATION | VOLUNTEER_SERVICE | ANIMAL_ADOPTION | MEDICINE_SPONSOR | PAD_DRIVE_CHAMPION
+  recipientName  String
+  recipientEmail String?
+  userId         String?
+  title          String
+  description    String?
+  refType        String? // DONATION | PLEDGE | ANIMAL | VOLUNTEER | CAMPAIGN
+  refId          String?
+  issuedBy       String?
+  meta           String? // JSON extras (hours, campaign, animal name…)
+  issuedAt       DateTime @default(now())
+
+  @@map("certificates")
+}
+
+// ==================== CONTACT QUERIES ====================
+
+model ContactQuery {
+  id         String    @id @default(cuid())
+  name       String
+  email      String
+  phone      String?
+  subject    String
+  message    String
+  status     String    @default("PENDING") // PENDING | RESOLVED | CLOSED
+  resolvedAt DateTime?
+  resolvedBy String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("contact_queries")
+}
+
+// ==================== TESTIMONIALS ====================
+
+model Testimonial {
+  id        String   @id @default(cuid())
+  name      String
+  role      String
+  message   String
+  rating    Int      @default(5)
+  createdAt DateTime @default(now())
+
+  @@map("testimonials")
+}
+
+// ==================== FILE ASSETS (uploads) ====================
+
+model FileAsset {
+  id             String   @id @default(cuid())
+  name           String // original filename
+  storedName     String // on-disk name inside the upload directory
+  title          String?
+  description    String?
+  mime           String
+  size           Int
+  folder         String   @default("general")
+  uploadedById   String?
+  uploadedByName String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([folder])
+  @@index([createdAt])
+  @@map("file_assets")
+}
+
+// ==================== HEALTHCARE OUTREACH & MANAGEMENT ====================
+// Extends the UAR platform with the complete medical-camp lifecycle:
+// partners → camps → registration → attendance/queue → screening/vitals →
+// encounter → prescription → lab orders → dispense → referral → follow-up.
+// Reuses: User (roles), Campaign, Donation (category MEDICAL), InventoryItem
+// (MEDICINE), Beneficiary, FileAsset, Notification, ActivityLog.
+
+model HealthcareOrg {
+  id             String    @id @default(cuid())
+  name           String
+  type           String    @default("HOSPITAL") // HOSPITAL | CLINIC | LAB | MEDICAL_COLLEGE | DENTAL | EYE_CARE | PHARMACY | BLOOD_BANK | PRACTITIONER | CSR
+  city           String?
+  address        String?
+  phone          String?
+  email          String?
+  website        String?
+  regNumber      String?
+  licences       String? // JSON [string]
+  services       String? // JSON [string]
+  facilities     String?
+  operatingHours String?
+  status         String    @default("PENDING") // PENDING | VERIFIED | REJECTED | SUSPENDED
+  verifiedByName String?
+  verifiedAt     DateTime?
+  notes          String?
+  ownerUserId    String?   @unique // org portal login (role HOSPITAL)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  owner        User?                @relation("HealthcareOrgOwner", fields: [ownerUserId], references: [id])
+  staff        HealthProfessional[]
+  campPartners CampPartner[]
+  referrals    MedicalReferral[]    @relation("ReferralReceivingOrg")
+
+  @@index([status])
+  @@index([type])
+  @@map("healthcare_orgs")
+}
+
+model HealthProfessional {
+  id                 String    @id @default(cuid())
+  userId             String?   @unique // optional portal login (role DOCTOR | NURSE | PHARMACIST | LAB_TECH)
+  orgId              String?
+  kind               String    @default("DOCTOR") // DOCTOR | NURSE | PHARMACIST | LAB_TECH | OTHER
+  name               String
+  regNumber          String?
+  qualification      String?
+  speciality         String?
+  experienceYears    Int?
+  phone              String?
+  email              String?
+  verificationStatus String    @default("PENDING") // PENDING | VERIFIED | REJECTED
+  verifiedByName     String?
+  verifiedAt         DateTime?
+  availability       String? // JSON [{ day, from, to }]
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  org           HealthcareOrg? @relation(fields: [orgId], references: [id])
+  user          User?          @relation("HealthProfessionalUser", fields: [userId], references: [id])
+  campStaff     CampStaff[]
+  encounters    Encounter[]
+  prescriptions Prescription[]
+  appointments  Appointment[]
+
+  @@index([orgId])
+  @@index([kind])
+  @@index([verificationStatus])
+  @@map("health_professionals")
+}
+
+model MedicalCamp {
+  id              String   @id @default(cuid())
+  campaignId      String?
+  code            String   @unique // UAR-CAMP-00001
+  title           String
+  description     String?
+  campDate        DateTime
+  startTime       String? // "09:00"
+  endTime         String?
+  venue           String
+  city            String?
+  capacity        Int      @default(200)
+  expectedCount   Int?
+  services        String? // JSON [string] e.g. ["General checkup","Eye screening"]
+  status          String   @default("DRAFT") // DRAFT | SCHEDULED | LIVE | COMPLETED | CANCELLED
+  coordinatorName String?
+  budget          Float?
+  notes           String?
+  createdByName   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  campaign      Campaign?              @relation(fields: [campaignId], references: [id])
+  campPartners  CampPartner[]
+  campStaff     CampStaff[]
+  registrations CampRegistration[]
+  attendances   CampAttendance[]       @relation("AttendanceCamp")
+  appointments  Appointment[]
+  inventoryTxns InventoryTransaction[] @relation("InventoryTxnCamp")
+  encounters    Encounter[]
+  vitals        VitalObservation[]
+  screenings    ScreeningRecord[]
+  prescriptions Prescription[]
+  labOrders     DiagnosticOrder[]
+  referrals     MedicalReferral[]
+  followUps     FollowUp[]
+  expenses      CampExpense[]
+  dispenses     MedicationDispense[]
+  documents     MedicalDocument[]
+
+  @@index([campDate])
+  @@index([status])
+  @@index([city])
+  @@map("medical_camps")
+}
+
+model CampPartner {
+  id          String    @id @default(cuid())
+  campId      String
+  orgId       String
+  role        String    @default("SUPPORT") // HOST | SUPPORT | SPONSOR
+  status      String    @default("INVITED") // INVITED | ACCEPTED | DECLINED
+  respondedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  camp MedicalCamp   @relation(fields: [campId], references: [id], onDelete: Cascade)
+  org  HealthcareOrg @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([campId, orgId])
+  @@map("camp_partners")
+}
+
+model CampStaff {
+  id             String   @id @default(cuid())
+  campId         String
+  professionalId String?
+  volunteerId    String?
+  role           String   @default("DOCTOR") // DOCTOR | NURSE | PHARMACIST | LAB_TECH | COORDINATOR | VOLUNTEER
+  status         String   @default("ASSIGNED") // ASSIGNED | CONFIRMED | ATTENDED | WITHDRAWN
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  camp         MedicalCamp         @relation(fields: [campId], references: [id], onDelete: Cascade)
+  professional HealthProfessional? @relation(fields: [professionalId], references: [id])
+
+  @@index([campId])
+  @@index([professionalId])
+  @@map("camp_staff")
+}
+
+model CampRegistration {
+  id               String    @id @default(cuid())
+  campId           String
+  beneficiaryId    String
+  code             String    @unique // UAR-CREG-00001
+  status           String    @default("REGISTERED") // REGISTERED | CONFIRMED | CANCELLED | REJECTED
+  registeredVia    String    @default("DESK") // SELF | DESK | ASSISTED | BULK | QR
+  scheduledSlot    DateTime?
+  notes            String?
+  registeredByName String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  beneficiary Beneficiary     @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp        MedicalCamp     @relation(fields: [campId], references: [id], onDelete: Cascade)
+  attendance  CampAttendance?
+
+  @@unique([campId, beneficiaryId])
+  @@index([status])
+  @@map("camp_registrations")
+}
+
+model CampAttendance {
+  id             String    @id @default(cuid())
+  registrationId String    @unique
+  campId         String
+  beneficiaryId  String
+  status         String    @default("CHECKED_IN") // CHECKED_IN | WAITING | IN_CONSULTATION | COMPLETED | CHECKED_OUT | NO_SHOW | CANCELLED
+  queueToken     Int?
+  checkInAt      DateTime?
+  checkInMethod  String? // QR | ID | PHONE | MANUAL
+  operatorName   String?
+  doctorId       String?
+  checkOutAt     DateTime?
+  cancelReason   String?
+
+  registration CampRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  camp         MedicalCamp      @relation("AttendanceCamp", fields: [campId], references: [id])
+  beneficiary  Beneficiary      @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+
+  @@index([campId])
+  @@index([status])
+  @@map("camp_attendances")
+}
+
+model Appointment {
+  id             String   @id @default(cuid())
+  campId         String?
+  beneficiaryId  String
+  professionalId String?
+  type           String   @default("CONSULTATION") // SCREENING | CONSULTATION | LAB | PHARMACY | FOLLOW_UP
+  scheduledAt    DateTime
+  status         String   @default("SCHEDULED") // SCHEDULED | CONFIRMED | COMPLETED | CANCELLED | NO_SHOW
+  noShowReason   String?
+  notes          String?
+  createdByName  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  camp         MedicalCamp?        @relation(fields: [campId], references: [id])
+  beneficiary  Beneficiary         @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  professional HealthProfessional? @relation(fields: [professionalId], references: [id])
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@map("appointments")
+}
+
+model Encounter {
+  id             String    @id @default(cuid())
+  campId         String?
+  registrationId String?
+  beneficiaryId  String
+  doctorId       String
+  status         String    @default("DRAFT") // DRAFT | SIGNED
+  chiefComplaint String?
+  observations   String?
+  diagnosis      String?
+  advice         String?
+  followUpDate   DateTime?
+  aiDraftUsed    Boolean   @default(false)
+  signedAt       DateTime?
+  signedByName   String?
+  amendments     String? // JSON [{ at, byName, note, changeSummary }]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  camp          MedicalCamp?       @relation(fields: [campId], references: [id])
+  beneficiary   Beneficiary        @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  doctor        HealthProfessional @relation(fields: [doctorId], references: [id])
+  vitals        VitalObservation[]
+  screenings    ScreeningRecord[]
+  prescriptions Prescription[]
+  labOrders     DiagnosticOrder[]
+  referrals     MedicalReferral[]
+
+  @@index([beneficiaryId])
+  @@index([campId])
+  @@index([status])
+  @@map("encounters")
+}
+
+model VitalObservation {
+  id             String   @id @default(cuid())
+  beneficiaryId  String
+  campId         String?
+  encounterId    String?
+  recordedByName String?
+  bpSystolic     Int?
+  bpDiastolic    Int?
+  pulse          Int?
+  tempC          Float?
+  respRate       Int?
+  spo2           Int?
+  heightCm       Float?
+  weightKg       Float?
+  bmi            Float?
+  glucose        Float?
+  notes          String?
+  recordedAt     DateTime @default(now())
+
+  beneficiary Beneficiary  @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp        MedicalCamp? @relation(fields: [campId], references: [id])
+  encounter   Encounter?   @relation(fields: [encounterId], references: [id])
+
+  @@index([beneficiaryId])
+  @@index([campId])
+  @@map("vital_observations")
+}
+
+model ScreeningRecord {
+  id             String   @id @default(cuid())
+  campId         String?
+  beneficiaryId  String
+  encounterId    String?
+  type           String   @default("GENERAL") // EYE | DENTAL | BP | GLUCOSE | HEARING | SKIN | NUTRITION | GENERAL | OTHER
+  result         String
+  abnormal       Boolean  @default(false)
+  notes          String?
+  recordedByName String?
+  recordedAt     DateTime @default(now())
+
+  beneficiary Beneficiary  @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp        MedicalCamp? @relation(fields: [campId], references: [id])
+  encounter   Encounter?   @relation(fields: [encounterId], references: [id])
+
+  @@index([beneficiaryId])
+  @@index([campId])
+  @@map("screening_records")
+}
+
+model Prescription {
+  id            String    @id @default(cuid())
+  code          String    @unique // UAR-RX-00001
+  encounterId   String?
+  campId        String?
+  beneficiaryId String
+  doctorId      String
+  diagnosis     String?
+  status        String    @default("DRAFT") // DRAFT | SIGNED | PARTIALLY_DISPENSED | FULLY_DISPENSED | CANCELLED
+  signedAt      DateTime?
+  signedByName  String?
+  followUpDate  DateTime?
+  cancelReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  encounter   Encounter?           @relation(fields: [encounterId], references: [id])
+  camp        MedicalCamp?         @relation(fields: [campId], references: [id])
+  beneficiary Beneficiary          @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  doctor      HealthProfessional   @relation(fields: [doctorId], references: [id])
+  items       PrescriptionItem[]
+  dispenses   MedicationDispense[]
+
+  @@index([beneficiaryId])
+  @@index([status])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id             String  @id @default(cuid())
+  prescriptionId String
+  medicineName   String
+  genericName    String?
+  strength       String?
+  dosage         String?
+  route          String? // ORAL | TOPICAL | INHALATION | INJECTION | OTHER
+  frequency      String? // e.g. "1-0-1"
+  durationDays   Int?
+  quantity       Int     @default(1)
+  instructions   String?
+
+  prescription Prescription         @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  dispenses    MedicationDispense[]
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
+}
+
+model MedicationDispense {
+  id              String    @id @default(cuid())
+  prescriptionId  String
+  itemId          String?
+  beneficiaryId   String
+  campId          String?
+  inventoryItemId String?
+  quantity        Int       @default(1)
+  batchNo         String?
+  expiryDate      DateTime?
+  pharmacistName  String?
+  notes           String?
+  dispensedAt     DateTime  @default(now())
+
+  prescription  Prescription      @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  item          PrescriptionItem? @relation(fields: [itemId], references: [id])
+  beneficiary   Beneficiary       @relation("DispenseBeneficiary", fields: [beneficiaryId], references: [id])
+  camp          MedicalCamp?      @relation(fields: [campId], references: [id])
+  inventoryItem InventoryItem?    @relation(fields: [inventoryItemId], references: [id])
+
+  @@index([prescriptionId])
+  @@index([beneficiaryId])
+  @@map("medication_dispenses")
+}
+
+model DiagnosticOrder {
+  id             String    @id @default(cuid())
+  code           String    @unique // UAR-LAB-00001
+  campId         String?
+  beneficiaryId  String
+  encounterId    String?
+  testName       String
+  status         String    @default("ORDERED") // ORDERED | SAMPLE_COLLECTED | RECEIVED | PROCESSING | RESULT_AVAILABLE | VERIFIED | DOCTOR_REVIEWED | CANCELLED
+  orderedByName  String?
+  collectedAt    DateTime?
+  resultText     String?
+  resultFileUrl  String? // file-manager asset URL
+  verifiedByName String?
+  verifiedAt     DateTime?
+  reviewedAt     DateTime?
+  critical       Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  camp        MedicalCamp? @relation(fields: [campId], references: [id])
+  beneficiary Beneficiary  @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  encounter   Encounter?   @relation(fields: [encounterId], references: [id])
+
+  @@index([beneficiaryId])
+  @@index([status])
+  @@map("diagnostic_orders")
+}
+
+model MedicalReferral {
+  id                 String   @id @default(cuid())
+  code               String   @unique // UAR-REF-00001
+  beneficiaryId      String
+  campId             String?
+  encounterId        String?
+  reason             String
+  priority           String   @default("MEDIUM") // LOW | MEDIUM | HIGH | EMERGENCY
+  receivingOrgId     String?
+  speciality         String?
+  referralDoctorName String?
+  status             String   @default("CREATED") // CREATED | SHARED | ACCEPTED | SCHEDULED | ATTENDED | REPORT_RECEIVED | COMPLETED | CANCELLED | LOST_TO_FOLLOWUP
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  beneficiary  Beneficiary    @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp         MedicalCamp?   @relation(fields: [campId], references: [id])
+  encounter    Encounter?     @relation(fields: [encounterId], references: [id])
+  receivingOrg HealthcareOrg? @relation("ReferralReceivingOrg", fields: [receivingOrgId], references: [id])
+  followUps    FollowUp[]
+
+  @@index([beneficiaryId])
+  @@index([status])
+  @@map("medical_referrals")
+}
+
+model FollowUp {
+  id            String    @id @default(cuid())
+  beneficiaryId String
+  campId        String?
+  referralId    String?
+  dueDate       DateTime
+  instructions  String?
+  ownerName     String?
+  status        String    @default("PENDING") // PENDING | DONE | MISSED | CANCELLED
+  outcome       String?
+  doneAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  beneficiary Beneficiary      @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp        MedicalCamp?     @relation(fields: [campId], references: [id])
+  referral    MedicalReferral? @relation(fields: [referralId], references: [id])
+
+  @@index([beneficiaryId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("follow_ups")
+}
+
+model MedicalDocument {
+  id             String   @id @default(cuid())
+  beneficiaryId  String
+  campId         String?
+  name           String
+  kind           String   @default("OTHER") // PRESCRIPTION | LAB_REPORT | DISCHARGE_SUMMARY | REFERRAL | OTHER
+  url            String // file-manager asset URL (/api/files/:id/file)
+  extractedText  String?
+  aiSummary      String?
+  aiConfidence   Float?
+  uploadedByName String?
+  createdAt      DateTime @default(now())
+
+  beneficiary Beneficiary  @relation(fields: [beneficiaryId], references: [id], onDelete: Cascade)
+  camp        MedicalCamp? @relation(fields: [campId], references: [id])
+
+  @@index([beneficiaryId])
+  @@map("medical_documents")
+}
+
+model CampExpense {
+  id          String   @id @default(cuid())
+  campId      String
+  head        String
+  amount      Float
+  notes       String?
+  spentByName String?
+  spentAt     DateTime @default(now())
+
+  camp MedicalCamp @relation(fields: [campId], references: [id], onDelete: Cascade)
+
+  @@index([campId])
+  @@map("camp_expenses")
+}
+
+model InventoryTransaction {
+  id            String    @id @default(cuid())
+  itemId        String
+  campId        String?
+  type          String    @default("ISSUED") // RECEIVED | ISSUED | TRANSFERRED | CONSUMED | RETURNED | ADJUSTED
+  quantity      Int       @default(1) // signed: negative for outflows
+  batchNo       String?
+  expiryDate    DateTime?
+  source        String? // DONATED | PURCHASED | SPONSORED | INTERNAL
+  owner         String    @default("UAR") // UAR | org name
+  refType       String? // e.g. PRESCRIPTION | DISPENSE | CAMP
+  refId         String?
+  notes         String?
+  handledByName String?
+  createdAt     DateTime  @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  camp MedicalCamp?  @relation("InventoryTxnCamp", fields: [campId], references: [id])
+
+  @@index([itemId])
+  @@index([campId])
+  @@map("inventory_transactions")
+}
+
+model AIInteraction {
+  id             String   @id @default(cuid())
+  action         String // CONSULT_DRAFT | TIMELINE_SUMMARY | CAMP_PLAN | DOC_EXTRACT
+  entityType     String?
+  entityId       String?
+  promptDigest   String? // minimised, non-sensitive digest
+  outputDigest   String?
+  confidence     Float?
+  status         String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewedByName String?
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  @@index([action])
+  @@index([status])
+  @@map("ai_interactions")
+}
+
+// ============================================================================
+
+// ============================================================================
+// ==================== MOBILE APP (community platform) =======================
+// ============================================================================
+// Wire-compatible port of the legacy Laravel "chatter" mobile backend.
+// Identity REUSES the existing User model + session JWT (no parallel auth);
+// donations REUSE the existing Donation model; volunteer applications REUSE
+// VolunteerApplication; pushes REUSE Notification. Only the genuinely-new
+// social domain lives in these tables. Prisma field names mirror the legacy
+// MySQL columns so JSON serializes with identical snake_case keys.
+
+model UserFollow {
+  id        String   @id @default(cuid())
+  myUserId  String   @map("my_user_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  follower User @relation("follower", fields: [myUserId], references: [id], onDelete: Cascade)
+  followed User @relation("followed", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([myUserId, userId])
+  @@index([userId])
+  @@map("app_following_lists")
+}
+
+model CommunityInterest {
+  id        Int      @id @default(autoincrement())
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_interests")
+}
+
+model CommunityPost {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  desc            String?   @db.Text
+  type            String    @default("normal") // normal | cause
+  goalAmount      Float?    @map("goal_amount")
+  raisedAmount    Float     @default(0) @map("raised_amount")
+  deadline        DateTime? @db.Date
+  isVerified      Boolean   @default(false) @map("is_verified")
+  categoryId      Int?      @map("category_id")
+  isEmergency     Boolean   @default(false) @map("is_emergency")
+  contextLabel    String?   @map("context_label")
+  impactLabel     String?   @map("impact_label")
+  communityLabel  String?   @map("community_label")
+  tags            String?
+  commentsCount   Int       @default(0) @map("comments_count")
+  likesCount      Int       @default(0) @map("likes_count")
+  linkPreviewJson String?   @map("link_preview_json")
+  interestIds     String?   @map("interest_ids") // CSV
+  isRestricted    Int       @default(0) @map("is_restricted")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content        CommunityPostContent[]
+  comments       CommunityComment[]
+  likes          CommunityLike[]
+  reports        CommunityReport[]
+  causeFollowers CauseFollower[]
+  donations      Donation[]             @relation("CausePostDonations")
+  category       CauseCategory?         @relation(fields: [categoryId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("app_posts")
+}
+
+model CommunityPostContent {
+  id          String   @id @default(cuid())
+  postId      String   @map("post_id")
+  contentType Int      @map("content_type") // 0 image | 1 video | 2 audio
+  content     String
+  thumbnail   String?
+  audioWaves  String?  @map("audio_waves") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@map("app_post_contents")
+}
+
+model CommunityComment {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  postId    String   @map("post_id")
+  desc      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post    CommunityPost     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  likes   LikeComment[]
+  reports CommunityReport[]
+
+  @@index([postId])
+  @@index([userId])
+  @@map("app_comments")
+}
+
+model CommunityLike {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  postId       String?  @map("post_id")
+  reelId       String?  @map("reel_id")
+  reactionType String   @default("support") @map("reaction_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post CommunityPost? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reel CommunityReel? @relation(fields: [reelId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([reelId])
+  @@index([userId])
+  @@map("app_likes")
+}
+
+model LikeComment {
+  id        String   @id @default(cuid())
+  commentId String   @map("comment_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  comment CommunityComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@map("app_like_comments")
+}
+
+model CommunityStory {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  type          Int      @default(0) // 0 image | 1 video
+  duration      Float    @default(0)
+  content       String
+  thumbnail     String?
+  viewByUserIds String?  @map("view_by_user_ids") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("app_stories")
+}
+
+model CommunityReel {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  causeId       String?  @map("cause_id")
+  interestIds   String?  @map("interest_ids") // CSV
+  musicId       Int?     @map("music_id")
+  description   String?  @db.Text
+  content       String?
+  thumbnail     String?
+  hashtags      String?
+  commentsCount Int      @default(0) @map("comments_count")
+  likesCount    Int      @default(0) @map("likes_count")
+  viewsCount    Int      @default(0) @map("views_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  music    CommunityMusic?        @relation(fields: [musicId], references: [id])
+  comments CommunityReelComment[]
+  likes    CommunityLike[]
+  reports  CommunityReport[]
+
+  @@index([userId])
+  @@index([musicId])
+  @@index([causeId])
+  @@map("app_reels")
+}
+
+model CommunityReelComment {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  reelId      String   @map("reel_id")
+  description String   @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reel CommunityReel @relation(fields: [reelId], references: [id], onDelete: Cascade)
+
+  @@index([reelId])
+  @@index([userId])
+  @@map("app_reel_comments")
+}
+
+model MusicCategory {
+  id        Int      @id @default(autoincrement())
+  title     String
+  isDeleted Int      @default(0) @map("is_deleted")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  musics CommunityMusic[]
+
+  @@map("app_music_categories")
+}
+
+model CommunityMusic {
+  id         Int       @id @default(autoincrement())
+  categoryId Int?      @map("category_id")
+  title      String?
+  sound      String?
+  duration   String?
+  artist     String?
+  image      String?
+  isDeleted  Int       @default(0) @map("is_deleted")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  category MusicCategory?  @relation(fields: [categoryId], references: [id])
+  reels    CommunityReel[]
+
+  @@index([categoryId])
+  @@map("app_musics")
+}
+
+model CommunityRoom {
+  id                  String   @id @default(cuid())
+  conversationId      String?  @map("conversation_id")
+  adminId             String   @map("admin_id")
+  photo               String?
+  title               String
+  desc                String
+  interestIds         String   @map("interest_ids") // CSV
+  isPrivate           Int      @default(0) @map("is_private")
+  isJoinRequestEnable Int      @default(0) @map("is_join_request_enable")
+  totalMember         Int      @default(0) @map("total_member")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  admin     User                @relation(fields: [adminId], references: [id])
+  roomUsers CommunityRoomUser[]
+  reports   CommunityReport[]
+
+  @@index([adminId])
+  @@map("app_rooms")
+}
+
+model CommunityRoomUser {
+  id        String   @id @default(cuid())
+  roomId    String   @map("room_id")
+  userId    String   @map("user_id")
+  invitedBy String?  @map("invited_by")
+  type      Int // 1 request | 2 member | 3 co-admin | 4 invited | 5 admin
+  isMute    Int      @default(0) @map("is_mute")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  room CommunityRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@index([userId])
+  @@index([roomId, userId])
+  @@map("app_room_users")
+}
+
+model ReportReason {
+  id        Int      @id @default(autoincrement())
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_report_reasons")
+}
+
+model CommunityReport {
+  id        String   @id @default(cuid())
+  type      Int? // 0 room | 1 post | 2 user | 3 reel
+  roomId    String?  @map("room_id")
+  userId    String?  @map("user_id")
+  postId    String?  @map("post_id")
+  reelId    String?  @map("reel_id")
+  commentId String?  @map("comment_id")
+  reason    String
+  desc      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  room     CommunityRoom?    @relation(fields: [roomId], references: [id])
+  post     CommunityPost?    @relation(fields: [postId], references: [id])
+  reel     CommunityReel?    @relation(fields: [reelId], references: [id])
+  comment  CommunityComment? @relation(fields: [commentId], references: [id])
+  reporter User?             @relation(fields: [userId], references: [id])
+
+  @@index([type])
+  @@map("app_reports")
+}
+
+model UsernameRestriction {
+  id        Int      @id @default(autoincrement())
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_username_restrictions")
+}
+
+model ProfileVerification {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  selfie       String
+  document     String
+  documentType String   @map("document_type")
+  fullName     String   @map("full_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("app_profile_verifications")
+}
+
+model SavedNotification {
+  id            String   @id @default(cuid())
+  myUserId      String?  @map("my_user_id")
+  userId        String?  @map("user_id")
+  postId        String?  @map("post_id")
+  roomId        String?  @map("room_id")
+  commentId     String?  @map("comment_id")
+  reelId        String?  @map("reel_id")
+  reelCommentId String?  @map("reel_comment_id")
+  type          Int // 1 follow | 2 comment | 3 post like | 4 room invite | 5 accept invite | 6 join | 7 direct join | 8 accept request | 9 reel like | 10 reel comment
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([myUserId])
+  @@map("app_saved_notifications")
+}
+
+model Conversation {
+  id                String    @id @default(cuid())
+  type              Int       @default(1) // 1 direct | 2 group
+  user1Id           String?   @map("user_1_id")
+  user2Id           String?   @map("user_2_id")
+  groupName         String?   @map("group_name")
+  groupPhoto        String?   @map("group_photo")
+  adminId           String?   @map("admin_id")
+  lastMessage       String?   @map("last_message") @db.Text
+  lastMessageAt     DateTime? @map("last_message_at")
+  lastMessageUserId String?   @map("last_message_user_id")
+  user1UnreadCount  Int       @default(0) @map("user_1_unread_count")
+  user2UnreadCount  Int       @default(0) @map("user_2_unread_count")
+  isArchived        Boolean   @default(false) @map("is_archived")
+  isMuted           Boolean   @default(false) @map("is_muted")
+  mutedBy           String?   @map("muted_by") @db.Text // JSON {"<uid>": true}
+  clearedAt         String?   @map("cleared_at") @db.Text // JSON {"<uid>": "ts"}
+  deletedAt         DateTime? @map("deleted_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user1        User?                     @relation("convo1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2        User?                     @relation("convo2", fields: [user2Id], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([user1Id])
+  @@index([user2Id])
+  @@index([lastMessageAt])
+  @@map("app_conversations")
+}
+
+model ConversationParticipant {
+  id                String    @id @default(cuid())
+  conversationId    String    @map("conversation_id")
+  userId            String    @map("user_id")
+  role              Int       @default(1) // 1 member | 2 admin
+  isMuted           Boolean   @default(false) @map("is_muted")
+  unreadCount       Int       @default(0) @map("unread_count")
+  lastReadMessageId String?   @map("last_read_message_id")
+  lastReadAt        DateTime? @map("last_read_at")
+  joinedAt          DateTime? @map("joined_at")
+  leftAt            DateTime? @map("left_at")
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([isActive])
+  @@map("app_conversation_participants")
+}
+
+model Message {
+  id               String    @id @default(cuid())
+  conversationId   String    @map("conversation_id")
+  senderId         String    @map("sender_id")
+  message          String?   @db.Text
+  type             Int       @default(1) // 1 text | 2 image | 3 video | 4 audio | 5 file | 6 location
+  mediaUrl         String?   @map("media_url")
+  thumbnailUrl     String?   @map("thumbnail_url")
+  fileName         String?   @map("file_name")
+  fileSize         Int?      @map("file_size")
+  mimeType         String?   @map("mime_type")
+  locationData     String?   @map("location_data") @db.Text
+  replyToMessageId String?   @map("reply_to_message_id")
+  storyId          String?   @map("story_id")
+  isRead           Boolean   @default(false) @map("is_read")
+  readAt           DateTime? @map("read_at")
+  status           Int       @default(1) // 1 sent | 2 delivered | 3 read | 4 failed
+  isDeleted        Boolean   @default(false) @map("is_deleted")
+  isEdited         Boolean   @default(false) @map("is_edited")
+  editedAt         DateTime? @map("edited_at")
+  deletedAt        DateTime? @map("deleted_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([createdAt])
+  @@map("app_messages")
+}
+
+model AudioSpace {
+  id          String    @id @db.VarChar(100) // UUID from client
+  title       String?
+  description String?   @db.Text
+  topics      String?
+  type        String    @default("public") // public | private
+  agoraToken  String?   @map("agora_token") @db.VarChar(512)
+  isActive    Boolean   @default(true) @map("is_active")
+  endedAt     DateTime? @map("ended_at")
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  participants AudioSpaceParticipant[]
+  messages     AudioSpaceMessage[]
+
+  @@index([type])
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("app_audio_spaces")
+}
+
+model AudioSpaceParticipant {
+  id           String    @id @default(cuid())
+  audioSpaceId String    @map("audio_space_id") @db.VarChar(100)
+  userId       String    @map("user_id")
+  type         String    @default("listener") // admin | host | listener | requested | added | kicked_out
+  micStatus    String    @default("muted") @map("mic_status") // on | muted
+  isLeft       Boolean   @default(false) @map("is_left")
+  joinedAt     DateTime? @map("joined_at")
+  leftAt       DateTime? @map("left_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  space AudioSpace @relation(fields: [audioSpaceId], references: [id], onDelete: Cascade)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([audioSpaceId, userId])
+  @@index([userId])
+  @@index([type])
+  @@index([isLeft])
+  @@map("app_audio_space_participants")
+}
+
+model AudioSpaceMessage {
+  id           String    @id @db.VarChar(100) // microseconds timestamp from client
+  audioSpaceId String    @map("audio_space_id") @db.VarChar(100)
+  userId       String    @map("user_id")
+  content      String    @db.Text
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  space AudioSpace @relation(fields: [audioSpaceId], references: [id], onDelete: Cascade)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([audioSpaceId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("app_audio_space_messages")
+}
+
+model CauseCategory {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  icon        String?
+  color       String   @default("#2E7D32") @db.VarChar(7)
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  posts CommunityPost[]
+
+  @@map("app_cause_categories")
+}
+
+model CauseFollower {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  causeId   String   @map("cause_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cause CommunityPost @relation(fields: [causeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, causeId])
+  @@index([userId])
+  @@index([causeId])
+  @@map("app_cause_followers")
+}
+
+model CharityCard {
+  id              String    @id @default(cuid())
+  userId          String    @unique @map("user_id")
+  cardNumber      String    @unique @map("card_number") @db.VarChar(20) // CHR-XXXXXXXXXXXXXXXX
+  memberName      String    @map("member_name") @db.VarChar(100)
+  membershipLevel String    @default("bronze") @map("membership_level") // bronze | silver | gold | platinum
+  totalDonated    Float     @default(0) @map("total_donated")
+  donationPoints  Int       @default(0) @map("donation_points")
+  impactScore     Int       @default(0) @map("impact_score")
+  memberSince     DateTime  @map("member_since") @db.Date
+  validUntil      DateTime? @map("valid_until") @db.Date
+  qrCode          String?   @map("qr_code") @db.Text
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([membershipLevel])
+  @@index([isActive])
+  @@map("app_charity_cards")
+}
+
+model DonationPoint {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  donationId  String?   @map("donation_id")
+  points      Int       @default(0) // positive or negative
+  type        String    @default("earned") // earned | redeemed | bonus | expired | adjustment
+  description String?   @db.VarChar(255)
+  expiresAt   DateTime? @map("expires_at") @db.Date
+  isExpired   Boolean   @default(false) @map("is_expired")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  donation Donation? @relation(fields: [donationId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([userId, isExpired])
+  @@map("app_donation_points")
+}
+
+model Achievement {
+  id             Int      @id @default(autoincrement())
+  name           String   @unique @db.VarChar(100)
+  slug           String   @unique @db.VarChar(100)
+  description    String   @db.Text
+  iconUrl        String?  @map("icon_url")
+  category       String   @default("donation") // donation | engagement | impact | milestone | special
+  tier           String   @default("bronze") // bronze | silver | gold | platinum | diamond
+  pointsRequired Int      @default(0) @map("points_required")
+  amountRequired Float    @default(0) @map("amount_required")
+  countRequired  Int      @default(0) @map("count_required")
+  rewardPoints   Int      @default(0) @map("reward_points")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  users UserAchievement[]
+
+  @@index([category])
+  @@index([tier])
+  @@index([isActive])
+  @@map("app_achievements")
+}
+
+model UserAchievement {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  achievementId Int       @map("achievement_id")
+  unlockedAt    DateTime  @map("unlocked_at")
+  progress      Int       @default(0)
+  isClaimed     Boolean   @default(false) @map("is_claimed")
+  claimedAt     DateTime? @map("claimed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
+  @@index([isClaimed])
+  @@map("app_user_achievements")
+}
+
+model DonationGoal {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  title         String    @db.VarChar(100)
+  description   String?   @db.Text
+  targetAmount  Float     @map("target_amount")
+  currentAmount Float     @default(0) @map("current_amount")
+  startDate     DateTime  @map("start_date") @db.Date
+  endDate       DateTime  @map("end_date") @db.Date
+  frequency     String    @default("one_time") // one_time | monthly | yearly
+  status        String    @default("active") // active | completed | cancelled | expired
+  isPublic      Boolean   @default(false) @map("is_public")
+  completedAt   DateTime? @map("completed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([startDate, endDate])
+  @@map("app_donation_goals")
+}
+
+model CharityEvent {
+  id                   String   @id @default(cuid())
+  title                String   @db.VarChar(200)
+  description          String   @db.Text
+  location             String?
+  imageUrl             String?  @map("image_url")
+  startDatetime        DateTime @map("start_datetime")
+  endDatetime          DateTime @map("end_datetime")
+  maxParticipants      Int?     @map("max_participants")
+  currentParticipants  Int      @default(0) @map("current_participants")
+  type                 String   @default("community") // fundraiser | volunteer | awareness | community | workshop
+  status               String   @default("upcoming") // upcoming | ongoing | completed | cancelled
+  requiresRegistration Boolean  @default(true) @map("requires_registration")
+  requiresQrCheckin    Boolean  @default(false) @map("requires_qr_checkin")
+  pointsReward         Int      @default(0) @map("points_reward")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  participants EventParticipant[]
+
+  @@index([type])
+  @@index([status])
+  @@index([startDatetime, endDatetime])
+  @@map("app_charity_events")
+}
+
+model EventParticipant {
+  id            String    @id @default(cuid())
+  eventId       String    @map("event_id")
+  userId        String    @map("user_id")
+  status        String    @default("registered") // registered | confirmed | attended | cancelled | no_show
+  registeredAt  DateTime  @map("registered_at")
+  checkedInAt   DateTime? @map("checked_in_at")
+  qrCode        String?   @map("qr_code")
+  pointsAwarded Boolean   @default(false) @map("points_awarded")
+  notes         String?   @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  event CharityEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@index([status])
+  @@map("app_event_participants")
+}
+
+model FaqType {
+  id        Int      @id @default(autoincrement())
+  title     String   @db.VarChar(55)
+  isDeleted Int      @default(0) @map("is_deleted")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  faqs Faq[]
+
+  @@map("app_faqs_types")
+}
+
+model Faq {
+  id         Int      @id @default(autoincrement())
+  faqsTypeId Int      @map("faqs_type_id")
+  question   String   @db.Text
+  answer     String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  type FaqType @relation(fields: [faqsTypeId], references: [id])
+
+  @@map("app_faqs")
+}
+
+model TblPage {
+  id         Int       @id @default(autoincrement())
+  privacy    String?   @db.Text
+  termsofuse String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@map("app_tbl_pages")
+}

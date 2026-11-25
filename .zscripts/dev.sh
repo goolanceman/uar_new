@@ -105,6 +105,10 @@ wait_for_service() {
 }
 
 cleanup() {
+	if [ -n "${BACKEND_PID:-}" ] && kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
+		echo "Stopping backend server (PID: $BACKEND_PID)..."
+		kill "$BACKEND_PID" >/dev/null 2>&1 || true
+	fi
 	if [ -n "${DEV_PID:-}" ] && kill -0 "$DEV_PID" >/dev/null 2>&1; then
 		echo "Stopping Next.js dev server (PID: $DEV_PID)..."
 		kill "$DEV_PID" >/dev/null 2>&1 || true
@@ -121,18 +125,18 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 
 log_step_start "bun install"
-echo "[BUN] Installing dependencies..."
-bun install
+echo "[BUN] Installing frontend dependencies..."
+(cd "$PROJECT_DIR/frontend" && bun install)
 log_step_end "bun install"
 
 log_step_start "bun run db:push"
 echo "[BUN] Setting up database..."
-bun run db:push
+(cd "$PROJECT_DIR/frontend" && bun run db:push)
 log_step_end "bun run db:push"
 
 log_step_start "Starting Next.js dev server"
 echo "[BUN] Starting development server..."
-bun run dev &
+(cd "$PROJECT_DIR/frontend" && bun run dev) &
 DEV_PID=$!
 log_step_end "Starting Next.js dev server"
 
@@ -149,6 +153,7 @@ log_step_end "Health check"
 start_mini_services
 
 echo "Next.js dev server is running in background (PID: $DEV_PID)."
-echo "Use 'kill $DEV_PID' to stop it."
+echo "Backend server is running in background (PID: ${BACKEND_PID:-n/a})."
+echo "Use 'kill $DEV_PID ${BACKEND_PID:-}' to stop them."
 disown "$DEV_PID" 2>/dev/null || true
 unset DEV_PID
