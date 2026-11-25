@@ -31,6 +31,17 @@ const userSelect = {
   pan: true,
   about: true,
   avatar: true,
+  // Unified mobile-profile fields (same user record)
+  username: true,
+  backgroundImage: true,
+  interestIds: true,
+  isVerified: true,
+  isBlock: true,
+  isModerator: true,
+  currentTier: true,
+  totalPoints: true,
+  followingCount: true,
+  followersCount: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -215,6 +226,26 @@ router.patch("/:id", async (req, res) => {
     }
     if (body?.about !== undefined) data.about = body.about ? String(body.about) : null;
     if (body?.avatar !== undefined) data.avatar = body.avatar ? String(body.avatar) : null;
+    if (body?.backgroundImage !== undefined)
+      data.backgroundImage = body.backgroundImage ? String(body.backgroundImage) : null;
+    // Unified mobile-profile fields (same user record — the Flutter app and
+    // this console both manage them through this endpoint)
+    if (body?.username !== undefined) {
+      const username = String(body.username).trim();
+      if (username) {
+        const taken = await db.user.findFirst({ where: { username, id: { not: id } } });
+        if (taken) throw new ApiError("Another account already uses this username", 409);
+        data.username = username;
+      } else {
+        data.username = null;
+      }
+    }
+    if (body?.isVerified !== undefined) data.isVerified = Math.max(0, Math.min(3, Number(body.isVerified) || 0));
+    if (body?.isBlock !== undefined) data.isBlock = Number(body.isBlock) ? 1 : 0;
+    if (body?.isModerator !== undefined) data.isModerator = Number(body.isModerator) ? 1 : 0;
+    if (body?.interestIds !== undefined) {
+      data.interestIds = body.interestIds ? String(body.interestIds).replace(/\s+/g, "") : null;
+    }
     if (body?.password) {
       const pw = String(body.password);
       if (pw.length < 6)

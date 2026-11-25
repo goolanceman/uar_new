@@ -235,6 +235,7 @@ model Campaign {
   medicalCamps   MedicalCamp[]
   foodProgrammes FoodProgramme[]
   foodEvents     FoodEvent[]
+  causePosts     CommunityPost[]
 
   @@map("campaigns")
 }
@@ -1898,6 +1899,8 @@ model CommunityPost {
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
   user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaign       Campaign?              @relation(fields: [campaignId], references: [id])
+  campaignId     String?                @map("campaign_id")
   content        CommunityPostContent[]
   comments       CommunityComment[]
   likes          CommunityLike[]
@@ -2563,4 +2566,14 @@ model TblPage {
   updatedAt  DateTime? @map("updated_at")
 
   @@map("app_tbl_pages")
+}
+
+model AdminNotification {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("app_admin_notifications")
 }

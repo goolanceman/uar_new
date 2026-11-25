@@ -40,10 +40,14 @@ function allowedApiKeys(): string[] | null {
 /**
  * Mount-level middleware: forward non-mobile requests to the legacy routers,
  * reject mobile requests with a bad apikey exactly like CheckHeader.php.
+ *
+ * `next("router")` is critical: without an apikey the request must leave this
+ * router ENTIRELY (a plain next() would continue into the compat sub-routers
+ * below and let them claim admin-frontend paths like /api/auth/login).
  */
 export function mobileGate(req: Request, res: Response, next: NextFunction) {
   const apiKey = req.header("apikey");
-  if (!apiKey) return next(); // not a mobile request → legacy router handles it
+  if (!apiKey) return next("router"); // not a mobile request → skip the compat layer
 
   const allowed = allowedApiKeys();
   if (allowed && !allowed.includes(apiKey)) {

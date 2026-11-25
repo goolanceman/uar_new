@@ -26,6 +26,11 @@ import { router as postsRouter } from "./posts";
 import { router as reelsRoomsRouter } from "./reels-rooms";
 import { router as chatAudioRouter } from "./chat-audio";
 import { router as charityRouter } from "./charity";
+import { router as adminModerationRouter } from "./admin-moderation";
+import { router as adminRoomsRouter } from "./admin-rooms";
+import { router as adminConfigRouter } from "./admin-config";
+import { router as adminEngageRouter } from "./admin-engage";
+import { router as adminAudioRouter } from "./admin-audio";
 
 export const router = Router();
 
@@ -62,3 +67,8 @@ router.use(postsRouter);
 router.use(reelsRoomsRouter);
 router.use(chatAudioRouter);
 router.use(charityRouter);
+router.use(adminModerationRouter);
+router.use(adminRoomsRouter);
+router.use(adminConfigRouter);
+router.use(adminEngageRouter);
+router.use(adminAudioRouter);

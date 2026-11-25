@@ -455,10 +455,18 @@ async function settleDonation(donationId: string, paymentId: string | null): Pro
   });
 
   if (donation.causePostId) {
-    await db.communityPost.update({
-      where: { id: donation.causePostId },
-      data: { raisedAmount: { increment: donation.amount } },
-    }).catch(() => undefined); // cause post may be gone — donation still settles
+    const causePost = await db.communityPost
+      .update({
+        where: { id: donation.causePostId },
+        data: { raisedAmount: { increment: donation.amount } },
+      })
+      .catch(() => null); // cause post may be gone — donation still settles
+    // The campaign is the canonical fundraising record — keep it in sync.
+    if (causePost?.campaignId) {
+      await db.campaign
+        .update({ where: { id: causePost.campaignId }, data: { raisedAmount: { increment: donation.amount } } })
+        .catch(() => undefined);
+    }
   }
   if (donation.donorId) {
     await awardDonationPoints(donation.donorId, donation.id, donation.amount);
@@ -550,6 +558,30 @@ wrap(router, "post", "/createCause", async (req, res) => {
     include: POST_INCLUDE,
   });
 
+  // The cause IS a campaign — one record surfaced in the mobile feed AND the
+  // admin Campaigns module (no separate "mobile causes" concept).
+  const rawMedia0 = [...csvListSafe(p.media), ...csvListSafe(p.images)];
+  const slug = `${str(p.title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${cause.id.slice(-6).toLowerCase()}`;
+  const campaignCount = await db.campaign.count();
+  const campaign = await db.campaign.create({
+    data: {
+      code: `UAR-CMP-${String(campaignCount + 1).padStart(5, "0")}`,
+      title: str(p.title),
+      slug,
+      tagline: "",
+      description,
+      category: "GENERAL",
+      targetAmount: goalAmount,
+      raisedAmount: 0,
+      startDate: new Date(),
+      endDate: deadline,
+      status: "ACTIVE",
+      createdBy: user.name,
+      images: JSON.stringify(rawMedia0.slice(0, 10)),
+    },
+  });
+  await db.communityPost.update({ where: { id: cause.id }, data: { campaignId: campaign.id } });
+
   // Media content — the app sends `images` (jsonEncoded parts), the legacy
   // contract said `media`. Accept both.
   const rawMedia = [...csvListSafe(p.media), ...csvListSafe(p.images)];
@@ -612,28 +644,40 @@ wrap(router, "post", "/fetchCauses", async (req, res) => {
     orderBy: { createdAt: "desc" },
     skip: start,
     take: limit,
-    include: POST_INCLUDE,
+    include: { ...POST_INCLUDE, campaign: true },
   });
 
   const wires = await Promise.all(
     rows.map(async (c) => {
+      // The Campaign is the canonical fundraising record — its goal/raised/
+      // deadline/status win over the social-post mirror.
+      let row: typeof c = c;
+      if (c.campaign) {
+        if (c.campaign.status === "CANCELLED") return null; // hidden from the feed
+        row = {
+          ...c,
+          goalAmount: c.campaign.targetAmount,
+          raisedAmount: c.campaign.raisedAmount,
+          deadline: c.campaign.endDate ?? c.deadline,
+        };
+      }
       const [followers, donations, following] = await Promise.all([
-        db.causeFollower.count({ where: { causeId: c.id } }),
-        db.donation.count({ where: { causePostId: c.id, paymentStatus: "COMPLETED" } }),
+        db.causeFollower.count({ where: { causeId: row.id } }),
+        db.donation.count({ where: { causePostId: row.id, paymentStatus: "COMPLETED" } }),
         userId
           ? db.causeFollower.findUnique({
-              where: { userId_causeId: { userId, causeId: c.id } },
+              where: { userId_causeId: { userId, causeId: row.id } },
             }).then((f) => !!f)
           : Promise.resolve(false),
       ]);
-      return serializeCause(c, {
+      return serializeCause(row, {
         isFollowing: following,
         followerCount: followers,
         donationCount: donations,
       });
     })
   );
-  return data(res, "Causes fetched successfully", wires);
+  return data(res, "Causes fetched successfully", wires.filter(Boolean));
 });
 
 /** CauseController::fetchCauseById */
@@ -2050,7 +2094,7 @@ router.post("/charity/events/cancel", softAuth, h(eventCancel));
 router.post("/charity/events/:id/cancel", softAuth, h(eventCancel)); // Flutter alias
 
 // ══════════════════════════ ADMIN: COMMUNITY SECTION ═════════════════════════
-// Serves the admin dashboard's Community view (see community-view.tsx). The
+// Serves the admin dashboard's Mobile Feed page. The
 // admin client reaches the compat layer by sending the mobile `apikey` header
 // (see the file header) plus its normal Authorization JWT; these endpoints are
 // role-gated on the session. Mobile requests with a moderator session could
@@ -2081,297 +2125,3 @@ const ADMIN_SELECT_USER = {
   followersCount: true,
   createdAt: true,
 } as const;
-
-router.get("/community/admin/users", mobileAuth, h(async (req, res) => {
-  if (!requireElevated(req, res)) return;
-  const p = params(req);
-  const { start, limit } = page(req, 50);
-  const q = str(p.q).trim();
-  const tier = optStr(p.tier);
-
-  const [rows, total] = await Promise.all([
-    db.user.findMany({
-      where: {
-        ...(tier ? { currentTier: tier } : {}),
-        ...(q
-          ? {
-              OR: [
-                { name: { contains: q } },
-                { email: { contains: q } },
-                { username: { contains: q } },
-                { city: { contains: q } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      select: ADMIN_SELECT_USER,
-    }),
-    db.user.count({
-      where: {
-        ...(tier ? { currentTier: tier } : {}),
-        ...(q
-          ? {
-              OR: [
-                { name: { contains: q } },
-                { email: { contains: q } },
-                { username: { contains: q } },
-                { city: { contains: q } },
-              ],
-            }
-          : {}),
-      },
-    }),
-  ]);
-
-  // per-user activity aggregates for the visible page
-  const users = [];
-  for (const u of rows) {
-    const [postCount, causeCount, donationAgg] = await Promise.all([
-      db.communityPost.count({ where: { userId: u.id } }),
-      db.communityPost.count({ where: { userId: u.id, type: "cause" } }),
-      db.donation.aggregate({
-        _count: { _all: true },
-        _sum: { amount: true },
-        where: { donorId: u.id, paymentStatus: "COMPLETED" },
-      }),
-    ]);
-    users.push({
-      ...u,
-      member_since: dateOnly(u.memberSince),
-      created_at: iso(u.createdAt),
-      post_count: postCount,
-      cause_count: causeCount,
-      donation_count: donationAgg._count._all,
-      donation_total: donationAgg._sum.amount ?? 0,
-    });
-  }
-  return data(res, "Users retrieved", { users, total_count: total });
-}));
-
-router.get("/community/admin/posts", mobileAuth, h(async (req, res) => {
-  if (!requireElevated(req, res)) return;
-  const p = params(req);
-  const { start, limit } = page(req, 30);
-  const q = str(p.q).trim();
-  const type = optStr(p.type);
-  if (type && !["normal", "cause"].includes(type)) return fail(res, "The selected type is invalid.");
-
-  const where = {
-    ...(type ? { type } : {}),
-    ...(q ? { desc: { contains: q } } : {}),
-  };
-  const [rows, total] = await Promise.all([
-    db.communityPost.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      include: {
-        ...POST_INCLUDE,
-        _count: { select: { comments: true, likes: true, reports: true, causeFollowers: true, donations: true } },
-      },
-    }),
-    db.communityPost.count({ where }),
-  ]);
-
-  return data(res, "Posts retrieved", {
-    posts: rows.map((r) => ({
-      ...serializeCause(r),
-      comment_count: r._count.comments,
-      like_count: r._count.likes,
-      report_count: r._count.reports,
-      follower_count: r._count.causeFollowers,
-      donation_count: r._count.donations,
-    })),
-    total_count: total,
-  });
-}));
-
-router.post("/community/admin/posts/moderate", mobileAuth, h(async (req, res) => {
-  const s = requireElevated(req, res);
-  if (!s) return;
-  const p = params(req);
-  const postId = str(p.post_id);
-  const action = str(p.action);
-  if (!postId) return fail(res, "The post id field is required.");
-  if (!["verify", "unverify", "restrict", "unrestrict", "delete"].includes(action)) {
-    return fail(res, "The selected action is invalid.");
-  }
-
-  const post = await db.communityPost.findUnique({ where: { id: postId } });
-  if (!post) return fail(res, "Post not found");
-
-  if (action === "delete") {
-    await db.communityPost.delete({ where: { id: postId } });
-    feedEvent("post.moderated", { id: postId, action, by: s.userId });
-    return ok(res, "Post deleted");
-  }
-  const updated = await db.communityPost.update({
-    where: { id: postId },
-    data: {
-      ...(action === "verify" ? { isVerified: true } : {}),
-      ...(action === "unverify" ? { isVerified: false } : {}),
-      ...(action === "restrict" ? { isRestricted: 1 } : {}),
-      ...(action === "unrestrict" ? { isRestricted: 0 } : {}),
-    },
-  });
-  feedEvent("post.moderated", { id: postId, action, by: s.userId });
-  return data(res, "Post updated", { id: updated.id, is_verified: updated.isVerified, is_restricted: updated.isRestricted });
-}));
-
-router.get("/community/admin/reports", mobileAuth, h(async (req, res) => {
-  if (!requireElevated(req, res)) return;
-  const p = params(req);
-  const { start, limit } = page(req, 30);
-  const type = optNum(p.type); // 0 room | 1 post | 2 user | 3 reel
-
-  const where = { ...(type !== null ? { type } : {}) };
-  const [rows, total] = await Promise.all([
-    db.communityReport.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      include: {
-        reporter: { select: { id: true, name: true, username: true, avatar: true, email: true } },
-        post: { include: { user: { select: { id: true, name: true, username: true, avatar: true } } } },
-        comment: { include: { user: { select: { id: true, name: true, username: true, avatar: true } } } },
-        room: { select: { id: true, title: true } },
-        reel: { select: { id: true, description: true, thumbnail: true } },
-      },
-    }),
-    db.communityReport.count({ where }),
-  ]);
-  return data(res, "Reports retrieved", {
-    reports: rows.map((r) => ({
-      id: r.id,
-      type: r.type,
-      reason: r.reason,
-      desc: r.desc,
-      created_at: iso(r.createdAt),
-      reporter: r.reporter,
-      post: r.post
-        ? { id: r.post.id, desc: r.post.desc, type: r.post.type, user: r.post.user, is_restricted: r.post.isRestricted }
-        : null,
-      comment: r.comment ? { id: r.comment.id, desc: r.comment.desc, user: r.comment.user } : null,
-      room: r.room,
-      reel: r.reel ? { id: r.reel.id, description: r.reel.description, thumbnail: r.reel.thumbnail } : null,
-    })),
-    total_count: total,
-  });
-}));
-
-router.post("/community/admin/reports/resolve", mobileAuth, h(async (req, res) => {
-  const s = requireElevated(req, res);
-  if (!s) return;
-  const p = params(req);
-  const reportId = str(p.report_id);
-  const action = str(p.action); // delete_post | delete_comment | dismiss
-  if (!reportId) return fail(res, "The report id field is required.");
-  if (!["delete_post", "delete_comment", "dismiss"].includes(action)) {
-    return fail(res, "The selected action is invalid.");
-  }
-
-  const report = await db.communityReport.findUnique({ where: { id: reportId } });
-  if (!report) return fail(res, "Report not found");
-
-  if (action === "delete_post" && report.postId) {
-    await db.communityPost.delete({ where: { id: report.postId } }).catch(() => undefined);
-    await db.communityReport.deleteMany({ where: { postId: report.postId } });
-    feedEvent("post.moderated", { id: report.postId, action, by: s.userId });
-    return ok(res, "Reported post deleted");
-  }
-  if (action === "delete_comment" && report.commentId) {
-    await db.communityComment.delete({ where: { id: report.commentId } }).catch(() => undefined);
-    await db.communityReport.deleteMany({ where: { commentId: report.commentId } });
-    return ok(res, "Reported comment deleted");
-  }
-  await db.communityReport.delete({ where: { id: reportId } });
-  return ok(res, "Report dismissed");
-}));
-
-router.get("/community/admin/causes", mobileAuth, h(async (req, res) => {
-  if (!requireElevated(req, res)) return;
-  const p = params(req);
-  const { start, limit } = page(req, 30);
-  const q = str(p.q).trim();
-
-  const where = {
-    type: "cause" as const,
-    ...(q ? { desc: { contains: q } } : {}),
-  };
-  const [rows, total, agg] = await Promise.all([
-    db.communityPost.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      include: {
-        ...POST_INCLUDE,
-        _count: { select: { causeFollowers: true, donations: true } },
-      },
-    }),
-    db.communityPost.count({ where }),
-    db.donation.aggregate({
-      _sum: { amount: true },
-      where: { causePostId: { not: null }, paymentStatus: "COMPLETED" },
-    }),
-  ]);
-  return data(res, "Causes retrieved", {
-    causes: rows.map((r) => {
-      const goal = r.goalAmount ?? 0;
-      return {
-        ...serializeCause(r),
-        follower_count: r._count.causeFollowers,
-        donation_count: r._count.donations,
-        progress_percentage: goal > 0 ? Math.round(Math.min(100, (r.raisedAmount / goal) * 100) * 100) / 100 : 0,
-      };
-    }),
-    total_count: total,
-    total_raised_all: agg._sum.amount ?? 0,
-  });
-}));
-
-router.get("/community/admin/donations", mobileAuth, h(async (req, res) => {
-  if (!requireElevated(req, res)) return;
-  const p = params(req);
-  const { start, limit } = page(req, 30);
-  const causePostId = optStr(p.cause_post_id);
-
-  const where = {
-    causePostId: { not: null },
-    ...(causePostId ? { causePostId } : {}),
-  };
-  const [rows, total, agg] = await Promise.all([
-    db.donation.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      include: { donor: true },
-    }),
-    db.donation.count({ where }),
-    db.donation.aggregate({ _sum: { amount: true }, where: { ...where, paymentStatus: "COMPLETED" } }),
-  ]);
-  const donations = await Promise.all(
-    rows.map(async (d) => ({
-      ...serializeDonation({ ...d, user: d.donor ? legacyUser(d.donor) : null, cause: await causeWireFor(d.causePostId, true) }),
-    }))
-  );
-  return data(res, "Mobile donations retrieved", {
-    donations,
-    total_count: total,
-    total_raised: agg._sum.amount ?? 0,
-  });
-}));
-
-// Flutter alias: GET charity/events/{id} — LAST so /details, /my-events, /all
-// and /events (list) always win route matching.
-router.get("/charity/events/:id", softAuth, h(async (req, res) => {
-  return eventDetails(req, res, str((req.params as Record<string, string>).id));
-}));
-
-// (const export above is the module surface — ../index.ts imports `router`).

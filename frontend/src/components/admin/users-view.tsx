@@ -1457,7 +1457,6 @@ export default function UsersView() {
         </FormSection>
       </FormSheet>
 
-      {/* ------------------------------ Detail sheet ----------------------------- */}
       <DetailSheet
         open={viewOpen}
         onOpenChange={(o) => {

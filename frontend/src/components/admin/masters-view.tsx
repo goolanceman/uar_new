@@ -13,6 +13,9 @@ import {
   Info,
   Loader2,
   Plus,
+  FileText,
+  Flag,
+  Heart,
   RefreshCw,
   ShieldCheck,
   Tag,
@@ -44,6 +47,7 @@ import {
 } from "@/components/shared/detail-sheet";
 import { DataField } from "@/components/shared/data-field";
 import { PageHeader } from "@/components/shared/page-header";
+import { TitleListCard } from "./title-list-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Button } from "@/components/ui/button";
@@ -186,7 +190,7 @@ export default function MastersView() {
       }
       for (const e of list) names.add(e.category);
       const catList = Array.from(names).sort();
-      setCategories(catList);
+      setCategories(["mobile", ...catList]);
       setSelected((prev) => (prev && catList.includes(prev) ? prev : catList[0] ?? ""));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load master data");
@@ -410,6 +414,7 @@ export default function MastersView() {
         description="Single source of truth for every dropdown in the product."
         icon={<ShieldCheck className="size-5" aria-hidden="true" />}
         actions={
+          selected === "mobile" ? undefined : (
           <Button
             onClick={() => {
               setAddForm({ ...EMPTY_ADD, category: selected || categories[0] || "__new__" });
@@ -420,6 +425,7 @@ export default function MastersView() {
           >
             <Plus className="size-4" /> Add entry
           </Button>
+          )
         }
       />
 
@@ -453,9 +459,13 @@ export default function MastersView() {
         <div className="min-w-0">
           <h3 className="flex items-center gap-2 text-sm font-semibold">
             <FolderTree className="size-4 text-primary" aria-hidden="true" />
-            {selected ? titleCase(selected) : "Entries"}
+            {selected === "mobile" ? "Mobile app lists" : selected ? titleCase(selected) : "Entries"}
           </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">{usageHint(selected ?? "")}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {selected === "mobile"
+              ? "Lists used by the mobile app: verification document types, report reasons and onboarding interests."
+              : usageHint(selected ?? "")}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground" aria-live="polite">
@@ -479,6 +489,54 @@ export default function MastersView() {
         </div>
       </div>
 
+      {selected === "mobile" ? (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <TitleListCard
+            title="Document types"
+            icon={<FileText className="size-4" aria-hidden="true" />}
+            description="ID document types offered during mobile profile verification."
+            noun="Document type"
+            listPath="/api/mobile-admin/document-types"
+            listKey="document_types"
+            addPath="/api/mobile-admin/document-types"
+            updatePath="/api/mobile-admin/document-types/update"
+            deletePath="/api/mobile-admin/document-types/delete"
+            idKey="id"
+            placeholder="e.g. Passport"
+            emptyIcon={<FileText className="size-6" aria-hidden="true" />}
+          />
+          <TitleListCard
+            title="Report reasons"
+            icon={<Flag className="size-4" aria-hidden="true" />}
+            description="Reasons offered when reporting content in the mobile app."
+            noun="Report reason"
+            listPath="/api/mobile-admin/report-reasons"
+            listKey="report_reasons"
+            addPath="/api/mobile-admin/report-reasons"
+            updatePath="/api/mobile-admin/report-reasons/update"
+            deletePath="/api/mobile-admin/report-reasons/delete"
+            idKey="report_reason_id"
+            placeholder="e.g. Spam"
+            emptyIcon={<Flag className="size-6" aria-hidden="true" />}
+          />
+          <TitleListCard
+            title="Interests"
+            icon={<Heart className="size-4" aria-hidden="true" />}
+            description="Interests users pick during onboarding and tag posts/rooms with."
+            noun="Interest"
+            listPath="/api/mobile-admin/interests"
+            listKey="interests"
+            addPath="/api/mobile-admin/interests"
+            updatePath="/api/mobile-admin/interests/update"
+            deletePath="/api/mobile-admin/interests/delete"
+            idKey="interest_id"
+            placeholder="e.g. Education"
+            emptyIcon={<Heart className="size-6" aria-hidden="true" />}
+            deleteHint="Deleting also removes this interest from users, posts, reels and rooms that reference it."
+          />
+        </div>
+      ) : (
+      <>
       <DataTable
         columns={columns}
         rows={paged}
@@ -601,6 +659,8 @@ export default function MastersView() {
         <RefreshCw className="size-3.5" aria-hidden="true" />
         Tip: deactivating hides a value from every dropdown without deleting history tied to it. Click a row for full details.
       </p>
+      </>
+      )}
 
       {/* ------------------------------ Add sheet (sm) -------------------------- */}
       <FormSheet

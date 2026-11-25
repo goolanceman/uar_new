@@ -6,6 +6,12 @@ import {
   ExternalLink, FileBarChart, FolderOpen, HeartHandshake, HeartPulse, LayoutDashboard,
   LogIn, LogOut, Menu, MessageSquareQuote, Package, PawPrint, Pill, RefreshCw, Settings, ShieldCheck,
   Sprout, TrendingUp, UserRound, Users, X,
+  Newspaper,
+  Clapperboard,
+  Radio,
+  DoorOpen,
+  Megaphone,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,7 +33,13 @@ import DonationsView from "@/components/admin/donations-view";
 import TestimonialsView from "@/components/admin/testimonials-view";
 import CampaignsView from "@/components/admin/campaigns-view";
 import CausesView from "@/components/admin/causes-view";
-import CommunityView from "@/components/admin/community-view";
+import MobileFeedView from "@/components/admin/mobile-feed-view";
+import MobileStoriesReelsView from "@/components/admin/mobile-stories-reels-view";
+import MobileAudioSpacesView from "@/components/admin/mobile-audio-spaces-view";
+import MobileRoomsView from "@/components/admin/mobile-rooms-view";
+import MobileVerificationsView from "@/components/admin/mobile-verifications-view";
+import MobileNotificationsFaqsView from "@/components/admin/mobile-notifications-faqs-view";
+import MobileSettingsView from "@/components/admin/mobile-settings-view";
 import AnimalsView from "@/components/admin/animals-view";
 import AmbulanceView from "@/components/admin/ambulance-view";
 import BeneficiariesView from "@/components/admin/beneficiaries-view";
@@ -81,8 +93,16 @@ const NAV = [
     items: [{ key: "animals", label: "Animal Welfare", icon: PawPrint }],
   },
   {
-    group: "Community",
-    items: [{ key: "community", label: "Community", icon: Users }],
+    group: "Mobile",
+    items: [
+      { key: "mobile-feed", label: "Feed", icon: Newspaper },
+      { key: "mobile-stories-reels", label: "Stories & Reels", icon: Clapperboard },
+      { key: "mobile-audio-spaces", label: "Audio Spaces", icon: Radio },
+      { key: "mobile-rooms", label: "Rooms", icon: DoorOpen },
+      { key: "mobile-verifications", label: "Verifications", icon: ShieldCheck },
+      { key: "mobile-notifications-faqs", label: "Notifications & FAQs", icon: Megaphone },
+      { key: "mobile-settings", label: "App Settings", icon: Smartphone },
+    ],
   },
   {
     group: "People",
@@ -341,7 +361,13 @@ export default function AdminApp() {
           {view === "donors" && <DonorsView />}
           {view === "campaigns" && <CampaignsView />}
           {view === "causes" && <CausesView />}
-          {view === "community" && <CommunityView />}
+          {view === "mobile-feed" && <MobileFeedView />}
+          {view === "mobile-stories-reels" && <MobileStoriesReelsView />}
+          {view === "mobile-audio-spaces" && <MobileAudioSpacesView />}
+          {view === "mobile-rooms" && <MobileRoomsView />}
+          {view === "mobile-verifications" && <MobileVerificationsView />}
+          {view === "mobile-notifications-faqs" && <MobileNotificationsFaqsView />}
+          {view === "mobile-settings" && <MobileSettingsView />}
           {view === "animals" && <AnimalsView />}
           {view === "ambulance" && <AmbulanceView />}
           {view === "beneficiaries" && <BeneficiariesView />}
