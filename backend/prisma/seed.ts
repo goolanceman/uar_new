@@ -5,8 +5,16 @@
 import { PrismaClient } from "@prisma/client";
 import crypto from "crypto";
 import { SETTING_DEFAULTS } from "../src/lib/settings-core";
+import { DEMO_ACCOUNTS } from "../src/lib/demo-accounts";
 
 const db = new PrismaClient();
+
+/** One demo-account lookup for the seed (single source: src/lib/demo-accounts.ts). */
+function demoByKey(key: string) {
+  const d = DEMO_ACCOUNTS.find((x) => x.key === key);
+  if (!d) throw new Error(`demo-accounts.ts is missing the "${key}" account`);
+  return d;
+}
 
 function hashPassword(pw: string): string {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -53,14 +61,13 @@ async function main() {
   console.log("🌱 Seeding United Angel Reach (canonical)…");
 
   // ── Users ──────────────────────────────────────────────────────────────
+  // Demo logins come from ONE list: src/lib/demo-accounts.ts (also served by
+  // GET /api/auth/demo-accounts while testing mode is ON — no drift possible).
   const users: Record<string, string> = {};
-  const userDefs = [
-    { key: "admin", name: "Anjali Rao", email: "admin@unitedangelreach.org", password: "Admin@123", role: "ADMIN", city: "Bengaluru", phone: "+91 98860 10001" },
-    { key: "donor", name: "Rahul Sharma", email: "donor@demo.org", password: "Donor@123", role: "DONOR", city: "Bengaluru", phone: "+91 98860 10002" },
-    { key: "volunteer", name: "Priya Nair", email: "volunteer@demo.org", password: "Volun@123", role: "VOLUNTEER", city: "Bengaluru", phone: "+91 98860 10003" },
-    { key: "applicant", name: "Arjun Kumar", email: "applicant@demo.org", password: "Temp@12345", role: "VOLUNTEER", city: "Mysuru", phone: "+91 98860 10004" },
-    { key: "beneficiary", name: "Lakshmi Devi", email: "beneficiary@demo.org", password: "Benef@123", role: "BENEFICIARY", city: "Bengaluru", phone: "+91 98860 10005" },
-  ];
+  const userDefs = ["admin", "donor", "volunteer", "applicant", "beneficiary"].map((key) => {
+    const d = demoByKey(key);
+    return { key, name: d.name, email: d.email, password: d.password, role: d.role, city: d.city ?? "Bengaluru", phone: d.phone ?? "" };
+  });
   for (const u of userDefs) {
     const status = u.key === "applicant" ? "PENDING" : "ACTIVE";
     const isActive = u.key !== "applicant";
@@ -713,15 +720,12 @@ async function seedHealthcare() {
   }
 
   // ── Portal users (hospital owner + one per professional) ─────────────
+  // Same demo-accounts.ts list — the healthcare professional logins.
   const healthUsers: Record<string, string> = {};
-  const healthUserDefs = [
-    { key: "hospital", name: "Angel Multispeciality Hospital", email: "hospital@demo.org", password: "Hospital@123", role: "HOSPITAL", city: "Bengaluru" },
-    { key: "meera", name: "Dr. Meera Iyer", email: "dr.meera@demo.org", password: "Doctor@123", role: "DOCTOR", city: "Bengaluru" },
-    { key: "arjun", name: "Dr. Arjun Rao", email: "dr.arjun@demo.org", password: "Doctor@123", role: "DOCTOR", city: "Bengaluru" },
-    { key: "nurse", name: "Nurse Priya", email: "nurse@demo.org", password: "Nurse@123", role: "NURSE", city: "Bengaluru" },
-    { key: "pharmacist", name: "Pharmacist Suresh", email: "pharmacist@demo.org", password: "Pharm@123", role: "PHARMACIST", city: "Bengaluru" },
-    { key: "labtech", name: "Lab Tech Kavya", email: "labtech@demo.org", password: "Lab@123", role: "LAB_TECH", city: "Bengaluru" },
-  ];
+  const healthUserDefs = ["hospital", "meera", "nurse", "pharmacist", "labtech"].map((key) => {
+    const d = demoByKey(key);
+    return { key, name: d.name, email: d.email, password: d.password, role: d.role, city: d.city ?? "Bengaluru" };
+  });
   for (const h of healthUserDefs) {
     const rec = await db.user.upsert({
       where: { email: h.email },

@@ -16,7 +16,7 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator } from "@/components/ui/input-otp";
 import { Field, TextField } from "@/components/shared/form-fields";
-import { post } from "@/lib/api-client";
+import { get, post } from "@/lib/api-client";
 import { Section } from "@/components/public/shared";
 import { emailRule, phoneRule, minLen, required, fieldError } from "@/lib/validators";
 import {
@@ -41,18 +41,43 @@ import {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const DEMO_ACCOUNTS = [
-  { label: "Admin", email: "admin@unitedangelreach.org", password: "Admin@123" },
-  { label: "Donor", email: "donor@demo.org", password: "Donor@123" },
-  { label: "Volunteer", email: "volunteer@demo.org", password: "Volun@123" },
-  { label: "Applicant", email: "applicant@demo.org", password: "Temp@12345" },
-  { label: "Beneficiary", email: "beneficiary@demo.org", password: "Benef@123" },
-  { label: "Doctor", email: "dr.meera@demo.org", password: "Doctor@123" },
-  { label: "Nurse", email: "nurse@demo.org", password: "Nurse@123" },
-  { label: "Pharmacist", email: "pharmacist@demo.org", password: "Pharm@123" },
-  { label: "Lab Tech", email: "labtech@demo.org", password: "Lab@123" },
-  { label: "Hospital", email: "hospital@demo.org", password: "Hospital@123" },
-];
+/** Shape of GET /api/auth/demo-accounts (only while testing mode is ON). */
+interface DemoAccount {
+  role: string;
+  label: string;
+  email: string;
+  password: string;
+  description: string;
+  portal: string;
+}
+
+/**
+ * Demo credentials come from the backend (GET /api/auth/demo-accounts) —
+ * the ONLY place they exist. The endpoint answers 404 while testing mode is
+ * off (i.e. always in production): the fetch fails and we render nothing,
+ * so no credentials are ever hardcoded or leaked on the login screen.
+ */
+function useDemoAccounts(): DemoAccount[] | null {
+  const [accounts, setAccounts] = useState<DemoAccount[] | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    get<{ testingMode: boolean; accounts: DemoAccount[] }>("/api/auth/demo-accounts", {
+      suppressAuthRedirect: true,
+    })
+      .then((res) => {
+        if (alive && res?.testingMode && Array.isArray(res.accounts) && res.accounts.length > 0) {
+          setAccounts(res.accounts);
+        }
+      })
+      .catch(() => {
+        // 404 (testing mode off) or network failure — keep the login screen clean.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return accounts;
+}
 
 export function routeByRole(role: string | undefined): string {
   switch (role) {
@@ -287,6 +312,7 @@ function TempCredsDialog({
 
 export function LoginPage() {
   const { login } = useAuth();
+  const demoAccounts = useDemoAccounts();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<{ email?: string | null; password?: string | null }>({});
@@ -374,12 +400,13 @@ export function LoginPage() {
 
       <Separator className="my-5" />
 
+      {demoAccounts && demoAccounts.length > 0 && (
       <div className="rounded-lg border bg-muted/40 p-4">
         <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
           <Info className="size-3.5" aria-hidden /> Demo accounts — click to fill
         </p>
         <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Demo account quick fill">
-          {DEMO_ACCOUNTS.map((d) => (
+          {demoAccounts.map((d) => (
             <span
               key={d.email}
               className="inline-flex items-stretch overflow-hidden rounded-full border bg-background"
@@ -391,7 +418,7 @@ export function LoginPage() {
                   setPassword(d.password);
                   setErrors({});
                 }}
-                title={`${d.email} · ${d.password}`}
+                title={`Fill the form with the ${d.label} demo account (${d.email})`}
                 className="min-h-[36px] px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
               >
                 {d.label}
@@ -401,20 +428,25 @@ export function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => copyText(`${d.email} / ${d.password}`)}
-                aria-label={`Copy ${d.label} demo credentials (${d.email})`}
+                onClick={() => copyText(d.email)}
+                aria-label={`Copy ${d.label} demo email`}
                 className="flex w-9 min-h-[36px] items-center justify-center border-l text-muted-foreground transition hover:bg-accent hover:text-foreground"
               >
                 <Copy className="size-3.5" aria-hidden />
               </button>
+              <button
+                type="button"
+                onClick={() => copyText(d.password)}
+                aria-label={`Copy ${d.label} demo password`}
+                className="flex w-9 min-h-[36px] items-center justify-center border-l text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              >
+                <KeyRound className="size-3.5" aria-hidden />
+              </button>
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          Passwords: Admin@123 · Donor@123 · Volun@123 · Temp@12345 · Benef@123 — the copy button
-          grabs both email and password.
-        </p>
       </div>
+      )}
     </AuthShell>
   );
 }

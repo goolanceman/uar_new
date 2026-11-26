@@ -1011,6 +1011,27 @@ export default function SettingsView() {
                   on this card. They take effect immediately after saving — no restart needed.
                 </span>
               </div>
+              <div className="grid gap-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                <SwitchRow
+                  id="s-flag-app-testingMode"
+                  label="Testing mode"
+                  hint="Serves the seeded demo-account credentials to the web and mobile login screens."
+                  checked={bool("app.testingMode")}
+                  onCheckedChange={(v) => set("app.testingMode", v ? "true" : "false")}
+                />
+                <p
+                  role="note"
+                  className="flex items-start gap-2 px-1 pt-1 text-xs leading-relaxed text-amber-700 dark:text-amber-400"
+                >
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    Warning: while testing mode is ON, the demo emails and passwords are visible
+                    to <strong>everyone</strong> on the login screens of the website and the mobile
+                    app. Keep it OFF in production and only turn it on for demos, training and
+                    staging environments.
+                  </span>
+                </p>
+              </div>
               {FLAG_CATALOG.map((flag) => (
                 <div key={flag.key} className="grid gap-1">
                   <SwitchRow

@@ -6,6 +6,7 @@
  */
 import { db } from "@/lib/db";
 import { SETTING_DEFAULTS, isFlagOn, publicFeatures, getCurrency } from "@/lib/settings-core";
+import { isTestingMode } from "@/lib/testing-mode";
 
 export type SettingsMap = Record<string, string>;
 
@@ -120,6 +121,9 @@ export async function publicOrgSettings() {
     gatewayProvider: (map["finance.gatewayProvider"] ?? "RAZORPAY").toUpperCase(),
     gatewayKeyId: org.gatewayKeyId || undefined,
     features: publicFeatures(map),
+    // Testing mode (login-screen demo credentials) — one top-level boolean so
+    // every client can cheaply know whether to ask for /api/auth/demo-accounts.
+    testingMode: await isTestingMode(),
   };
 }
 

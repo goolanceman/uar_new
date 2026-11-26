@@ -21,6 +21,8 @@ import {
 import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 import { loadSettings, emailShell, sendEmail } from "@/lib/notify";
 import { deleteUserCascade } from "@/lib/community/users";
+import { DEMO_ACCOUNTS } from "@/lib/demo-accounts";
+import { isTestingMode } from "@/lib/testing-mode";
 
 export const router = Router();
 
@@ -156,6 +158,40 @@ router.post("/register", async (req, res) => {
       user: userSafe,
       token: issueToken(session),
       tempCreds: { email, password, fullName: name },
+    });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/auth/demo-accounts — no auth. The login-screen demo credential
+// list. SINGLE SOURCE OF TRUTH: src/lib/demo-accounts.ts (same list prisma/seed.ts
+// creates). Serving is gated behind testing mode:
+//   OFF (default) → 404 { error: "Not found" } — indistinguishable from any
+//     other unknown route, so production leaks nothing (not even the
+//     existence of the feature).
+//   ON → { testingMode: true, accounts: [...] } with ONLY the accounts that
+//     still exist in the DB and are usable (not suspended) — deleting or
+//     suspending a demo user removes it from the list automatically.
+router.get("/demo-accounts", async (_req, res) => {
+  try {
+    if (!(await isTestingMode())) throw new ApiError("Not found", 404);
+
+    const rows = await db.user.findMany({
+      where: { email: { in: DEMO_ACCOUNTS.map((d) => d.email) }, status: { not: "SUSPENDED" } },
+      select: { email: true },
+    });
+    const present = new Set(rows.map((r) => r.email));
+    return json(res, {
+      testingMode: true,
+      accounts: DEMO_ACCOUNTS.filter((d) => present.has(d.email)).map((d) => ({
+        role: d.role,
+        label: d.label,
+        email: d.email,
+        password: d.password,
+        description: d.description,
+        portal: d.portal,
+      })),
     });
   } catch (e) {
     return handleError(e, res);

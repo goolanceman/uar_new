@@ -100,6 +100,9 @@ export const SETTING_DEFAULTS: SettingsMap = {
   "app.language": "en",
   "app.timezone": "Asia/Kolkata",
   "app.maintenance": "false",
+  // Testing mode — when ON, GET /api/auth/demo-answers exposes the demo
+  // credentials on the web + mobile login screens. Row absent → env TESTING_MODE.
+  "app.testingMode": "false",
   // Receipts
   "receipts.signatoryName": "",
   "receipts.signatoryRole": "Trustee",
@@ -257,11 +260,12 @@ export const SECTION_PREFIXES: Record<string, string[]> = {
   system: ["kits.", "app.maintenance"],
   logs: ["logs."],
   region: ["app.language", "app.timezone"],
+
   receipts: ["receipts."],
   assistant: ["assist."],
   matching: ["matching."],
   food: ["food."],
-  flags: ["features.", "finance.gatewayEnabled", "notify.email.enabled", "notify.sms.enabled", "notify.whatsapp.enabled", "assist.enabled", "matching.enabled", "logs.enabled", "app.maintenance"],
+  flags: ["features.", "finance.gatewayEnabled", "notify.email.enabled", "notify.sms.enabled", "notify.whatsapp.enabled", "assist.enabled", "matching.enabled", "logs.enabled", "app.maintenance", "app.testingMode"],
 };
 
 export function keysForSection(section: string, keys: string[]): string[] {
