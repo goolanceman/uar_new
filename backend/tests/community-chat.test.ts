@@ -529,6 +529,54 @@ describe("/api/realtime/auth (Pusher channel authorization)", () => {
     expect(res.body.auth).toBe(channelAuth("1234.5678", `private-conversation.${conversationId}`));
   });
 
+  it("403s a non-member of the conversation (channel authorization)", async () => {
+    const res = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(eveToken))
+      .send({ socket_id: "1234.5678", channel_name: `private-conversation.${conversationId}` });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Channel access denied");
+  });
+
+  it("signs a user's OWN user-scoped channel but 403s another user's", async () => {
+    const own = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(aToken))
+      .send({ socket_id: "1234.5678", channel_name: `private-user.${aId}` });
+    expect(own.status).toBe(200);
+    // Laravel-style user channel (legacy App.Models.User broadcast names).
+    const ownLaravel = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(bToken))
+      .send({ socket_id: "1234.5678", channel_name: `private-App.Models.User.${bId}` });
+    expect(ownLaravel.status).toBe(200);
+
+    const other = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(bToken))
+      .send({ socket_id: "1234.5678", channel_name: `private-user.${aId}` });
+    expect(other.status).toBe(403);
+  });
+
+  it("authorizes public channels for everyone but denies unknown private/presence patterns", async () => {
+    const pub = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(eveToken))
+      .send({ socket_id: "1234.5678", channel_name: `conversation.${conversationId}` });
+    expect(pub.status).toBe(200); // the legacy public broadcast channel
+
+    const unknownPrivate = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(aToken))
+      .send({ socket_id: "1234.5678", channel_name: "private-unknown.123" });
+    expect(unknownPrivate.status).toBe(403);
+    const presence = await request(app)
+      .post("/api/realtime/auth")
+      .set(auth(aToken))
+      .send({ socket_id: "1234.5678", channel_name: `presence-conversation.${conversationId}` });
+    expect(presence.status).toBe(403);
+  });
+
   it("accepts urlencoded bodies exactly like the Flutter PusherChannelAuthorizer sends them", async () => {
     const res = await request(app)
       .post("/api/realtime/auth")

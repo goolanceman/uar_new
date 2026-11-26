@@ -5,8 +5,7 @@
  * POST /generateAgoraToken compat endpoint:
  *
  *   POST /auth          Pusher-protocol private-channel authorization
- *                       (legacy /broadcasting/auth — the root alias stays
- *                       mounted in src/index.ts until the legacy cleanup)
+ *                       (replaces the retired legacy /broadcasting/auth)
  *   POST /agora-token   Agora RTC token for a channel (legacy
  *                       POST /generateAgoraToken); when the channel maps to
  *                       an audio space the caller must be a participant
@@ -19,15 +18,77 @@ import { db } from "@/lib/db";
 import { requireAuth, validateSession, ApiError, json, handleError } from "@/lib/session";
 import { channelAuth } from "@/lib/realtime/pusher";
 import { buildRtcToken } from "@/lib/realtime/agora";
+import { findConversation, hasConversationAccess } from "@/lib/community/chat";
+import { findSpace, getSpaceParticipant } from "@/lib/community/audio-spaces";
 
 export const router = Router();
 
 /**
+ * Per-channel authorization for POST /auth — a signed session alone must not
+ * grant access to ANY private channel. Matches every channel name the backend
+ * broadcasts (src/lib/community/*: conversation.<id> public +
+ * private-conversation.<id>) and the ones the Flutter app subscribes to:
+ *   private-conversation.<id>          → active conversation participant
+ *   private-user.<id> / private-App.Models.User.<id>
+ *                                      → the session user's own channel
+ *   private-audio-space.<id>           → public spaces anyone, private spaces
+ *                                        participants only (same privacy rule
+ *                                        as GET /audio-spaces/:id)
+ *   private-room.<id>                  → room admin or member
+ * Public (non-private/presence) channels need no auth; any unknown
+ * private/presence pattern is denied.
+ */
+async function authorizeChannelAccess(userId: string, channelName: string): Promise<boolean> {
+  if (!channelName.startsWith("private-") && !channelName.startsWith("presence-")) return true;
+
+  // User-scoped channels — a user may only subscribe to their own.
+  const userChannel = channelName.match(/^private-(?:user|App\.Models\.User)\.(.+)$/);
+  if (userChannel) return userChannel[1] === userId;
+
+  // 1:1 (user_1/user_2) and group (active ConversationParticipant) chats.
+  const conversation = channelName.match(/^private-conversation\.(.+)$/);
+  if (conversation) {
+    const conv = await findConversation(conversation[1]);
+    if (!conv) return false;
+    return hasConversationAccess(conv, userId);
+  }
+
+  // Audio spaces — the space id is the channel; private spaces gate on the
+  // participant rows, public spaces follow the listing/detail visibility rule.
+  const audioSpace = channelName.match(/^private-audio-space\.(.+)$/);
+  if (audioSpace) {
+    const space = await findSpace(audioSpace[1]);
+    if (!space) return false;
+    if (space.type !== "private") return true;
+    return !!(await getSpaceParticipant(space.id, userId));
+  }
+
+  // Community rooms — the admin or any member row.
+  const room = channelName.match(/^private-room\.(.+)$/);
+  if (room) {
+    const roomRow = await db.communityRoom.findUnique({
+      where: { id: room[1] },
+      select: { id: true, adminId: true },
+    });
+    if (!roomRow) return false;
+    if (roomRow.adminId === userId) return true;
+    const member = await db.communityRoomUser.findFirst({
+      where: { roomId: roomRow.id, userId },
+      select: { id: true },
+    });
+    return !!member;
+  }
+
+  // Unknown private/presence patterns (presence-* included) are denied.
+  return false;
+}
+
+/**
  * POST /api/realtime/auth — Pusher private-channel authorization.
  * websocket_service.dart posts {socket_id, channel_name} with the session
- * Bearer token; the response is {auth: "<appKey>:<hmac>"}. Also exported as
- * broadcastingAuthHandler so src/index.ts can keep the root /broadcasting/auth
- * alias working (same handler, same wire shape).
+ * Bearer token; the response is {auth: "<appKey>:<hmac>"}. The channel name
+ * is authorized per type (see authorizeChannelAccess) before signing — a
+ * valid session alone does NOT grant every private channel.
  */
 export async function broadcastingAuthHandler(req: Request, res: Response) {
   try {
@@ -38,6 +99,9 @@ export async function broadcastingAuthHandler(req: Request, res: Response) {
     }
     const session = await validateSession(req);
     if (!session) return res.status(401).json({ error: "Invalid or expired token" });
+    if (!(await authorizeChannelAccess(session.userId, channelName))) {
+      return res.status(403).json({ error: "Channel access denied" });
+    }
     return res.json({ auth: channelAuth(socketId, channelName) });
   } catch (e) {
     console.error("[realtime] channel auth failed", e);
@@ -45,8 +109,7 @@ export async function broadcastingAuthHandler(req: Request, res: Response) {
   }
 }
 
-// POST /api/realtime/auth — the generic path (root /broadcasting/auth stays as
-// an alias in src/index.ts until the legacy cleanup).
+// POST /api/realtime/auth — Pusher channel authorization.
 router.post("/auth", broadcastingAuthHandler);
 
 /**

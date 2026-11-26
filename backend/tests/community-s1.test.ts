@@ -68,6 +68,7 @@ async function cleanup() {
     await db.profileVerification.deleteMany({ where: { userId: { in: ids } } });
     await db.conversation.deleteMany({ where: { OR: [{ user1Id: { in: ids } }, { user2Id: { in: ids } }] } });
     await db.activityLog.deleteMany({ where: { userId: { in: ids } } });
+    await db.volunteerApplication.deleteMany({ where: { OR: [{ userId: { in: ids } }, { email: { startsWith: PREFIX } }] } });
     await db.fileAsset.deleteMany({ where: { uploadedByName: { startsWith: PREFIX } } });
     await db.user.deleteMany({ where: { id: { in: ids } } });
   }
@@ -128,6 +129,41 @@ describe("S1 auth extensions", () => {
     expect(res.status).toBe(200);
     expect(res.body.user?.id).toBeTruthy();
     expect(typeof res.body.token).toBe("string");
+  });
+
+  it("registers with a user-chosen password — no tempCreds, same password logs in", async () => {
+    const email = `${PREFIX}-pw@test.local`;
+    const reg = await request(app)
+      .post("/api/auth/register")
+      .send({ name: `${PREFIX} pw`, email, password: "Str0ng-Pass-1" });
+    expect(reg.status).toBe(200);
+    expect(reg.body.user?.email).toBe(email);
+    expect(reg.body.token).toBeTruthy();
+    expect(reg.body.tempCreds).toBeUndefined(); // chosen passwords are never echoed
+
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email, password: "Str0ng-Pass-1" });
+    expect(login.status).toBe(200);
+    expect(login.body.token).toBeTruthy();
+  });
+
+  it("keeps the web path — registering without a password returns tempCreds", async () => {
+    const email = `${PREFIX}-temp@test.local`;
+    const reg = await request(app)
+      .post("/api/auth/register")
+      .send({ name: `${PREFIX} temp`, email });
+    expect(reg.status).toBe(200);
+    expect(reg.body.tempCreds?.email).toBe(email);
+    expect(typeof reg.body.tempCreds?.password).toBe("string");
+  });
+
+  it("rejects a weak chosen password with the policy message", async () => {
+    const res = await request(app)
+      .post("/api/auth/register")
+      .send({ name: `${PREFIX} weak`, email: `${PREFIX}-weak@test.local`, password: "abc" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Password must be at least 6 characters");
   });
 
   it("signs in / registers by identity via POST /api/auth/social", async () => {
@@ -437,6 +473,35 @@ describe("S1 notifications", () => {
     expect(res.status).toBe(200);
     const { db } = await import("@/lib/db");
     expect(await db.user.findUnique({ where: { id: reg.body.user.id } })).toBeNull();
+  });
+
+  it("deletes the user's volunteer application with the account (no dangling PENDING rows)", async () => {
+    const { db } = await import("@/lib/db");
+    const email = `${PREFIX}-volapp@test.local`;
+    const reg = await request(app)
+      .post("/api/auth/register")
+      .send({ name: `${PREFIX} volapp`, email, password: "Test-Pass-123" });
+    expect(reg.status).toBe(200);
+    const userId = reg.body.user.id as string;
+    const application = await db.volunteerApplication.create({
+      data: {
+        userId,
+        fullName: `${PREFIX} volapp`,
+        email,
+        phone: "0123456789",
+        city: "Testville",
+        motivation: "help the camps",
+        status: "PENDING",
+      },
+    });
+
+    const res = await request(app)
+      .delete("/api/auth/account")
+      .set("Authorization", `Bearer ${reg.body.token}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(await db.user.findUnique({ where: { id: userId } })).toBeNull();
+    expect(await db.volunteerApplication.findUnique({ where: { id: application.id } })).toBeNull();
   });
 });
 

@@ -114,7 +114,7 @@ router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Res
       contentUrl,
       thumbnailUrl,
     });
-    return json(res, reel);
+    return json(res, reel, 201); // POST /api/posts parity
   } catch (e) {
     return handleError(e, res);
   }

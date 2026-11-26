@@ -24,8 +24,10 @@ export const router = Router();
 // no auto-diagnoses. Every interaction is stored as a PENDING AIInteraction
 // with minimised digests (length + truncated hash — never full notes/PHI) and
 // needs human APPROVAL before the client applies anything through the normal
-// record APIs. If the AI SDK is unavailable the endpoint fails 503 and NO
-// interaction row is written — AI is never a silent dependency.
+// record APIs. If the AI SDK is unavailable, consult-draft / timeline-summary /
+// doc-extract fail 503 with NO interaction row written — AI is never a silent
+// dependency — while camp-plan degrades to a deterministic offline plan built
+// from the same aggregate stats (still recorded as PENDING for review).
 
 export const CONSULT_DISCLAIMER = "AI draft — requires clinician review. Not a diagnosis.";
 
@@ -309,8 +311,19 @@ router.post("/", async (req, res) => {
           assumptions.map((a) => `- ${a}`).join("\n")
         );
       } catch (e) {
-        console.error("[health-ai] camp-plan failed", e);
-        throw new ApiError("AI service is unavailable — nothing was recorded. Please retry later.", 503);
+        // Degrade like /api/assistant/chat does: a deterministic offline plan
+        // built from the SAME aggregate stats — the request still succeeds
+        // and the interaction is still recorded for review (status PENDING).
+        console.error("[health-ai] camp-plan failed, using offline fallback", e);
+        plan = [
+          "Offline plan — AI service unavailable. Generated deterministically from the aggregate camp stats:",
+          `1. Frequency: build on the current cadence (${totalCamps} camp(s) on record${city ? ` in/near ${city}` : ""}); schedule the next editions in the cities with the most camps so far (${topCities.map((c) => c.city ?? "unknown").join(", ") || "none on record"}).`,
+          `2. Staffing: budget doctors/volunteers for the observed average of ≈ ${avgAttendance} checked-in beneficiaries per camp.`,
+          `3. Inventory buffer: stock medicines/consumables for ≈ ${Math.ceil(avgAttendance * 1.1)} beneficiaries per camp (10% headroom over the average).`,
+          `4. No-shows: with a ≈ ${noShowRate}% no-show rate, send reminders and overbook check-in slots accordingly.`,
+          `5. Follow-up capacity: reserve review capacity for the camps currently on record (by status: ${byStatus.map((s) => `${s.status}=${s._count}`).join(", ") || "none"}).`,
+          "These figures come from thin aggregate data — validate each line against ground truth before acting.",
+        ].join("\n");
       }
 
       const interaction = await db.aIInteraction.create({

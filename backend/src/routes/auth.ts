@@ -125,7 +125,16 @@ router.post("/register", async (req, res) => {
     if (existing)
       throw new ApiError("An account with this email already exists", 409);
 
-    const password = tempPassword();
+    // A user-chosen password (mobile signup sends one; the web signup relies
+    // on the generated temp credentials) is honoured when it passes the same
+    // policy as reset-password / the profile change — otherwise the account
+    // would be created with a password the user does not know and could never
+    // sign in with. With no password provided, the legacy generated-tempCreds
+    // web path is unchanged.
+    const chosen = typeof b?.password === "string" ? b.password.trim() : "";
+    if (chosen && chosen.length < 6)
+      throw new ApiError("Password must be at least 6 characters", 400);
+    const password = chosen || tempPassword();
     const user = await db.user.create({
       data: {
         name,
@@ -157,7 +166,9 @@ router.post("/register", async (req, res) => {
     return json(res, {
       user: userSafe,
       token: issueToken(session),
-      tempCreds: { email, password, fullName: name },
+      // Temp credentials only when the password was generated — a
+      // user-chosen password is never echoed back.
+      ...(chosen ? {} : { tempCreds: { email, password, fullName: name } }),
     });
   } catch (e) {
     return handleError(e, res);

@@ -137,7 +137,7 @@ describe("S3 reel create + fetch", () => {
       .field("musicId", String(musicId))
       .attach("content", MP4, mp4Part)
       .attach("thumbnail", PNG, pngPart);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201); // POST /api/posts parity
     expect(res.body.userId).toBe(aId);
     expect(res.body.description).toBe(`${PREFIX} caption #fun`);
     expect(res.body.hashtags).toBe("fun");
@@ -412,7 +412,7 @@ describe("S3 reel deletion (owner OR moderator)", () => {
       .field("description", `${PREFIX} second`)
       .attach("content", MP4, mp4Part)
       .attach("thumbnail", PNG, pngPart);
-    expect(created.status).toBe(200);
+    expect(created.status).toBe(201); // POST /api/posts parity
     const secondId = created.body.id;
 
     const res = await request(app).delete(`/api/reels/${secondId}`).set("Authorization", `Bearer ${aToken}`);

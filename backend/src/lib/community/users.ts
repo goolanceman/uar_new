@@ -100,6 +100,20 @@ export async function deleteUserCascade(userId: string): Promise<void> {
   await db.notification.deleteMany({ where: { userId } });
   await db.volunteer.deleteMany({ where: { userId } }); // portal profile (Restrict FK)
 
+  // Volunteer applications — link by userId; anonymous applications that were
+  // never linked to the account only carry the applicant's email, so those
+  // are matched by email (never rows owned by another user id). Without this
+  // the admin review list keeps showing a deleted user as PENDING.
+  const deletingUser = await db.user.findUnique({ where: { id: userId }, select: { email: true } });
+  await db.volunteerApplication.deleteMany({
+    where: {
+      OR: [
+        { userId },
+        ...(deletingUser ? [{ userId: null, email: deletingUser.email }] : []),
+      ],
+    },
+  });
+
   await db.user.delete({ where: { id: userId } });
   void commentedPostIds; // post comment counts are fixed by the cascade above
 }
