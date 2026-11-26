@@ -27,6 +27,9 @@ let authToken: string;
 let token2: string;
 let adminToken: string;
 let applicationId: string;
+let applicant3: { id: string };
+let token3: string;
+let flowApplicationId: string;
 
 async function buildApp() {
   const { router: volunteerApplicationsRouter } = await import("@/routes/volunteer-applications");
@@ -89,6 +92,15 @@ beforeAll(async () => {
       password: "Applicant#2",
     },
   });
+  applicant3 = await db.user.create({
+    data: {
+      email: `${PREFIX}-three@test.local`,
+      name: `${PREFIX} applicant three`,
+      phone: "5551112223",
+      city: "Springfield",
+      password: "Flow@12345",
+    },
+  });
   await db.user.create({
     data: {
       email: `${PREFIX}-admin@test.local`,
@@ -110,6 +122,12 @@ beforeAll(async () => {
     .send({ email: `${PREFIX}-two@test.local`, password: "Applicant#2" });
   expect(login2.status).toBe(200);
   token2 = login2.body.token;
+
+  const login3 = await request(app)
+    .post("/api/auth/login")
+    .send({ email: `${PREFIX}-three@test.local`, password: "Flow@12345" });
+  expect(login3.status).toBe(200);
+  token3 = login3.body.token;
 
   const adminLogin = await request(app)
     .post("/api/auth/login")
@@ -165,7 +183,7 @@ describe("POST /api/volunteer-applications (the website module, app caller)", ()
   it("rejects a signed-in applicant with no motivation (website validation reached the app)", async () => {
     const res = await mpost(
       "volunteer-applications",
-      { skills: ["Teaching"], availability: ["Monday - Morning"], city: "Springfield" },
+      { skills: ["Teaching"], availability: ["Monday - Morning"], city: "Springfield", phone: "5551234500" },
       token2
     );
     expect(res.status).toBe(400);
@@ -227,6 +245,7 @@ describe("PATCH /api/volunteer-applications/:id (admin review)", () => {
         skills: ["Cooking"],
         availability: ["Sunday - Afternoon"],
         city: "Springfield",
+        phone: "5551234501",
         motivation: "Helping at community kitchens every week",
       },
       token2
@@ -252,5 +271,174 @@ describe("PATCH /api/volunteer-applications/:id (admin review)", () => {
       authToken
     );
     expect(res.status).toBe(403);
+  });
+});
+
+// ═══════════ PHASE 5 — review machine + owner resubmit ═══════════
+describe("volunteer application review machine (phase 5)", () => {
+  it("enforces the authoritative field rules with identical 400 messages", async () => {
+    const base = { city: "Springfield", motivation: "I want to help my community every weekend" };
+
+    const shortName = await mpost("volunteer-applications", { ...base, fullName: "A", phone: "5551112223" }, token3);
+    expect(shortName.status).toBe(400);
+    expect(shortName.body.error).toBe("Full name must be at least 3 characters");
+
+    const badEmail = await mpost(
+      "volunteer-applications",
+      { ...base, fullName: "Valid Name", email: "not-an-email", phone: "5551112223" },
+      token3
+    );
+    expect(badEmail.status).toBe(400);
+    expect(badEmail.body.error).toBe("Enter a valid email address");
+
+    const badPhone = await mpost(
+      "volunteer-applications",
+      { ...base, fullName: "Valid Name", phone: "12345" },
+      token3
+    );
+    expect(badPhone.status).toBe(400);
+    expect(badPhone.body.error).toBe("Phone must be exactly 10 digits");
+
+    const noCity = await mpost(
+      "volunteer-applications",
+      { fullName: "Valid Name", phone: "5551112223", motivation: base.motivation },
+      token3
+    );
+    expect(noCity.status).toBe(400);
+    expect(noCity.body.error).toBe("City is required");
+
+    const shortMotivation = await mpost(
+      "volunteer-applications",
+      { ...base, fullName: "Valid Name", phone: "5551112223", motivation: "too short" },
+      token3
+    );
+    expect(shortMotivation.status).toBe(400);
+    expect(shortMotivation.body.error).toContain("at least 20 characters");
+  });
+
+  it("walks PENDING → UNDER_REVIEW → INFO_REQUESTED and back via an owner resubmit", async () => {
+    // 1. applicant three applies
+    const apply = await mpost(
+      "volunteer-applications",
+      {
+        fullName: `${PREFIX} applicant three`,
+        email: `${PREFIX}-three@test.local`,
+        phone: "5551112223",
+        city: "Springfield",
+        skills: ["Driving"],
+        availability: ["WEEKENDS"],
+        motivation: "Happy to drive supplies to weekend distribution drives",
+        serviceAreas: ["Downtown"],
+        willingToTravel: true,
+        maxTravelDistance: 30,
+      },
+      token3
+    );
+    expect(apply.status).toBe(201);
+    flowApplicationId = apply.body.application.id;
+    expect(apply.body.application.status).toBe("PENDING");
+
+    // 2. admin marks it under review — applicant mirror stays "pending"
+    const review = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "UNDER_REVIEW" },
+      adminToken
+    );
+    expect(review.status).toBe(200);
+    expect(review.body.application.status).toBe("UNDER_REVIEW");
+    const { db } = await import("@/lib/db");
+    const afterReview = await db.user.findUnique({ where: { id: applicant3.id } });
+    expect(afterReview?.volunteerStatus).toBe("pending");
+
+    // 3. requesting information without a note is rejected
+    const noNote = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "INFO_REQUESTED" },
+      adminToken
+    );
+    expect(noNote.status).toBe(400);
+    expect(noNote.body.error).toContain("review note is required");
+
+    // 4. with the note it succeeds and GET /mine carries the timeline + note
+    const info = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "INFO_REQUESTED", reviewNote: "Please share your weekend availability window" },
+      adminToken
+    );
+    expect(info.status).toBe(200);
+    expect(info.body.application.reviewNote).toContain("availability");
+
+    const mine = await mget("volunteer-applications/mine").set("Authorization", `Bearer ${token3}`);
+    expect(mine.status).toBe(200);
+    expect(mine.body.application.status).toBe("INFO_REQUESTED");
+    expect(mine.body.timeline.map((t: { key: string }) => t.key)).toEqual([
+      "SUBMITTED",
+      "INFO_REQUESTED",
+    ]);
+    expect(mine.body.timeline[1].note).toContain("availability");
+
+    // 5. the owner cannot resubmit while another review state is running —
+    //    here the application IS info-requested, so first prove the guard on
+    //    a pending application further below; resubmit now.
+    const resubmit = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      {
+        // body form wins for provided fields; omitted optionals are preserved
+        phone: "5554443332",
+        city: "Mysuru",
+        motivation: "Updated motivation — still happy to drive weekend supplies",
+      },
+      token3
+    );
+    expect(resubmit.status).toBe(200);
+    expect(resubmit.body.application.status).toBe("PENDING");
+    expect(resubmit.body.application.phone).toBe("5554443332");
+    expect(resubmit.body.application.city).toBe("Mysuru");
+    expect(JSON.parse(resubmit.body.application.serviceAreas)).toEqual(["Downtown"]);
+    expect(resubmit.body.application.willingToTravel).toBe(true);
+
+    // 6. resubmission is a no-op field edit away from the queue: owner can
+    //    no longer edit while the status is plain PENDING
+    const blocked = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { city: "Hubballi" },
+      token3
+    );
+    expect(blocked.status).toBe(403);
+
+    // 7. a different non-admin account cannot touch someone else's application
+    const stranger = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { city: "Hubballi" },
+      token2
+    );
+    expect(stranger.status).toBe(403);
+
+    // 8. invalid review jump (PENDING → nothing wrong here, but REJECTED
+    //    applications may not go straight to UNDER_REVIEW)
+    const reject = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "REJECTED", reviewNote: "Not enough weekend drivers yet" },
+      adminToken
+    );
+    expect(reject.status).toBe(200);
+
+    const invalid = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "UNDER_REVIEW" },
+      adminToken
+    );
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toContain("Cannot move volunteer application from REJECTED");
+
+    // 9. decisions can be undone back to PENDING (mirror returns to pending)
+    const reopen = await mpatch(
+      `volunteer-applications/${flowApplicationId}`,
+      { status: "PENDING" },
+      adminToken
+    );
+    expect(reopen.status).toBe(200);
+    const user = await db.user.findUnique({ where: { id: applicant3.id } });
+    expect(user?.volunteerStatus).toBe("pending");
   });
 });

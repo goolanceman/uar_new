@@ -60,7 +60,7 @@ interface TempCreds {
 interface MineApplication {
   id: string;
   fullName: string;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: "PENDING" | "UNDER_REVIEW" | "APPROVED" | "REJECTED" | "INFO_REQUESTED";
   motivation?: string;
   reviewNote?: string | null;
   createdAt?: string;
@@ -127,6 +127,8 @@ const MOTIVATION_MIN = 30;
 
 const STATUS_STYLE: Record<string, string> = {
   PENDING: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  UNDER_REVIEW: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
+  INFO_REQUESTED: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   APPROVED: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   REJECTED: "bg-red-500/15 text-red-600 dark:text-red-400",
 };
@@ -431,6 +433,18 @@ export function VolunteerPage() {
                 {mine.status === "PENDING" && (
                   <p className="mt-1.5 text-xs text-muted-foreground">
                     Still in review — a lead will call you within 3 working days of applying.
+                  </p>
+                )}
+                {mine.status === "UNDER_REVIEW" && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    A programme lead is reading your application right now.
+                  </p>
+                )}
+                {mine.status === "INFO_REQUESTED" && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {mine.reviewNote
+                      ? `The team asked for more information: ${mine.reviewNote}`
+                      : "The team asked for more information — update your application in the Volunteer Portal."}
                   </p>
                 )}
                 {mine.status === "APPROVED" && (

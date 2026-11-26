@@ -46,6 +46,7 @@ const STATUS_TONE: Record<string, Tone> = {
   REJECTED_CASE: "danger",
   // in-flight
   IN_PROGRESS: "progress", EN_ROUTE: "progress", DISPATCHED: "progress",
+  UNDER_REVIEW: "progress", INFO_REQUESTED: "warning",
   SCANNED: "info", ADOPTED: "purple", DRAFT: "neutral",
   INACTIVE: "neutral", CLOSED: "neutral", ON_MISSION: "progress", REQUESTED: "warning",
   ARRIVED: "info", ONE_TIME: "neutral", RECURRING: "info", MONTHLY: "info",

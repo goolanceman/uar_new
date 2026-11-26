@@ -53,6 +53,7 @@ import {
   Users,
   X,
   Zap,
+  ZapOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
@@ -117,6 +118,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useRowBusy } from "@/hooks/use-row-busy";
+import { labelOf, useMasters } from "@/hooks/use-masters";
 import {
   Select,
   SelectContent,
@@ -154,6 +156,11 @@ interface Campaign {
   icon: string;
   accent: string;
   urgent?: boolean;
+  urgencyLevel?: string | null;
+  urgencyPriority?: number | null;
+  urgencyReason?: string | null;
+  urgentSince?: string | null;
+  urgentUntil?: string | null;
   taxEligible?: boolean;
   minDonation?: number | null;
   videoUrl?: string | null;
@@ -179,6 +186,16 @@ interface Campaign {
 interface BudgetRow {
   head: string;
   amount: string;
+}
+
+/** Urgent-appeal FormSheet state (PATCH /api/campaigns/:id/urgency). */
+interface UrgencyFormState {
+  urgent: boolean;
+  urgencyLevel: string;
+  urgencyPriority: string;
+  urgencyReason: string;
+  urgentUntil: string; // datetime-local
+  targetAmount: string;
 }
 
 interface CampaignAnalytics {
@@ -221,7 +238,6 @@ interface CampaignFormState {
   minDonation: string;
   taxEligible: boolean;
   featured: boolean;
-  urgent: boolean;
   startDate: string;
   endDate: string;
   location: string;
@@ -298,11 +314,18 @@ const URL_RE = /^https?:\/\/\S+$/i;
 const IMAGE_URL_RE =
   /^(https?:\/\/\S+|\/api\/files\/[\w-]+\/file(\?\S*)?|\/(public|uploads?)\/\S+)$/i;
 
-/** Success toasts for the one-click row-menu flag toggles. */
-const FLAG_TOASTS: Record<"featured" | "urgent", { on: string; off: string }> = {
+/** Success toast for the one-click row-menu featured toggle. */
+const FLAG_TOASTS: Record<"featured", { on: string; off: string }> = {
   featured: { on: "Now featured on the home page", off: "Removed from home page" },
-  urgent: { on: "Marked urgent — public urgent appeal enabled", off: "Urgent flag cleared" },
 };
+
+/** Urgency severity levels — validated by the backend urgency endpoint. */
+const URGENCY_LEVELS = [
+  { value: "LOW", label: "Low" },
+  { value: "MEDIUM", label: "Medium" },
+  { value: "HIGH", label: "High" },
+  { value: "CRITICAL", label: "Critical" },
+];
 
 function slugify(title: string): string {
   return title
@@ -328,6 +351,15 @@ function dateInputToIso(value: string): string | null {
   if (!value) return null;
   const d = new Date(`${value}T12:00:00`);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** ISO → <input type="datetime-local"> value (local time). */
+function isoToDatetimeLocal(value?: string | null): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** Days until endDate (negative = ended, null = no deadline). */
@@ -480,7 +512,6 @@ const emptyForm: CampaignFormState = {
   minDonation: "",
   taxEligible: true,
   featured: false,
-  urgent: false,
   startDate: "",
   endDate: "",
   location: "",
@@ -495,6 +526,38 @@ const emptyForm: CampaignFormState = {
   budget: [],
   status: "ACTIVE",
 };
+
+const emptyUrgencyForm: UrgencyFormState = {
+  urgent: false,
+  urgencyLevel: "HIGH",
+  urgencyPriority: "0",
+  urgencyReason: "",
+  urgentUntil: "",
+  targetAmount: "",
+};
+
+/** Client-side mirror of the backend urgency validator (same rules). */
+function validateUrgency(f: UrgencyFormState): Record<string, string | null> {
+  const priority = f.urgencyPriority.trim();
+  return {
+    urgencyLevel: f.urgent && !f.urgencyLevel ? "Pick a severity level" : null,
+    urgencyReason: f.urgent ? required("Reason")(f.urgencyReason) : null,
+    urgentUntil: f.urgent
+      ? !f.urgentUntil
+        ? "A funding deadline is required while the appeal is active"
+        : new Date(f.urgentUntil).getTime() <= Date.now()
+          ? "The deadline must be in the future"
+          : null
+      : null,
+    urgencyPriority:
+      priority && (!Number.isInteger(Number(priority)) || Number(priority) < 0)
+        ? "Priority must be a whole number ≥ 0"
+        : null,
+    targetAmount: f.targetAmount.trim()
+      ? amountRule({ min: 1, label: "Target amount" })(f.targetAmount)
+      : null,
+  };
+}
 
 function validateForm(f: CampaignFormState): Record<string, string | null> {
   return {
@@ -671,6 +734,21 @@ export default function CampaignsView() {
   const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
   const [completeTarget, setCompleteTarget] = useState<Campaign | null>(null);
 
+  // urgency management sheet (PATCH /api/campaigns/:id/urgency)
+  const [urgencyTarget, setUrgencyTarget] = useState<Campaign | null>(null);
+  const [urgencyForm, setUrgencyForm] = useState<UrgencyFormState>({ ...emptyUrgencyForm });
+  const [urgencySnapshot, setUrgencySnapshot] = useState(JSON.stringify(emptyUrgencyForm));
+  const [urgencySaving, setUrgencySaving] = useState(false);
+  const [confirmRemoveUrgent, setConfirmRemoveUrgent] = useState<Campaign | null>(null);
+
+  // Category vocabulary from the Master registry (CAMPAIGN_CATEGORY), with the
+  // static list as fallback when the registry has no rows yet.
+  const { options: masterCategoryOptions } = useMasters("CAMPAIGN_CATEGORY");
+  const categoryOptions =
+    masterCategoryOptions.length > 0
+      ? masterCategoryOptions
+      : CATEGORIES.map((c) => ({ value: c, label: titleCase(c) }));
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -719,7 +797,11 @@ export default function CampaignsView() {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return rows.filter((c) => {
-      if (status !== "ALL" && c.status !== status) return false;
+      if (status === "URGENT") {
+        // Urgent tab — the backend auto-expires appeals, so urgent=true here
+        // already means the deadline has not passed.
+        if (c.urgent !== true) return false;
+      } else if (status !== "ALL" && c.status !== status) return false;
       if (category !== "ALL" && c.category !== category) return false;
       if (needle) {
         const hay = `${c.title} ${c.code ?? ""} ${c.slug ?? ""} ${c.tagline ?? ""} ${c.location ?? ""} ${c.coordinatorName ?? ""}`.toLowerCase();
@@ -809,7 +891,6 @@ export default function CampaignsView() {
       minDonation: c.minDonation != null ? String(c.minDonation) : "",
       taxEligible: c.taxEligible !== false,
       featured: Boolean(c.featured),
-      urgent: Boolean(c.urgent),
       startDate: isoToDateInput(c.startDate),
       endDate: isoToDateInput(c.endDate),
       location: c.location ?? "",
@@ -857,7 +938,6 @@ export default function CampaignsView() {
         minDonation: form.minDonation.trim() ? Number(form.minDonation) : null,
         taxEligible: form.taxEligible,
         featured: form.featured,
-        urgent: form.urgent,
         startDate: form.startDate ? dateInputToIso(form.startDate) : undefined,
         endDate: dateInputToIso(form.endDate),
         location: form.location.trim() || undefined,
@@ -985,7 +1065,6 @@ export default function CampaignsView() {
         accent: c.accent,
         helpline: c.helpline ?? undefined,
         featured: Boolean(c.featured),
-        urgent: Boolean(c.urgent),
         taxEligible: c.taxEligible ?? true,
         minDonation: c.minDonation ?? null,
         videoUrl: c.videoUrl ?? undefined,
@@ -997,6 +1076,13 @@ export default function CampaignsView() {
         seoTitle: c.seoTitle ?? undefined,
         seoDescription: c.seoDescription ?? undefined,
         status: c.status === "COMPLETED" || c.status === "CANCELLED" ? "DRAFT" : c.status,
+        // Urgency rides along so the POST validation (reason + future deadline
+        // required when urgent) accepts the copy of a live urgent appeal.
+        urgent: Boolean(c.urgent),
+        urgencyLevel: c.urgencyLevel ?? undefined,
+        urgencyReason: c.urgencyReason ?? undefined,
+        urgentUntil: c.urgentUntil ?? undefined,
+        urgencyPriority: c.urgencyPriority ?? undefined,
       });
       toast.success(`Duplicated “${c.title}” — review the copy and activate it when ready.`);
       await Promise.all([load(), loadAnalytics()]);
@@ -1022,29 +1108,98 @@ export default function CampaignsView() {
     }
   };
 
-  /** One-click featured/urgent toggle from the row menu — PATCHes the single
-   *  flag, toasts, refreshes both views and keeps the detail sheet in sync. */
-  const toggleFlag = async (c: Campaign, field: "featured" | "urgent") => {
+  /** One-click featured toggle from the row menu — PATCHes the single flag,
+   *  toasts, refreshes both views and keeps the detail sheet in sync. Urgency
+   *  is managed through the dedicated UrgentFormSheet instead. */
+  const toggleFlag = async (c: Campaign, field: "featured") => {
     const next = !c[field];
     setBusyId(c.id);
     try {
-      await patch(
-        `/api/campaigns/${c.id}`,
-        field === "featured" ? { featured: next } : { urgent: next }
-      );
+      await patch(`/api/campaigns/${c.id}`, { featured: next });
       toast.success(next ? FLAG_TOASTS[field].on : FLAG_TOASTS[field].off);
       await Promise.all([load(), loadAnalytics()]);
       setViewTarget((prev) =>
-        prev && prev.id === c.id
-          ? field === "featured"
-            ? { ...prev, featured: next }
-            : { ...prev, urgent: next }
-          : prev
+        prev && prev.id === c.id ? { ...prev, featured: next } : prev
       );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update flag");
     } finally {
       setBusyId(null);
+    }
+  };
+
+  /* --------------------------- urgency management --------------------------- */
+
+  const openUrgency = (c: Campaign) => {
+    setUrgencyTarget(c);
+    const f: UrgencyFormState = {
+      urgent: Boolean(c.urgent),
+      urgencyLevel: c.urgencyLevel ?? "HIGH",
+      urgencyPriority: String(c.urgencyPriority ?? 0),
+      urgencyReason: c.urgencyReason ?? "",
+      urgentUntil: isoToDatetimeLocal(c.urgentUntil),
+      targetAmount: c.targetAmount !== undefined ? String(c.targetAmount) : "",
+    };
+    setUrgencyForm(f);
+    setUrgencySnapshot(JSON.stringify(f));
+  };
+
+  const urgencyDirty = JSON.stringify(urgencyForm) !== urgencySnapshot;
+  const urgencyErrors = useMemo(() => validateUrgency(urgencyForm), [urgencyForm]);
+  const urgencyErrorCount = useMemo(
+    () => Object.values(urgencyErrors).filter(Boolean).length,
+    [urgencyErrors]
+  );
+
+  const saveUrgency = async () => {
+    if (!urgencyTarget) return;
+    if (urgencyErrorCount > 0) {
+      toast.error(`${urgencyErrorCount} field(s) need attention`);
+      return;
+    }
+    setUrgencySaving(true);
+    try {
+      const res = await patch<Campaign>(
+        `/api/campaigns/${urgencyTarget.id}/urgency`,
+        {
+          urgent: urgencyForm.urgent,
+          urgencyLevel: urgencyForm.urgencyLevel,
+          urgencyPriority: urgencyForm.urgencyPriority.trim() ? Number(urgencyForm.urgencyPriority) : 0,
+          urgencyReason: urgencyForm.urgencyReason.trim(),
+          urgentUntil: urgencyForm.urgent && urgencyForm.urgentUntil
+            ? new Date(urgencyForm.urgentUntil).toISOString()
+            : null,
+          targetAmount: urgencyForm.targetAmount.trim() ? Number(urgencyForm.targetAmount) : null,
+        }
+      );
+      toast.success(
+        res.urgent ? "Urgent appeal is live — donors will see the urgency banner" : "Urgent appeal removed"
+      );
+      setUrgencyTarget(null);
+      await Promise.all([load(), loadAnalytics()]);
+      setViewTarget((prev) =>
+        prev && prev.id === res.id ? { ...prev, ...res } : prev
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update the urgent appeal");
+    } finally {
+      setUrgencySaving(false);
+    }
+  };
+
+  const removeUrgent = async () => {
+    if (!confirmRemoveUrgent) return;
+    setUrgencySaving(true);
+    try {
+      await patch(`/api/campaigns/${confirmRemoveUrgent.id}/urgency`, { urgent: false });
+      toast.success(`Urgent flag cleared for “${confirmRemoveUrgent.title}”`);
+      setConfirmRemoveUrgent(null);
+      setUrgencyTarget(null);
+      await Promise.all([load(), loadAnalytics()]);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to clear the urgent flag");
+    } finally {
+      setUrgencySaving(false);
     }
   };
 
@@ -1110,13 +1265,18 @@ export default function CampaignsView() {
             <Star className={cn("size-4", c.featured && "fill-current text-amber-500")} aria-hidden="true" />
             {c.featured ? "Remove from home page" : "Feature on home page"}
           </DropdownMenuCheckboxItem>
-          <DropdownMenuCheckboxItem
-            checked={Boolean(c.urgent)}
-            onSelect={() => void toggleFlag(c, "urgent")}
-          >
+          <DropdownMenuItem onSelect={() => openUrgency(c)}>
             <Zap className={cn("size-4", c.urgent && "text-red-500")} aria-hidden="true" />
-            {c.urgent ? "Clear urgent flag" : "Mark urgent"}
-          </DropdownMenuCheckboxItem>
+            {c.urgent ? "Manage urgent appeal…" : "Mark urgent…"}
+          </DropdownMenuItem>
+          {c.urgent && (
+            <DropdownMenuItem
+              onSelect={() => setConfirmRemoveUrgent(c)}
+              className="text-red-600 focus:text-red-600 dark:text-red-400"
+            >
+              <ZapOff className="size-4" aria-hidden="true" /> Remove urgent flag…
+            </DropdownMenuItem>
+          )}
           {(c.status === "DRAFT" || c.status === "PAUSED") && (
             <DropdownMenuItem onSelect={() => void setStatusFor(c, "ACTIVE")}>
               <CheckCircle2 className="size-4" /> Activate
@@ -1464,6 +1624,7 @@ export default function CampaignsView() {
               {STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>
               ))}
+              <SelectItem value="URGENT">Urgent</SelectItem>
             </SelectContent>
           </Select>
           <Select value={category} onValueChange={setCategory}>
@@ -1472,8 +1633,8 @@ export default function CampaignsView() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All categories</SelectItem>
-              {CATEGORIES.map((c) => (
-                <SelectItem key={c} value={c}>{titleCase(c)}</SelectItem>
+              {categoryOptions.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -2240,7 +2401,7 @@ export default function CampaignsView() {
               label="Category"
               value={form.category}
               onChange={(v) => setForm((f) => ({ ...f, category: v }))}
-              options={CATEGORIES.map((c) => ({ value: c, label: titleCase(c) }))}
+              options={categoryOptions}
             />
             {editingId ? (
               <SelectField
@@ -2528,7 +2689,7 @@ export default function CampaignsView() {
           )}
         </FormSection>
 
-        <FormSection title="Settings & visibility" description="Donor-facing flags and receipt eligibility.">
+        <FormSection title="Settings & visibility" description="Donor-facing flags and receipt eligibility. Urgent appeals are managed via the “Manage urgent appeal…” row action.">
           <div className="grid gap-3 sm:grid-cols-3">
             <SwitchField
               label="80G tax eligible"
@@ -2542,13 +2703,89 @@ export default function CampaignsView() {
               checked={form.featured}
               onChange={(v) => setForm((f) => ({ ...f, featured: v }))}
             />
-            <SwitchField
-              label="Mark as urgent"
-              hint="Shows an urgent appeal banner on the public site"
-              checked={form.urgent}
-              onChange={(v) => setForm((f) => ({ ...f, urgent: v }))}
-            />
           </div>
+        </FormSection>
+      </FormSheet>
+
+      {/* --------------------------- urgency sheet --------------------------- */}
+      <FormSheet
+        open={!!urgencyTarget}
+        onOpenChange={(open) => !open && setUrgencyTarget(null)}
+        title="Urgent appeal"
+        description={
+          urgencyTarget
+            ? `Control the donor-facing urgency banner for “${urgencyTarget.title}”.`
+            : undefined
+        }
+        onSubmit={saveUrgency}
+        submitLabel="Save urgency"
+        loading={urgencySaving}
+        dirty={urgencyDirty}
+        size="md"
+        footerExtra={
+          urgencyErrorCount > 0 ? (
+            <span className="font-medium text-destructive">
+              {urgencyErrorCount} field(s) need attention
+            </span>
+          ) : null
+        }
+      >
+        <FormSection title="Appeal" description="Active appeals show an urgency banner on the public site and in the mobile app. Appeals expire automatically at the deadline.">
+          <SwitchField
+            label="Run an urgent appeal"
+            hint="Shows the urgency banner and lists the campaign under Urgent Causes"
+            checked={urgencyForm.urgent}
+            onChange={(v) => setUrgencyForm((f) => ({ ...f, urgent: v }))}
+          />
+          <FieldGrid>
+            <SelectField
+              label="Severity level"
+              value={urgencyForm.urgencyLevel}
+              onChange={(v) => setUrgencyForm((f) => ({ ...f, urgencyLevel: v }))}
+              options={URGENCY_LEVELS}
+            />
+            <TextField
+              label="Priority"
+              type="number"
+              min="0"
+              step="1"
+              value={urgencyForm.urgencyPriority}
+              onChange={(v) => setUrgencyForm((f) => ({ ...f, urgencyPriority: v }))}
+              hint="Sort weight for urgent lists — higher first."
+              error={urgencyErrors.urgencyPriority}
+            />
+          </FieldGrid>
+          <TextareaField
+            label="Reason"
+            required={urgencyForm.urgent}
+            rows={3}
+            value={urgencyForm.urgencyReason}
+            onChange={(v) => setUrgencyForm((f) => ({ ...f, urgencyReason: v }))}
+            placeholder="Why is this campaign urgent right now?"
+            hint="Shown verbatim in the urgency banner on the public site and the app."
+            error={urgencyErrors.urgencyReason}
+          />
+          <FieldGrid>
+            <TextField
+              label="Funding deadline"
+              type="datetime-local"
+              required={urgencyForm.urgent}
+              value={urgencyForm.urgentUntil}
+              onChange={(v) => setUrgencyForm((f) => ({ ...f, urgentUntil: v }))}
+              hint="When the urgent push ends. The campaign endDate is unchanged."
+              error={urgencyErrors.urgentUntil}
+            />
+            <TextField
+              label="Target amount"
+              type="number"
+              min="1"
+              prefix="₹"
+              value={urgencyForm.targetAmount}
+              onChange={(v) => setUrgencyForm((f) => ({ ...f, targetAmount: v }))}
+              hint="Optional — updates the campaign goal."
+              error={urgencyErrors.targetAmount}
+            />
+          </FieldGrid>
         </FormSection>
       </FormSheet>
 
@@ -2579,6 +2816,17 @@ export default function CampaignsView() {
         loading={saving}
         onConfirm={confirmDelete}
       />
+
+      <ConfirmDialog
+        open={!!confirmRemoveUrgent}
+        onOpenChange={(o) => !o && setConfirmRemoveUrgent(null)}
+        title="Remove the urgent flag?"
+        recordName={confirmRemoveUrgent?.title ?? null}
+        description="The urgency banner disappears from the public site and the mobile app immediately, and the campaign leaves the Urgent Causes list. The reason and deadline are cleared."
+        confirmLabel="Remove urgent flag"
+        loading={urgencySaving}
+        onConfirm={() => void removeUrgent()}
+ />
 
       <ConfirmDialog
         open={confirmDiscard}

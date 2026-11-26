@@ -217,6 +217,12 @@ model Campaign {
   helpline          String?
   featured          Boolean   @default(false)
   urgent            Boolean   @default(false)
+  urgencyLevel      String? // LOW | MEDIUM | HIGH | CRITICAL — severity of the urgent appeal
+  urgencyPriority   Int       @default(0) // admin-set sort weight for urgent lists (higher first)
+  urgencyReason     String? // donor-facing why-it's-urgent line shown in banners
+  urgentSince       DateTime? // when the urgent push was activated
+  urgentUntil       DateTime? // funding deadline for the urgent push (endDate remains the campaign end)
+  urgentSetById     String? // admin who last activated the urgent appeal
   minDonation       Float?
   taxEligible       Boolean   @default(true)
   videoUrl          String?

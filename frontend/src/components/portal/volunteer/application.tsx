@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { useMasters, labelOf } from "@/hooks/use-masters";
 import type { SessionUser } from "@/hooks/use-auth";
 import type { VolunteerProfile } from "../portal-router";
-import { get, post } from "@/lib/api-client";
+import { get, patch, post } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
 import { formatDateTime, titleCase } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -51,7 +51,8 @@ interface VolunteerApplication {
   skills?: string | null; // JSON string
   availability?: string | null; // JSON string
   motivation: string;
-  status: string; // PENDING | APPROVED | REJECTED
+  // PENDING | UNDER_REVIEW | APPROVED | REJECTED | INFO_REQUESTED
+  status: string;
   reviewNote?: string | null;
   createdAt: string;
   reviewedAt?: string | null;
@@ -106,7 +107,9 @@ export default function VolunteerApplicationView({
   const [pageState, setPageState] = useState<"loading" | "ready" | "refreshing">("loading");
   const [copiedEmail, setCopiedEmail] = useState(false);
 
-  // FormSheet state
+  // FormSheet state — "apply" creates a new application (POST), "update"
+  // resubmits the info-requested one in place (PATCH with owner rules).
+  const [sheetMode, setSheetMode] = useState<"apply" | "update">("apply");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [form, setForm] = useState<ApplicationForm>({
     fullName: user.name,
@@ -146,16 +149,30 @@ export default function VolunteerApplicationView({
     load();
   }, [load]);
 
-  const openSheet = () => {
-    setForm({
-      fullName: application?.fullName ?? user.name,
-      phone: application?.phone ?? user.phone ?? "",
-      city: application?.city ?? user.city ?? "",
-      occupation: application?.occupation ?? "",
-      availability: parseJsonList(application?.availability)[0] ?? "",
-      motivation: "",
-    });
-    setSkills(parseJsonList(application?.skills));
+  const openSheet = (mode: "apply" | "update" = "apply") => {
+    setSheetMode(mode);
+    if (mode === "update" && application) {
+      // Resubmitting the info-requested application — start from what was sent.
+      setForm({
+        fullName: application.fullName,
+        phone: application.phone,
+        city: application.city,
+        occupation: application.occupation ?? "",
+        availability: parseJsonList(application.availability)[0] ?? "",
+        motivation: application.motivation,
+      });
+      setSkills(parseJsonList(application.skills));
+    } else {
+      setForm({
+        fullName: user.name,
+        phone: user.phone ?? "",
+        city: user.city ?? "",
+        occupation: "",
+        availability: "",
+        motivation: "",
+      });
+      setSkills([]);
+    }
     setErrors({});
     setSheetOpen(true);
   };
@@ -189,17 +206,27 @@ export default function VolunteerApplicationView({
 
     setSubmitting(true);
     try {
-      await post("/api/volunteer-applications", {
+      const payload = {
         fullName: form.fullName.trim(),
-        email: user.email,
         phone: form.phone.trim(),
         city: form.city,
         occupation: form.occupation.trim() || undefined,
         skills: JSON.stringify(skills),
         availability: form.availability || undefined,
         motivation: form.motivation.trim(),
-      });
-      toast.success("Application submitted! Our team will review it within 48 hours.");
+      };
+      if (sheetMode === "update" && application) {
+        // Owner resubmit — the backend flips the application back to PENDING
+        // once the requested information is provided.
+        await patch(`/api/volunteer-applications/${application.id}`, payload);
+        toast.success("Application updated — it is back with the review team.");
+      } else {
+        await post("/api/volunteer-applications", {
+          ...payload,
+          email: user.email,
+        });
+        toast.success("Application submitted! Our team will review it within 48 hours.");
+      }
       setSheetOpen(false);
       await load();
     } catch (e) {
@@ -211,20 +238,29 @@ export default function VolunteerApplicationView({
 
   const isActiveVolunteer = volunteer?.status === "ACTIVE" && user.status === "ACTIVE";
   const isPending = application?.status === "PENDING";
+  const isUnderReview = application?.status === "UNDER_REVIEW";
+  const isInfoRequested = application?.status === "INFO_REQUESTED";
   const isRejected = application?.status === "REJECTED";
   const isApproved = application?.status === "APPROVED";
+  const isDecided = isApproved || isRejected;
 
-  const stepDone = (step: "applied" | "review" | "decision") => {
+  /** Journey stages for the timeline — info requests get their own stage. */
+  type StepKey = "applied" | "review" | "info" | "decision";
+  const stepDone = (step: StepKey) => {
     if (!application) return false;
     if (step === "applied") return true;
-    if (step === "review") return isPending || isApproved || isRejected;
-    return isApproved || isRejected;
+    if (step === "review") return isInfoRequested || isDecided;
+    if (step === "info") return false; // only rendered while current
+    return isDecided;
   };
-  const stepCurrent = (step: "applied" | "review" | "decision") => {
+  const stepCurrent = (step: StepKey) => {
     if (!application) return step === "applied";
-    if (isPending) return step === "review";
+    if (isInfoRequested) return step === "info";
+    if (isPending || isUnderReview) return step === "review";
     return step === "decision";
   };
+
+  const openUpdate = isInfoRequested;
 
   return (
     <div className="space-y-6">
@@ -233,8 +269,13 @@ export default function VolunteerApplicationView({
         description="Join United Angel Reach on the ground — drives, rescues and relief kits."
         icon={<ClipboardCheck className="size-5" />}
         actions={
-          pageState !== "loading" && (!application || isRejected) ? (
-            <Button className="min-h-11 gap-1.5 sm:min-h-9" onClick={openSheet}>
+          pageState !== "loading" && openUpdate ? (
+            <Button className="min-h-11 gap-1.5 sm:min-h-9" onClick={() => openSheet("update")}>
+              <RefreshCw className="size-4" aria-hidden="true" />
+              Update application
+            </Button>
+          ) : pageState !== "loading" && (!application || isRejected) ? (
+            <Button className="min-h-11 gap-1.5 sm:min-h-9" onClick={() => openSheet("apply")}>
               <Send className="size-4" aria-hidden="true" />
               {isRejected ? "Apply again" : "Apply to volunteer"}
             </Button>
@@ -251,7 +292,7 @@ export default function VolunteerApplicationView({
           description={`Latest application · submitted ${formatDateTime(application.createdAt)}`}
           icon={<Sparkles className="size-5" />}
           actions={
-            isPending ? (
+            !isDecided ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -272,6 +313,15 @@ export default function VolunteerApplicationView({
                 [
                   { key: "applied", label: "Applied", at: application.createdAt },
                   { key: "review", label: "Under review", at: null },
+                  ...(isInfoRequested
+                    ? [
+                        {
+                          key: "info" as const,
+                          label: "Additional information required",
+                          at: application.reviewedAt,
+                        },
+                      ]
+                    : []),
                   {
                     key: "decision",
                     label: isApproved ? "Approved" : isRejected ? "Not approved" : "Decision",
@@ -313,12 +363,21 @@ export default function VolunteerApplicationView({
                         {step.label}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {step.key === "review" && isPending
-                          ? "In progress — usually within 48 hours"
-                          : step.at
-                            ? formatDateTime(step.at)
-                            : "Pending"}
+                        {step.key === "review" && (isPending || isUnderReview)
+                          ? isUnderReview
+                            ? "A programme lead is reading it now"
+                            : "In progress — usually within 48 hours"
+                          : step.key === "info" && isInfoRequested
+                            ? "Update & resubmit to continue"
+                            : step.at
+                              ? formatDateTime(step.at)
+                              : "Pending"}
                       </p>
+                      {step.key === "info" && isInfoRequested && application.reviewNote && (
+                        <p className="mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-200">
+                          Team note: “{application.reviewNote}”
+                        </p>
+                      )}
                     </div>
                   </li>
                 );
@@ -369,7 +428,7 @@ export default function VolunteerApplicationView({
               title="No application yet"
               hint="Tell us who you are and when you can help — approval unlocks the full field toolkit."
             >
-              <Button className="min-h-11 gap-1.5" onClick={openSheet}>
+              <Button className="min-h-11 gap-1.5" onClick={() => openSheet("apply")}>
                 <Send className="size-4" aria-hidden="true" />
                 Apply to volunteer
               </Button>
@@ -451,6 +510,31 @@ export default function VolunteerApplicationView({
         </SectionCard>
       )}
 
+      {/* ---------- Additional information requested ---------- */}
+      {pageState !== "loading" && isInfoRequested && application && (
+        <SectionCard
+          title="Additional information required"
+          description="The team asked a question about your application before deciding."
+          icon={<Info className="size-5" />}
+        >
+          <div className="space-y-4">
+            {application.reviewNote && (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
+                Team note: “{application.reviewNote}”
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              Update your answers below and resubmit — your application returns to the
+              review queue and a lead takes another look, usually within 48 hours.
+            </p>
+            <Button className="min-h-11 gap-1.5" onClick={() => openSheet("update")}>
+              <RefreshCw className="size-4" aria-hidden="true" />
+              Update &amp; resubmit
+            </Button>
+          </div>
+        </SectionCard>
+      )}
+
       {/* ---------- Rejected ---------- */}
       {pageState !== "loading" && isRejected && application && (
         <div
@@ -475,9 +559,19 @@ export default function VolunteerApplicationView({
       <FormSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        title={isRejected ? "Apply again to volunteer" : "Apply to volunteer"}
-        description="Location & skills help us assign you to the right drives — takes about two minutes."
-        submitLabel="Submit application"
+        title={
+          sheetMode === "update"
+            ? "Update & resubmit application"
+            : isRejected
+              ? "Apply again to volunteer"
+              : "Apply to volunteer"
+        }
+        description={
+          sheetMode === "update"
+            ? "Answer the team's note, adjust anything else, and send it back for review."
+            : "Location & skills help us assign you to the right drives — takes about two minutes."
+        }
+        submitLabel={sheetMode === "update" ? "Resubmit application" : "Submit application"}
         loading={submitting}
         dirty={form.motivation.trim().length > 0 || form.occupation.trim().length > 0 || skills.length > 0}
         size="md"

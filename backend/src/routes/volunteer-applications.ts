@@ -41,6 +41,136 @@ function tempPassword(): string {
   return `UAR${Math.floor(10000 + Math.random() * 90000)}@`;
 }
 
+// ── Statuses & review machine ──────────────────────────────────────────────
+// PENDING (submitted) → UNDER_REVIEW → APPROVED | REJECTED | INFO_REQUESTED
+// (additional information required); the applicant edits and resubmits an
+// INFO_REQUESTED application, which returns it to PENDING. A decision can be
+// undone back to PENDING, but APPROVED ↔ REJECTED flips pass through PENDING.
+export const VOLUNTEER_APPLICATION_STATUSES = [
+  "PENDING",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "REJECTED",
+  "INFO_REQUESTED",
+] as const;
+
+// Non-decision states: the applicant-facing User.volunteerStatus mirror stays
+// (or returns to) "pending" — badges/login routing treat everything else as
+// awaiting approval.
+const NON_FINAL_REVIEW_STATUSES = ["PENDING", "UNDER_REVIEW", "INFO_REQUESTED"];
+
+const TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["UNDER_REVIEW", "INFO_REQUESTED", "APPROVED", "REJECTED"],
+  UNDER_REVIEW: ["PENDING", "INFO_REQUESTED", "APPROVED", "REJECTED"],
+  INFO_REQUESTED: ["PENDING", "UNDER_REVIEW", "APPROVED", "REJECTED"],
+  APPROVED: ["PENDING"],
+  REJECTED: ["PENDING"],
+};
+
+// ── Field rules — the backend is the authority ────────────────────────────
+// The web forms (public + portal) and the Flutter app inline these exact
+// strings for live validation; 400 bodies carry them too, so every client
+// surfaces identical messages.
+const NAME_MIN = 3;
+const MOTIVATION_MIN = 20;
+const EMAIL_RULE = /^\S+@\S+\.\S+$/;
+
+interface ApplicationInput {
+  fullName: string;
+  email: string;
+  phone: string;
+  city: string;
+  occupation: string | null;
+  motivation: string;
+}
+
+/** Body value wins over the signed-in profile; both trimmed. */
+function applicationInputFrom(
+  body: Record<string, unknown>,
+  sessionUser: { name?: string | null; email?: string | null; phone?: string | null } | null
+): ApplicationInput {
+  return {
+    fullName: String(body?.fullName ?? sessionUser?.name ?? "").trim(),
+    email: String(body?.email ?? sessionUser?.email ?? "").trim().toLowerCase(),
+    phone: String(body?.phone ?? sessionUser?.phone ?? "").trim(),
+    city: String(body?.city ?? "").trim(),
+    occupation: body?.occupation ? String(body.occupation).trim() : null,
+    motivation: String(body?.motivation ?? "").trim(),
+  };
+}
+
+/**
+ * Authoritative validation for the volunteer application fields (POST and the
+ * owner resubmit PATCH). Fixed field order — the first failing rule is the
+ * single 400 message every client shows.
+ */
+/**
+ * Phone rule shared with the web validators' phoneRule: a bare 10-digit
+ * number, optionally prefixed with +91 (spaces/dashes tolerated).
+ */
+function isTenDigitPhone(v: string): boolean {
+  const digits = v.replace(/\D/g, "");
+  const bare = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
+  return bare.length === 10;
+}
+
+function validateApplicationInput(input: ApplicationInput): void {
+  if (!input.fullName) throw new ApiError("Full name is required", 400);
+  if (input.fullName.length < NAME_MIN)
+    throw new ApiError("Full name must be at least 3 characters", 400);
+  if (!input.email) throw new ApiError("Email is required", 400);
+  if (!EMAIL_RULE.test(input.email))
+    throw new ApiError("Enter a valid email address", 400);
+  if (!input.phone) throw new ApiError("Phone is required", 400);
+  if (!isTenDigitPhone(input.phone))
+    throw new ApiError("Phone must be exactly 10 digits", 400);
+  if (!input.city) throw new ApiError("City is required", 400);
+  if (input.motivation.length < MOTIVATION_MIN)
+    throw new ApiError(
+      `Please tell us a bit more — motivation must be at least ${MOTIVATION_MIN} characters`,
+      400
+    );
+}
+
+/**
+ * Derive a cheap review timeline from the record's own timestamps — enough
+ * for the applicant trackers (web portal + mobile) without a history table.
+ */
+function buildTimeline(application: {
+  status: string;
+  createdAt: Date;
+  reviewedAt: Date | null;
+  reviewNote: string | null;
+}): Array<{ key: string; label: string; at: string | null; note?: string }> {
+  const iso = (d: Date | null) => (d ? d.toISOString() : null);
+  const events: Array<{ key: string; label: string; at: string | null; note?: string }> = [
+    { key: "SUBMITTED", label: "Application submitted", at: iso(application.createdAt) },
+  ];
+  if (application.status === "INFO_REQUESTED") {
+    events.push({
+      key: "INFO_REQUESTED",
+      label: "Additional information requested",
+      at: iso(application.reviewedAt),
+      ...(application.reviewNote ? { note: application.reviewNote } : {}),
+    });
+  } else if (application.status !== "PENDING") {
+    // A decision was (or is being) made after review; the exact hand-over
+    // timestamp isn't tracked, so the stage carries no time.
+    events.push({ key: "UNDER_REVIEW", label: "Under review", at: null });
+  }
+  if (application.status === "APPROVED" || application.status === "REJECTED") {
+    events.push({
+      key: application.status,
+      label: application.status === "APPROVED" ? "Application approved" : "Application rejected",
+      at: iso(application.reviewedAt),
+      ...(application.status === "REJECTED" && application.reviewNote
+        ? { note: application.reviewNote }
+        : {}),
+    });
+  }
+  return events;
+}
+
 // GET /api/volunteer-applications?mine=1 | (ADMIN) ?status&q
 router.get("/", async (req, res) => {
   try {
@@ -95,21 +225,9 @@ router.post("/", async (req, res) => {
       ? await db.user.findUnique({ where: { id: session.userId } })
       : null;
 
-    const fullName = String(body?.fullName ?? sessionUser?.name ?? "").trim();
-    const email = String(body?.email ?? sessionUser?.email ?? "").trim().toLowerCase();
-    const phone = String(body?.phone ?? sessionUser?.phone ?? "").trim();
-    const city = String(body?.city ?? "").trim();
-    const occupation = body?.occupation ? String(body.occupation).trim() : null;
-    const motivation = String(body?.motivation ?? "").trim();
-
-    if (!fullName || !email || !city)
-      throw new ApiError("Full name, email and city are required", 400);
-    // Anonymous applicants must give a phone; signed-in users may have none on
-    // their profile (the mobile form never collects one).
-    if (!phone && !sessionUser)
-      throw new ApiError("Full name, email, phone and city are required", 400);
-    if (motivation.length < 20)
-      throw new ApiError("Please tell us a bit more — motivation must be at least 20 characters", 400);
+    const input = applicationInputFrom(body, sessionUser);
+    validateApplicationInput(input);
+    const { fullName, email, phone, city, occupation, motivation } = input;
 
     const skills = toJsonList(body?.skills);
     const availability = toJsonList(body?.availability);
@@ -268,7 +386,8 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET /api/volunteer-applications/mine — latest application of the signed-in user
+// GET /api/volunteer-applications/mine — latest application of the signed-in
+// user, plus a derived review timeline (submitted/under review/decision).
 router.get("/mine", async (req, res) => {
   try {
     const session = await requireAuth(req);
@@ -276,46 +395,149 @@ router.get("/mine", async (req, res) => {
       where: { userId: session.userId },
       orderBy: { createdAt: "desc" },
     });
-    return json(res, { application: application ?? null });
+    return json(res, {
+      application: application ?? null,
+      ...(application ? { timeline: buildTimeline(application) } : {}),
+    });
   } catch (e) {
     return handleError(e, res);
   }
 });
 
-const ALLOWED = ["APPROVED", "REJECTED", "PENDING"];
-// Review machine: decide from PENDING; a decision can be undone back to
-// PENDING, but APPROVED ↔ REJECTED flips must pass through PENDING.
-const TRANSITIONS: Record<string, string[]> = {
-  PENDING: ["APPROVED", "REJECTED"],
-  APPROVED: ["PENDING"],
-  REJECTED: ["PENDING"],
-};
+const ALLOWED = VOLUNTEER_APPLICATION_STATUSES;
 
-// PATCH /api/volunteer-applications/:id — admin reviews an application
+// PATCH /api/volunteer-applications/:id
+// - ADMIN: review machine (under review / request info / approve / reject /
+//   undo back to pending). Mirrors User.volunteerStatus for the app badge.
+// - Applicant (owner): may edit and resubmit their OWN application, only
+//   while it is INFO_REQUESTED. Same endpoint and payload shape the web
+//   portal and the mobile app both use.
 router.patch("/:id", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN");
+    const session = await requireAuth(req);
     const { id } = req.params;
     const body = req.body ?? {};
-
-    const status = String(body?.status ?? "");
-    if (!ALLOWED.includes(status))
-      throw new ApiError("Status must be APPROVED, REJECTED or PENDING", 400);
 
     const application = await db.volunteerApplication.findUnique({ where: { id } });
     if (!application) throw new ApiError("Application not found", 404);
 
+    if (session.role !== "ADMIN") {
+      if (application.userId !== session.userId)
+        throw new ApiError("You do not have permission for this action", 403);
+      if (application.status !== "INFO_REQUESTED")
+        throw new ApiError(
+          "Your application can be updated only after additional information is requested",
+          403
+        );
+
+      // Merge the body over the stored record: fields the client omits (e.g.
+      // the web portal form doesn't collect the legacy optionals) keep their
+      // current values, then the whole record is re-validated.
+      const merged = {
+        fullName:
+          body?.fullName !== undefined ? String(body.fullName ?? "").trim() : application.fullName,
+        email:
+          body?.email !== undefined
+            ? String(body.email ?? "").trim().toLowerCase()
+            : application.email,
+        phone: body?.phone !== undefined ? String(body.phone ?? "").trim() : application.phone,
+        city: body?.city !== undefined ? String(body.city ?? "").trim() : application.city,
+        occupation:
+          body?.occupation !== undefined
+            ? body.occupation
+              ? String(body.occupation).trim()
+              : null
+            : application.occupation ?? null,
+        motivation:
+          body?.motivation !== undefined
+            ? String(body.motivation ?? "").trim()
+            : application.motivation,
+      };
+      validateApplicationInput(merged);
+
+      const ownerData: Record<string, unknown> = { ...merged, status: "PENDING" };
+      if (body?.skills !== undefined) ownerData.skills = toJsonList(body.skills);
+      if (body?.availability !== undefined) ownerData.availability = toJsonList(body.availability);
+      if (body?.customSkills !== undefined) ownerData.customSkills = toJsonList(body.customSkills);
+      if (body?.serviceAreas !== undefined) ownerData.serviceAreas = toJsonList(body.serviceAreas);
+      if (body?.state !== undefined) ownerData.state = body.state ? String(body.state).trim() : null;
+      if (body?.country !== undefined)
+        ownerData.country = body.country ? String(body.country).trim() : null;
+      if (body?.postalCode !== undefined)
+        ownerData.postalCode = body.postalCode ? String(body.postalCode).trim() : null;
+      if (body?.priorExperience !== undefined)
+        ownerData.priorExperience = body.priorExperience ? String(body.priorExperience).trim() : null;
+      if (body?.emergencyContact !== undefined)
+        ownerData.emergencyContact = body.emergencyContact ? String(body.emergencyContact).trim() : null;
+      if (body?.emergencyPhone !== undefined)
+        ownerData.emergencyPhone = body.emergencyPhone ? String(body.emergencyPhone).trim() : null;
+      if (body?.addressLine1 !== undefined)
+        ownerData.addressLine1 = body.addressLine1 ? String(body.addressLine1).trim() : null;
+      if (body?.addressLine2 !== undefined)
+        ownerData.addressLine2 = body.addressLine2 ? String(body.addressLine2).trim() : null;
+      if (body?.willingToTravel !== undefined) ownerData.willingToTravel = Boolean(body.willingToTravel);
+      if (body?.remoteVolunteering !== undefined)
+        ownerData.remoteVolunteering = Boolean(body.remoteVolunteering);
+      if (body?.isFlexible !== undefined) ownerData.isFlexible = Boolean(body.isFlexible);
+      if (body?.maxTravelDistance !== undefined && body?.maxTravelDistance !== null && body?.maxTravelDistance !== "") {
+        const v = Number(body.maxTravelDistance);
+        if (!Number.isFinite(v) || v < 0 || v > 100000)
+          throw new ApiError("maxTravelDistance must be a non-negative number (miles)", 400);
+        ownerData.maxTravelDistance = Math.round(v);
+      }
+
+      const resubmitted = await db.volunteerApplication.update({ where: { id }, data: ownerData });
+
+      await logActivity(
+        merged.fullName,
+        "VOLUNTEER_APPLICATION_RESUBMIT",
+        "VOLUNTEER_APPLICATION",
+        `${merged.email} · ${merged.city}`,
+        session.userId
+      );
+      return json(res, { application: resubmitted });
+    }
+
+    const status = String(body?.status ?? "");
+    if (!(ALLOWED as readonly string[]).includes(status))
+      throw new ApiError(
+        `Status must be one of ${ALLOWED.join(", ")}`,
+        400
+      );
+
     assertTransition(TRANSITIONS, application.status, status, "volunteer application", 400);
 
+    // Asking for more information without saying what is missing is pointless.
+    if (status === "INFO_REQUESTED" && !String(body?.reviewNote ?? "").trim())
+      throw new ApiError(
+        "A review note is required when requesting additional information",
+        400
+      );
+
     const data: Record<string, unknown> = { status };
+    if (status === "APPROVED" || status === "REJECTED" || status === "INFO_REQUESTED") {
+      data.reviewedAt = new Date();
+      data.reviewedBy = session.userId;
+    }
     if (body?.reviewNote !== undefined)
       data.reviewNote = body.reviewNote ? String(body.reviewNote) : null;
     if (body?.adminNotes !== undefined)
       data.adminNotes = body.adminNotes ? String(body.adminNotes) : null;
 
+    if (NON_FINAL_REVIEW_STATUSES.includes(status)) {
+      if (application.userId) {
+        // Applicant-facing mirror: every non-decision state reads as
+        // "awaiting approval" — including undoing a decision back to PENDING.
+        await db.user
+          .update({
+            where: { id: application.userId },
+            data: { volunteerStatus: "pending" },
+          })
+          .catch(() => undefined); // applicant row may already be gone
+      }
+    }
+
     if (status === "APPROVED") {
-      data.reviewedAt = new Date();
-      data.reviewedBy = session.userId;
       if (application.userId) {
         // Account activation goes through the shared User-status owner so the
         // PENDING → ACTIVE transition is validated and audit-logged in one place.
@@ -355,7 +577,6 @@ router.patch("/:id", async (req, res) => {
         });
       }
     } else if (status === "REJECTED") {
-      data.reviewedAt = new Date();
       if (application.userId) {
         const reason = body?.reason ? String(body.reason) : null;
         await db.user.update({

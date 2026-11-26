@@ -51,6 +51,7 @@ import {
   Siren,
   Sparkles,
   Trophy,
+  Undo2,
   UserCheck,
   UserPlus,
   Users,
@@ -312,7 +313,7 @@ const PRIORITY_TONE: Record<string, Tone> = {
   LOW: "neutral",
 };
 
-const APP_FILTERS = ["PENDING", "APPROVED", "REJECTED", "ALL"];
+const APP_FILTERS = ["PENDING", "UNDER_REVIEW", "INFO_REQUESTED", "APPROVED", "REJECTED", "ALL"];
 const VOL_FILTERS = ["ALL", "PENDING", "ACTIVE", "INACTIVE", "SUSPENDED"];
 const TASK_STATUS_FILTERS = ["ALL", "ASSIGNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
 
@@ -806,6 +807,17 @@ function ApplicationsTab({
   const [rejectNote, setRejectNote] = useState("");
   const [rejecting, setRejecting] = useState(false);
 
+  /* request-info flow: FormSheet (note REQUIRED) → ConfirmDialog */
+  const [infoTarget, setInfoTarget] = useState<Application | null>(null);
+  const [infoPending, setInfoPending] = useState<Application | null>(null);
+  const [infoNote, setInfoNote] = useState("");
+  const [infoNoteError, setInfoNoteError] = useState<string | null>(null);
+  const [requestingInfo, setRequestingInfo] = useState(false);
+
+  /* reopen flow: a decided application can be reconsidered back to PENDING */
+  const [reopenPending, setReopenPending] = useState<Application | null>(null);
+  const [reopening, setReopening] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -819,7 +831,10 @@ function ApplicationsTab({
       );
       const list = (Array.isArray(data) ? data : (data.items ?? [])).slice();
       list.sort((a, b) => {
-        const rank = (s: string) => (s === "PENDING" ? 0 : 1);
+        // Applications awaiting an action (submitted / under review / info
+        // requested) float above decided ones, newest first.
+        const rank = (s: string) =>
+          ["PENDING", "UNDER_REVIEW", "INFO_REQUESTED"].includes(s) ? 0 : 1;
         if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
@@ -906,7 +921,57 @@ function ApplicationsTab({
     }
   };
 
-  const busy = approving || rejecting;
+  const runRequestInfo = async () => {
+    if (!infoPending?.id) return;
+    setRequestingInfo(true);
+    try {
+      await patch(`/api/volunteer-applications/${infoPending.id}`, {
+        status: "INFO_REQUESTED",
+        reviewNote: infoNote.trim(),
+      });
+      toast.success("Information requested — the applicant can now update and resubmit");
+      setInfoPending(null);
+      setInfoTarget(null);
+      setInfoNote("");
+      setInfoNoteError(null);
+      setDetail(null);
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to request information");
+    } finally {
+      setRequestingInfo(false);
+    }
+  };
+
+  const runReopen = async () => {
+    if (!reopenPending?.id) return;
+    setReopening(true);
+    try {
+      await patch(`/api/volunteer-applications/${reopenPending.id}`, {
+        status: "PENDING",
+      });
+      toast.success("Application moved back to pending");
+      setReopenPending(null);
+      setDetail(null);
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to reopen application");
+    } finally {
+      setReopening(false);
+    }
+  };
+
+  const busy = approving || rejecting || requestingInfo || reopening;
+
+  /**
+   * Review actions per the backend machine: PENDING/UNDER_REVIEW/
+   * INFO_REQUESTED can be decided or sent for info; decisions can only be
+   * undone back to PENDING.
+   */
+  const inReviewableState = (s: string) =>
+    ["PENDING", "UNDER_REVIEW", "INFO_REQUESTED"].includes(s);
 
   const appCsv: CsvColumn<Application>[] = useMemo(
     () => [
@@ -1041,12 +1106,39 @@ function ApplicationsTab({
                 <MoreHorizontal className="size-4" aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem onClick={() => setDetail(a)}>
                 <Info className="size-4" aria-hidden="true" /> View details
               </DropdownMenuItem>
-              {a.status === "PENDING" ? (
+              {inReviewableState(a.status) ? (
                 <>
+                  {a.status === "PENDING" ? (
+                    <DropdownMenuItem onClick={() => {
+                      patch(`/api/volunteer-applications/${a.id}`, { status: "UNDER_REVIEW" })
+                        .then(async () => {
+                          toast.success("Marked as under review");
+                          setDetail(null);
+                          await load();
+                          onChanged();
+                        })
+                        .catch((e) =>
+                          toast.error(e instanceof Error ? e.message : "Failed to update application")
+                        );
+                    }}>
+                    <Play className="size-4" aria-hidden="true" /> Mark under review
+                    </DropdownMenuItem>
+                  ) : null}
+                  {a.status !== "INFO_REQUESTED" ? (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setInfoTarget(a);
+                        setInfoNote("");
+                        setInfoNoteError(null);
+                      }}
+                    >
+                      <Megaphone className="size-4" aria-hidden="true" /> Request info
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuItem
                     onClick={() => {
                       setApproveTarget(a);
@@ -1065,7 +1157,11 @@ function ApplicationsTab({
                     <X className="size-4" aria-hidden="true" /> Reject
                   </DropdownMenuItem>
                 </>
-              ) : null}
+              ) : (
+                <DropdownMenuItem onClick={() => setReopenPending(a)}>
+                  <Undo2 className="size-4" aria-hidden="true" /> Back to pending
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1190,12 +1286,45 @@ function ApplicationsTab({
         }
         status={detail ? <StatusBadge status={detail.status} /> : null}
         footer={
-          detail && detail.status === "PENDING" ? (
+          detail && inReviewableState(detail.status) ? (
             <>
               <p className="text-xs text-muted-foreground">
                 Applied {formatDateTime(detail.createdAt)}
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
+                {detail.status === "PENDING" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      patch(`/api/volunteer-applications/${detail.id}`, { status: "UNDER_REVIEW" })
+                        .then(async () => {
+                          toast.success("Marked as under review");
+                          setDetail(null);
+                          await load();
+                          onChanged();
+                        })
+                        .catch((e) =>
+                          toast.error(e instanceof Error ? e.message : "Failed to update application")
+                        );
+                    }}
+                  >
+                    <Play className="size-3.5" aria-hidden="true" /> Mark under review
+                  </Button>
+                ) : null}
+                {detail.status !== "INFO_REQUESTED" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setInfoTarget(detail);
+                      setInfoNote("");
+                      setInfoNoteError(null);
+                    }}
+                  >
+                    <Megaphone className="size-3.5" aria-hidden="true" /> Request info
+                  </Button>
+                ) : null}
                 <Button
                   size="sm"
                   onClick={() => {
@@ -1218,6 +1347,15 @@ function ApplicationsTab({
                 </Button>
               </div>
             </>
+          ) : detail && !inReviewableState(detail.status) ? (
+            <div className="flex w-full items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Applied {formatDateTime(detail.createdAt)}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setReopenPending(detail)}>
+                <Undo2 className="size-3.5" aria-hidden="true" /> Back to pending
+              </Button>
+            </div>
           ) : null
         }
       >
@@ -1462,6 +1600,72 @@ function ApplicationsTab({
         confirmLabel="Reject application"
         loading={rejecting}
         onConfirm={runReject}
+      />
+
+      {/* ==================== REQUEST INFO (FormSheet) ==================== */}
+      <FormSheet
+        open={!!infoTarget}
+        onOpenChange={(o) => {
+          if (!o) setInfoTarget(null);
+        }}
+        title="Request more information"
+        description="The application is marked “additional information required” — the applicant is told what to update and can resubmit."
+        size="sm"
+        submitLabel="Continue"
+        onSubmit={() => {
+          if (!infoNote.trim()) {
+            setInfoNoteError("Tell the applicant what information is missing");
+            return;
+          }
+          setInfoNoteError(null);
+          setInfoPending(infoTarget);
+        }}
+        badge={infoTarget ? <StatusBadge status={infoTarget.status} /> : null}
+      >
+        <FormSection
+          title="What is missing?"
+          description="Required — this note is shown to the applicant on their application."
+        >
+          <TextareaField
+            label="Note to the applicant"
+            required
+            value={infoNote}
+            onChange={(v) => {
+              setInfoNote(v);
+              if (infoNoteError) setInfoNoteError(null);
+            }}
+            placeholder="e.g. Please describe your weekend availability window and confirm your phone number…"
+            rows={4}
+            error={infoNoteError}
+          />
+        </FormSection>
+      </FormSheet>
+
+      <ConfirmDialog
+        open={!!infoPending}
+        onOpenChange={(o) => {
+          if (!o) setInfoPending(null);
+        }}
+        title="Request additional information?"
+        recordName={infoPending ? `${infoPending.fullName} · ${infoPending.email}` : null}
+        description="The applicant is asked to update and resubmit their application. It returns to the pending queue once they do."
+        confirmLabel="Request information"
+        loading={requestingInfo}
+        onConfirm={runRequestInfo}
+      />
+
+      {/* ===================== REOPEN (ConfirmDialog) ===================== */}
+      <ConfirmDialog
+        open={!!reopenPending}
+        onOpenChange={(o) => {
+          if (!o) setReopenPending(null);
+        }}
+        title="Move this application back to pending?"
+        recordName={reopenPending ? `${reopenPending.fullName} · ${reopenPending.email}` : null}
+        description="The decision is undone and the application waits in the queue again. The applicant-facing badge returns to “pending”."
+        confirmLabel="Back to pending"
+        loading={reopening}
+        onConfirm={runReopen}
       />
 
       {/* ===================== TEMP CREDS REVEAL (Dialog) ===================== */}

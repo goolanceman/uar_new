@@ -8,6 +8,8 @@ import { parseGallery, coverImageOf } from "@/lib/campaign-image";
 import { cn, formatNumber, titleCase } from "@/lib/utils";
 import { formatINRCompact, formatDate } from "@/lib/format";
 import { ViewSwitcher, useViewPref } from "@/components/shared/view-switcher";
+import { useMasters } from "@/hooks/use-masters";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +36,7 @@ import { Section, EmptyState, CampaignIcon } from "@/components/public/shared";
 import { CAMPAIGN_CONTENT, accentSoft } from "@/components/public/campaign-data";
 import {
   CalendarDays,
+  Clock,
   Filter,
   HandHeart,
   Info,
@@ -43,6 +46,7 @@ import {
   Phone,
   Search,
   SearchX,
+  Share2,
   Siren,
   Users,
 } from "lucide-react";
@@ -71,7 +75,11 @@ interface LiveCampaign {
   status?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  createdAt?: string | null;
   urgent?: boolean | null;
+  urgencyLevel?: string | null;
+  urgencyReason?: string | null;
+  urgentUntil?: string | null;
   taxEligible?: boolean | null;
   minDonation?: number | null;
   gallery?: string | null;
@@ -80,7 +88,15 @@ interface LiveCampaign {
 }
 
 type StatusFilter = "all" | "active" | "urgent" | "ending";
-type SortKey = "featured" | "raised" | "ending" | "newest";
+type SortKey = "featured" | "trending" | "recent" | "raised" | "ending" | "newest";
+
+/** Whole days until a deadline (ceil); null when unknown, negative = passed. */
+function daysUntil(date?: string | null): number | null {
+  if (!date) return null;
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+}
 
 /** Parses the JSON-array `gallery` column; returns [] on anything else. */
 /** Days left until endDate (ceil); null when unknown. Negative = ended. */
@@ -154,18 +170,105 @@ function TaxEligibleChip() {
   );
 }
 
+/** Severity badge — the label comes from the backend urgencyLevel, never invented here. */
+function UrgencyLevelBadge({ level }: { level?: string | null }) {
+  return (
+    <Badge className="shrink-0 border-0 bg-red-500/15 text-[10px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400">
+      <Siren className="mr-1 size-3" aria-hidden />
+      {level ? titleCase(level) : "Urgent"}
+    </Badge>
+  );
+}
+
+/** navigator.share with a clipboard fallback (same pattern as the detail page). */
+async function shareCampaignLink(slug: string, title: string) {
+  const url = `${window.location.origin}${window.location.pathname}#/campaigns/${slug}`;
+  try {
+    if (typeof navigator.share === "function") {
+      await navigator.share({ title, text: `${title} — United Angel Reach`, url });
+      return;
+    }
+    throw new Error("no-share");
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied — share it with anyone");
+    } catch {
+      toast.error("Couldn't share — copy the URL from the address bar");
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Urgent Causes card                                                  */
+/* ------------------------------------------------------------------ */
+
+function UrgentCauseCard({ c }: { c: LiveCampaign }) {
+  const pct = pctOf(c);
+  const left = daysUntil(c.urgentUntil);
+  const level = c.urgencyLevel ? titleCase(c.urgencyLevel) : "Urgent";
+  return (
+    <Card className="flex flex-col gap-2 border-red-500/25 p-4">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <UrgencyLevelBadge level={c.urgencyLevel} />
+        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400" aria-label="Urgent appeal">
+          Urgent appeal
+        </span>
+        {left !== null && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground">
+            <Clock className="size-3" aria-hidden />
+            {left <= 0 ? "Final hours" : `${left}d ${left === 1 ? "left" : "left"}`}
+          </span>
+        )}
+      </div>
+      <Link href={`/campaigns/${c.slug}`} className="font-semibold leading-snug hover:underline">
+        {c.title}
+      </Link>
+      {c.urgencyReason ? (
+        <p className="line-clamp-2 text-xs text-muted-foreground">{c.urgencyReason}</p>
+      ) : null}
+      <div className="mt-auto">
+        <Progress value={pct} className="h-1.5 [&>div]:bg-red-500" aria-label={`${pct}% raised`} />
+        <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
+          <span className="font-semibold text-foreground">{formatINRCompact(c.raisedAmount)}</span>
+          <span>{pct}% of {formatINRCompact(c.targetAmount)}</span>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" className="flex-1 bg-red-600 text-white hover:bg-red-700" asChild>
+          <Link href={`/donate?campaign=${c.slug}`}>Donate</Link>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={`Share ${c.title}`}
+          onClick={() => void shareCampaignLink(c.slug ?? c.id, c.title)}
+        >
+          <Share2 className="size-4" aria-hidden />
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 /* ================================================================== */
 /* CampaignsPage                                                       */
 /* ================================================================== */
 
 export function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
+  const [urgent, setUrgent] = useState<LiveCampaign[]>([]);
+  const [trendOrder, setTrendOrder] = useState<string[] | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("ALL");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sort, setSort] = useState<SortKey>("featured");
   const [view, setView] = useViewPref("public-campaigns", "grid");
   const [page, setPage] = useState(1);
+
+  // Category vocabulary from the Master registry (CAMPAIGN_CATEGORY).
+  const { options: masterCategoryOptions } = useMasters("CAMPAIGN_CATEGORY");
 
   // Any change to the filter/sort inputs jumps back to page 1 so results
   // stay in sync with what's currently on screen.
@@ -191,16 +294,41 @@ export function CampaignsPage() {
     get<LiveCampaign[]>("/api/campaigns")
       .then((d) => alive && setCampaigns(Array.isArray(d) ? d : []))
       .catch(() => alive && setCampaigns([]));
+    // Active urgent appeals (server filters + orders + auto-expires) — the
+    // urgency labels/deadlines come from the backend only.
+    get<LiveCampaign[]>("/api/campaigns?urgent=1")
+      .then((d) => alive && setUrgent(Array.isArray(d) ? d : []))
+      .catch(() => alive && setUrgent([]));
     return () => {
       alive = false;
     };
   }, []);
 
+  // Trending order is donation volume over the last 14 days — only the API can
+  // compute it, so the server-ordered ids are cached when the sort is picked.
+  useEffect(() => {
+    if (sort !== "trending" || trendOrder !== null) return;
+    let alive = true;
+    get<LiveCampaign[]>("/api/campaigns?sort=trending")
+      .then((d) => alive && setTrendOrder(Array.isArray(d) ? d.map((c) => c.id) : []))
+      .catch(() => alive && setTrendOrder([]));
+    return () => {
+      alive = false;
+    };
+  }, [sort, trendOrder]);
+
   const categories = useMemo(() => {
     const set = new Set<string>();
     (campaigns ?? []).forEach((c) => c.category && set.add(c.category));
-    return Array.from(set).sort();
-  }, [campaigns]);
+    // Masters first (curated order + labels), any stragglers from live data after.
+    const options = masterCategoryOptions.filter((o) => set.has(o.value));
+    const known = new Set(options.map((o) => o.value));
+    const extras = Array.from(set).filter((c) => !known.has(c));
+    return [
+      ...options,
+      ...extras.map((c) => ({ value: c, label: titleCase(c) })),
+    ];
+  }, [campaigns, masterCategoryOptions]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -238,6 +366,22 @@ export function CampaignsPage() {
             Number(b.urgent ?? false) - Number(a.urgent ?? false) ||
             Number(b.featured ?? false) - Number(a.featured ?? false) ||
             b.raisedAmount - a.raisedAmount
+        );
+        break;
+      case "trending":
+        // Server-computed donation volume (last 14 days).
+        if (trendOrder) {
+          const rank = new Map(trendOrder.map((id, i) => [id, i]));
+          list.sort(
+            (a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity)
+          );
+        }
+        break;
+      case "recent":
+        list.sort(
+          (a, b) =>
+            (b.createdAt ? new Date(b.createdAt).getTime() : 0) -
+            (a.createdAt ? new Date(a.createdAt).getTime() : 0)
         );
         break;
       case "raised":
@@ -286,6 +430,27 @@ export function CampaignsPage() {
       title="All programmes"
       subtitle="Nine long-term campaigns — each one an educational resource, a rescue service and a funding pipeline at once."
     >
+      {/* ---------------- Urgent Causes (server-curated) ---------------- */}
+      {urgent.length > 0 && (
+        <Card className="mb-6 border-red-500/25 p-4 sm:p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="relative flex size-2" aria-hidden>
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex size-2 rounded-full bg-red-600" />
+            </span>
+            <h2 className="text-sm font-bold uppercase tracking-wide text-red-600 dark:text-red-400">
+              Urgent causes
+            </h2>
+            <span className="text-xs text-muted-foreground">— closing soon, need funds now</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {urgent.map((c) => (
+              <UrgentCauseCard key={c.id} c={c} />
+            ))}
+          </div>
+        </Card>
+      )}
+
       {/* ---------------- Toolbar ---------------- */}
       <Card className="mb-6 space-y-4 p-4 sm:p-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -315,6 +480,8 @@ export function CampaignsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="featured">Featured</SelectItem>
+                <SelectItem value="trending">Trending</SelectItem>
+                <SelectItem value="recent">Recently added</SelectItem>
                 <SelectItem value="raised">Most funded</SelectItem>
                 <SelectItem value="ending">Ending soon</SelectItem>
                 <SelectItem value="newest">Newest</SelectItem>
@@ -354,8 +521,8 @@ export function CampaignsPage() {
             <SelectContent>
               <SelectItem value="ALL">All causes</SelectItem>
               {categories.map((cat) => (
-                <SelectItem key={cat} value={cat}>
-                  {titleCase(cat)}
+                <SelectItem key={cat.value} value={cat.value}>
+                  {cat.label}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -89,6 +89,7 @@ import {
   ScanLine,
   ShieldCheck,
   Share2,
+  Siren,
   Sparkles,
   Syringe,
   Target,
@@ -130,9 +131,20 @@ interface LiveCampaign {
   minDonation?: number | null;
   taxEligible?: boolean | null;
   urgent?: boolean | null;
+  urgencyLevel?: string | null;
+  urgencyReason?: string | null;
+  urgentUntil?: string | null;
 }
 
 /** Parses the JSON-array `gallery` column; returns [] on anything else. */
+/** Whole days until an ISO deadline (ceil); null when unknown. */
+function daysUntilIso(date?: string | null): number | null {
+  if (!date) return null;
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+}
+
 interface Cause {
   id: string;
   code: string;
@@ -702,6 +714,11 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
     }
   };
 
+  // Urgency banner data — every value comes from the backend (auto-expired
+  // appeals already read as urgent=false server-side).
+  const urgentLeft = live?.urgent ? daysUntilIso(live.urgentUntil) : null;
+  const urgencyLevel = live?.urgencyLevel ? titleCase(live.urgencyLevel) : "Urgent";
+
   return (
     <div className="pb-4">
       {/* ================= TITLE BAR ================= */}
@@ -756,6 +773,46 @@ export function CampaignDetailPage({ slug }: { slug: string }) {
           </div>
         </div>
       </section>
+
+      {/* ================= URGENCY BANNER ================= */}
+      {live?.urgent === true && (
+        <Section className="pb-0 pt-4 sm:pt-5">
+          <div
+            className="flex flex-col gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 sm:flex-row sm:items-start sm:gap-3"
+            role="status"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-red-500/15">
+              <Siren className="size-5 text-red-600 dark:text-red-400" aria-hidden />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2 text-sm font-bold text-red-600 dark:text-red-400">
+                Urgent appeal
+                <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                  {urgencyLevel}
+                </span>
+                {urgentLeft !== null && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                    <Clock className="size-3" aria-hidden />
+                    {urgentLeft <= 0
+                      ? "Final hours"
+                      : `Closes in ${urgentLeft} ${urgentLeft === 1 ? "day" : "days"}`}
+                  </span>
+                )}
+              </p>
+              {live.urgencyReason ? (
+                <p className="mt-1 text-sm text-foreground">{live.urgencyReason}</p>
+              ) : null}
+            </div>
+            <Button
+              size="sm"
+              className="shrink-0 bg-red-600 text-white hover:bg-red-700"
+              onClick={() => navigate(`/donate?campaign=${content.slug}`)}
+            >
+              <Heart className="size-4" aria-hidden /> Donate now
+            </Button>
+          </div>
+        </Section>
+      )}
 
       {/* ================= GALLERY + DONATE CARD ================= */}
       <Section className="py-4 sm:py-5">
