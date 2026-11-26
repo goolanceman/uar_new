@@ -42,11 +42,11 @@ const FOLLOWUP_INCLUDE = {
   referral: { select: { id: true, code: true, status: true, priority: true } },
 } as const;
 
-// GET /api/follow-ups — ADMIN | DOCTOR | NURSE | VOLUNTEER.
+// GET /api/follow-ups — ADMIN | DOCTOR | NURSE | VOLUNTEER; BENEFICIARY own.
 // Filters: beneficiaryId, status, overdue=1 (dueDate in the past & PENDING).
 router.get("/", async (req, res) => {
   try {
-    await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "VOLUNTEER");
+    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "VOLUNTEER", "BENEFICIARY");
     const url = new URL(req.url, "http://localhost");
     const { page, limit, skip } = pageParams(url);
 
@@ -54,6 +54,11 @@ router.get("/", async (req, res) => {
     for (const f of ["beneficiaryId", "status"]) {
       const v = url.searchParams.get(f);
       if (v) where[f] = v;
+    }
+    if (session.role === "BENEFICIARY") {
+      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) return json(res, { items: [], total: 0, page: 1, pages: 1 });
+      where.beneficiaryId = own.id;
     }
     if (url.searchParams.get("overdue") === "1") {
       where.status = "PENDING";

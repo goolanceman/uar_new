@@ -11,9 +11,15 @@ export const router = Router();
 // GET /api/volunteer-attendances?volunteerId=&from=&to=&limit=
 router.get("/", async (req, res) => {
   try {
-    await requireRole(req, "ADMIN", "VOLUNTEER");
+    const session = await requireRole(req, "ADMIN", "VOLUNTEER");
     const sp = new URL(req.url, "http://localhost").searchParams;
-    const volunteerId = sp.get("volunteerId");
+    let volunteerId = sp.get("volunteerId");
+    // Volunteers only ever see their own register.
+    if (session.role === "VOLUNTEER") {
+      const own = await db.volunteer.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) return json(res, []);
+      volunteerId = own.id;
+    }
     const from = sp.get("from");
     const to = sp.get("to");
     const limit = Math.min(500, Math.max(1, parseInt(sp.get("limit") ?? "200", 10) || 200));
@@ -48,11 +54,52 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/volunteer-attendances — admin records a volunteer day
+// POST /api/volunteer-attendances — admin records a volunteer day; an ACTIVE
+// volunteer self-checks-in for today ({ taskId?, latitude?, longitude? }).
 router.post("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN");
+    const session = await requireRole(req, "ADMIN", "VOLUNTEER");
     const body = req.body ?? {};
+
+    if (session.role === "VOLUNTEER") {
+      const volunteer = await db.volunteer.findUnique({ where: { userId: session.userId } });
+      if (!volunteer || volunteer.status !== "ACTIVE")
+        throw new ApiError("Only active volunteers can check in", 403);
+
+      let task: { title: string; location: string | null } | null = null;
+      if (body?.taskId) {
+        task = await db.volunteerTask.findFirst({
+          where: { id: String(body.taskId), volunteerId: volunteer.id },
+          select: { title: true, location: true },
+        });
+        if (!task) throw new ApiError("Task not found", 404);
+      }
+
+      const now = new Date();
+      const day = new Date(now.toISOString().slice(0, 10));
+      const lat = Number(body?.latitude);
+      const lng = Number(body?.longitude);
+      const coords =
+        Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(5)},${lng.toFixed(5)}` : null;
+      const location = task?.location || coords;
+      const notes = task ? `Self check-in · ${task.title}` : "Self check-in";
+
+      const existing = await db.volunteerAttendance.findUnique({
+        where: { volunteerId_date: { volunteerId: volunteer.id, date: day } },
+      });
+      // Idempotent: a second tap the same day keeps the first check-in time.
+      if (existing?.checkIn) return json(res, existing);
+
+      const row = existing
+        ? await db.volunteerAttendance.update({
+            where: { id: existing.id },
+            data: { checkIn: now, location: existing.location ?? location, notes: existing.notes ?? notes },
+          })
+        : await db.volunteerAttendance.create({
+            data: { volunteerId: volunteer.id, date: day, checkIn: now, location, notes },
+          });
+      return json(res, row, 201);
+    }
 
     const volunteerId = String(body?.volunteerId ?? "");
     if (!volunteerId) throw new ApiError("volunteerId is required", 400);

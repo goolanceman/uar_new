@@ -55,7 +55,7 @@ function envelope<T>(items: T[], total: number, page: number, take: number) {
 // HOSPITAL sees only the org it owns.
 router.get("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN", "HOSPITAL");
+    const session = await requireRole(req, "ADMIN", "HOSPITAL", "DOCTOR");
     const sp = new URL(req.url, "http://localhost").searchParams;
     const q = sp.get("q")?.trim() || undefined;
     const status = sp.get("status") || undefined;
@@ -76,6 +76,22 @@ router.get("/", async (req, res) => {
       delete where.OR; // an owner sees exactly their org regardless of q
       delete where.status;
       delete where.type;
+    }
+
+    // Doctors pick a receiving org for referrals: verified orgs, directory fields only.
+    if (session.role === "DOCTOR") {
+      where.status = "VERIFIED";
+      const [items, total] = await Promise.all([
+        db.healthcareOrg.findMany({
+          where,
+          orderBy: { name: "asc" },
+          skip,
+          take,
+          select: { id: true, name: true, type: true, city: true, status: true },
+        }),
+        db.healthcareOrg.count({ where }),
+      ]);
+      return json(res, envelope(items, total, page, take));
     }
 
     const [items, total] = await Promise.all([
@@ -174,12 +190,19 @@ router.get("/:id", async (req, res) => {
 // verifiedAt) or plain field edits.
 router.patch("/:id", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN");
+    const session = await requireRole(req, "ADMIN", "HOSPITAL");
     const { id } = req.params;
-    const body = req.body ?? {};
+    const body = { ...(req.body ?? {}) };
 
     const existing = await db.healthcareOrg.findUnique({ where: { id } });
     if (!existing) throw new ApiError("Organisation not found", 404);
+    // The owning partner edits its own profile; verification stays with admins.
+    if (session.role === "HOSPITAL") {
+      if (existing.ownerUserId !== session.userId)
+        throw new ApiError("You do not have permission for this action", 403);
+      delete body.status;
+      delete body.notes;
+    }
 
     const data: Prisma.HealthcareOrgUpdateInput = {};
 

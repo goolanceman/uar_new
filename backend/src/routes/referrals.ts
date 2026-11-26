@@ -48,11 +48,11 @@ const CHAIN: readonly string[] = REFERRAL_FLOW;
 const TERMINAL_CANCELLED: readonly string[] = REFERRAL_TERMINAL_STATUSES;
 
 // GET /api/referrals — ADMIN | DOCTOR | NURSE see all; HOSPITAL users see
-// only referrals addressed to their own organisation.
+// only referrals addressed to their own organisation; BENEFICIARY sees own.
 // Filters: beneficiaryId, status, priority.
 router.get("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "HOSPITAL");
+    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "HOSPITAL", "BENEFICIARY");
     const url = new URL(req.url, "http://localhost");
     const { page, limit, skip } = pageParams(url);
 
@@ -65,6 +65,10 @@ router.get("/", async (req, res) => {
       if (!org)
         throw new ApiError("No healthcare organisation is linked to your account", 403);
       where.receivingOrgId = org.id;
+    } else if (session.role === "BENEFICIARY") {
+      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) return json(res, { items: [], total: 0, page: 1, pages: 1 });
+      where.beneficiaryId = own.id;
     } else {
       for (const f of ["beneficiaryId", "status", "priority"]) {
         const v = url.searchParams.get(f);

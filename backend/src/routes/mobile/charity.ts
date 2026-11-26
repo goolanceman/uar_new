@@ -3,16 +3,25 @@
  *
  * Ports the legacy Laravel controllers 1:1 onto the uarnew backend so the
  * Flutter app works unchanged. Source of truth:
- * uar/php/admin routes/api.php + app/Http/Controllers/{CauseController,
- * DonationController, CharityCardController, DonationPointsController,
+ * uar/php/admin routes/api.php + app/Http/Controllers/{DonationController,
+ * CharityCardController, DonationPointsController,
  * AchievementsController, DonationGoalsController, CharityEventsController}.php
  * (+ app/Services/CharityCardService.php, app/Models/{Post,Donation,
  * DonationPoint,CharityCard,UserAchievement,EventParticipant,CauseFollower}.php).
  *
+ * CAUSES → CAMPAIGNS: the mobile "causes" feature was a mobile-only duplicate
+ * (CommunityPost type=cause) of the platform's Campaign domain. The app now
+ * consumes the same website endpoints (GET /api/campaigns, POST /api/donations,
+ * POST /api/payments[/verify]) — the mobile-only cause routes and the
+ * order/verify copies were removed, and their rows retired by
+ * scripts/cleanup-mobile-causes.ts. The admin Community view still reads the
+ * legacy cause rows via the /community/admin/* routes below, so
+ * serializeCause/causeWireFor stay.
+ *
  * Legacy middleware per route (mirrored here):
- *   - causes + donations CRUD  → `checkHeader` only (apikey, enforced by the
- *     mount-level mobileGate). Like the PHP, handlers take the acting user
- *     from the `user_id` param — the app's NewApiService sends NO authtoken.
+ *   - donations (fetchCauseDonations) → `checkHeader` only (apikey, enforced by
+ *     the mount-level mobileGate). Like the PHP, the handler takes the acting
+ *     user from the `user_id` param — the app's NewApiService sends NO authtoken.
  *   - razorpay/webhook         → NO middleware at all; the Razorpay HMAC
  *     signature is the auth.
  *   - charity/*                → `checkHeader` + AuthorizeUser ($request->user()).
@@ -23,9 +32,8 @@
  *     user_id). Reported as a deliberate compat decision.
  *
  * Wire contract (checked against the Flutter models — lib/models/*):
- *   cause_model.dart, cause_category_model.dart, donation_model.dart,
- *   charity_card_model.dart, achievement_model.dart, donation_goal_model.dart,
- *   charity_event_model.dart, impact_metrics_model.dart.
+ *   donation_model.dart, charity_card_model.dart, achievement_model.dart,
+ *   donation_goal_model.dart, charity_event_model.dart, impact_metrics_model.dart.
  * Envelope { status, message, data? }; business failures HTTP 200 + status:false;
  * only auth failures 401. All ids are String cuids; money is Float; dates ISO.
  *
@@ -59,6 +67,7 @@ import {
   feedEvent,
   wrap,
   mobileErrorHandler,
+  syncPostCommentCounts,
 } from "@/lib/mobile/compat";
 import type { Session } from "@/lib/session";
 import { validateSession } from "@/lib/session";
@@ -231,11 +240,16 @@ const LEGACY_STATUS: Record<string, string> = {
   CANCELLED: "cancelled",
 };
 
-function serializeDonation(d: Donation & { user?: unknown; cause?: unknown }) {
+function serializeDonation(
+  d: Donation & { user?: unknown; cause?: unknown; campaign?: { id: string; title: string; slug: string } | null }
+) {
   return {
     id: d.id,
     user_id: d.donorId,
     cause_id: d.causePostId,
+    // donations now target website campaigns (mobile Causes = Campaigns)
+    campaign_id: d.campaignId,
+    campaign: d.campaign ?? null,
     amount: d.amount,
     currency: d.currency,
     // legacy status values ('pending'|'success'|'failed') — donation_model.dart
@@ -436,9 +450,11 @@ async function evaluateAchievements(userId: string): Promise<void> {
 }
 
 /**
- * Money moved: raised_amount on the cause post + points + card sync +
- * achievements + push + SSE feed. Shared by verifyDonation and the webhook.
- * Idempotent per donation (only a PENDING donation settles).
+ * Money moved: the campaign's raised_amount (same rule as the website's
+ * settleCompleted) + points + card sync + achievements + push + SSE feed.
+ * Shared by the webhook (async settlement when the app never reaches
+ * POST /api/payments/verify). Idempotent per donation (only a PENDING
+ * donation settles).
  */
 async function settleDonation(donationId: string, paymentId: string | null): Promise<boolean> {
   const donation = await db.donation.findUnique({ where: { id: donationId } });
@@ -454,7 +470,13 @@ async function settleDonation(donationId: string, paymentId: string | null): Pro
     },
   });
 
-  if (donation.causePostId) {
+  if (donation.campaignId) {
+    await db.campaign.update({
+      where: { id: donation.campaignId },
+      data: { raisedAmount: { increment: donation.amount } },
+    }).catch(() => undefined); // campaign may be gone — donation still settles
+  } else if (donation.causePostId) {
+    // legacy mobile-cause donations (data retired by cleanup-mobile-causes.ts)
     await db.communityPost.update({
       where: { id: donation.causePostId },
       data: { raisedAmount: { increment: donation.amount } },
@@ -474,456 +496,55 @@ async function settleDonation(donationId: string, paymentId: string | null): Pro
     feedEvent("donation.verified", {
       donation_id: donation.id,
       amount: donation.amount,
-      cause_post_id: donation.causePostId,
+      campaign_id: donation.campaignId,
       user_id: donation.donorId,
     });
   }
   return true;
 }
 
-async function nextReceiptNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  let n = (await db.donation.count()) + 1;
-  let receiptNumber = `UAR-RCPT-${year}-${String(n).padStart(5, "0")}`;
-  while (await db.donation.findUnique({ where: { receiptNumber } })) {
-    n += 1;
-    receiptNumber = `UAR-RCPT-${year}-${String(n).padStart(5, "0")}`;
-  }
-  return receiptNumber;
-}
-
-// ─── Razorpay REST client (the PHP used the razorpay/sdk package) ────────────
-
-const RAZORPAY_API = "https://api.razorpay.com/v1";
-
-function razorpayAuth(): string | null {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  if (!keyId || !keySecret) return null;
-  return `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString("base64")}`;
-}
-
-// ═══════════════════════════════ CAUSES ══════════════════════════════════════
-// Legacy middleware: checkHeader only — acting user comes from `user_id`.
-
-/** CauseController::createCause */
-wrap(router, "post", "/createCause", async (req, res) => {
-  const p = params(req);
-  const userId = str(p.user_id);
-  const description = str(p.description);
-  const goalAmount = num(p.goal_amount, -1);
-  const categoryId = optNum(p.category_id);
-  if (!userId) return fail(res, "The user id field is required.");
-  if (!str(p.title).trim()) return fail(res, "The title field is required.");
-  if (!description.trim()) return fail(res, "The description field is required.");
-  if (goalAmount < 100) return fail(res, "The goal amount must be at least 100.");
-  if (!categoryId) return fail(res, "The category id field is required.");
-
-  const user = await db.user.findUnique({ where: { id: userId } });
-  if (!user) return fail(res, "Selected user id is invalid.");
-  const category = await db.causeCategory.findUnique({ where: { id: categoryId } });
-  if (!category) return fail(res, "Selected category id is invalid.");
-
-  // Flutter sends `end_date` (YYYY-MM-DD); the legacy validator read `deadline`.
-  const deadlineRaw = optStr(p.deadline) ?? optStr(p.end_date);
-  let deadline: Date | null = null;
-  if (deadlineRaw) {
-    deadline = new Date(deadlineRaw);
-    if (Number.isNaN(deadline.getTime())) return fail(res, "The deadline must be a valid date.");
-    if (deadline.getTime() < new Date().setHours(0, 0, 0, 0))
-      return fail(res, "The deadline must be a date after today.");
-  }
-
-  const cause = await db.communityPost.create({
-    data: {
-      userId,
-      desc: description,
-      type: "cause",
-      goalAmount,
-      raisedAmount: 0,
-      deadline,
-      isVerified: false, // admin needs to verify
-      categoryId,
-      commentsCount: 0,
-      likesCount: 0,
-    },
-    include: POST_INCLUDE,
-  });
-
-  // Media content — the app sends `images` (jsonEncoded parts), the legacy
-  // contract said `media`. Accept both.
-  const rawMedia = [...csvListSafe(p.media), ...csvListSafe(p.images)];
-  for (const url of rawMedia.slice(0, 10)) {
-    await db.communityPostContent.create({
-      data: { postId: cause.id, contentType: mediaType(url), content: url },
-    });
-  }
-  if (rawMedia.length) {
-    const fresh = await db.communityPost.findUnique({ where: { id: cause.id }, include: POST_INCLUDE });
-    if (fresh) Object.assign(cause, fresh);
-  }
-
-  feedEvent("cause.created", { id: cause.id, user_id: userId, goal_amount: goalAmount });
-  return res.status(201).json({
-    status: true,
-    message: "Cause created successfully! Pending admin verification.",
-    data: serializeCause(cause),
-  });
-});
-
-function csvListSafe(v: unknown): string[] {
-  const decode = (s: string): string => {
-    try {
-      const parsed = JSON.parse(s); // NewApiService jsonEncodes list items
-      return typeof parsed === "string" ? parsed : s;
-    } catch {
-      return s;
-    }
-  };
-  if (Array.isArray(v)) return v.map((x) => decode(str(x))).filter(Boolean);
-  // NewApiService sends list items as `images[0]` — qs (extended urlencoded)
-  // already expands those into arrays; the object form is a just-in-case fallback.
-  if (v && typeof v === "object") {
-    return Object.values(v as Record<string, unknown>).map((x) => decode(str(x))).filter(Boolean);
-  }
-  return str(v).split(",").map((s) => decode(s.trim())).filter(Boolean);
-}
-
-function mediaType(url: string): number {
-  return /\.(mp4|mov|avi|wmv)$/i.test(url) ? 2 : 1; // 1 image | 2 video
-}
-
-/** CauseController::fetchCauses — active = no deadline or deadline >= today. */
-wrap(router, "post", "/fetchCauses", async (req, res) => {
-  const p = params(req);
-  const userId = optStr(p.user_id);
-  const categoryId = optNum(p.category_id);
-  const start = Math.max(0, num(p.offset, num(p.start, 0)));
-  const limit = Math.min(100, Math.max(1, num(p.limit, 20)));
-  const today = new Date();
-
-  const where = {
-    type: "cause",
-    OR: [{ deadline: null }, { deadline: { gte: today } }],
-    ...(categoryId ? { categoryId } : {}),
-  };
-  const rows = await db.communityPost.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    skip: start,
-    take: limit,
-    include: POST_INCLUDE,
-  });
-
-  const wires = await Promise.all(
-    rows.map(async (c) => {
-      const [followers, donations, following] = await Promise.all([
-        db.causeFollower.count({ where: { causeId: c.id } }),
-        db.donation.count({ where: { causePostId: c.id, paymentStatus: "COMPLETED" } }),
-        userId
-          ? db.causeFollower.findUnique({
-              where: { userId_causeId: { userId, causeId: c.id } },
-            }).then((f) => !!f)
-          : Promise.resolve(false),
-      ]);
-      return serializeCause(c, {
-        isFollowing: following,
-        followerCount: followers,
-        donationCount: donations,
-      });
-    })
-  );
-  return data(res, "Causes fetched successfully", wires);
-});
-
-/** CauseController::fetchCauseById */
-wrap(router, "post", "/fetchCauseById", async (req, res) => {
-  const p = params(req);
-  const causeId = str(p.cause_id);
-  if (!causeId) return fail(res, "The cause id field is required.");
-
-  const cause = await db.communityPost.findUnique({ where: { id: causeId }, include: POST_INCLUDE });
-  if (!cause || cause.type !== "cause") return fail(res, "Cause not found");
-
-  const userId = optStr(p.user_id);
-  const [followers, donations, following] = await Promise.all([
-    db.causeFollower.count({ where: { causeId: cause.id } }),
-    db.donation.count({ where: { causePostId: cause.id, paymentStatus: "COMPLETED" } }),
-    userId
-      ? db.causeFollower
-          .findUnique({ where: { userId_causeId: { userId, causeId: cause.id } } })
-          .then((f) => !!f)
-      : Promise.resolve(false),
-  ]);
-  return data(
-    res,
-    "Cause fetched successfully",
-    serializeCause(cause, { isFollowing: following, followerCount: followers, donationCount: donations })
-  );
-});
-
-/** CauseController::followCause */
-wrap(router, "post", "/followCause", async (req, res) => {
-  const p = params(req);
-  const userId = str(p.user_id);
-  const causeId = str(p.cause_id);
-  if (!userId) return fail(res, "The user id field is required.");
-  if (!causeId) return fail(res, "The cause id field is required.");
-
-  const cause = await db.communityPost.findUnique({ where: { id: causeId }, select: { id: true, type: true } });
-  if (!cause || cause.type !== "cause") return fail(res, "Selected cause id is invalid.");
-
-  const existing = await db.causeFollower.findUnique({ where: { userId_causeId: { userId, causeId } } });
-  if (existing) return fail(res, "Already following this cause");
-
-  await db.causeFollower.create({ data: { userId, causeId } });
-  return ok(res, "Cause followed successfully");
-});
-
-/** CauseController::unfollowCause */
-wrap(router, "post", "/unfollowCause", async (req, res) => {
-  const p = params(req);
-  const userId = str(p.user_id);
-  const causeId = str(p.cause_id);
-  if (!userId) return fail(res, "The user id field is required.");
-  if (!causeId) return fail(res, "The cause id field is required.");
-
-  const existing = await db.causeFollower.findUnique({ where: { userId_causeId: { userId, causeId } } });
-  if (!existing) return fail(res, "Not following this cause");
-
-  await db.causeFollower.delete({ where: { id: existing.id } });
-  return ok(res, "Cause unfollowed successfully");
-});
-
-/** CauseController::fetchMyCauses — follower rows with nested cause. */
-wrap(router, "post", "/fetchMyCauses", async (req, res) => {
-  const userId = str(params(req).user_id);
-  if (!userId) return fail(res, "The user id field is required.");
-
-  const rows = await db.causeFollower.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    include: { cause: { include: POST_INCLUDE } },
-  });
-  const wires = await Promise.all(
-    rows.map(async (f) => ({
-      id: f.id,
-      user_id: f.userId,
-      cause_id: f.causeId,
-      created_at: iso(f.createdAt),
-      updated_at: iso(f.updatedAt),
-      cause: await causeWireFor(f.causeId, true),
-    }))
-  );
-  return data(res, "Followed causes fetched successfully", wires);
-});
-
-/** CauseController::fetchCategories */
-wrap(router, "post", "/fetchCauseCategories", async (_req, res) => {
-  const categories = await db.causeCategory.findMany({
-    where: { isActive: true },
-    orderBy: { id: "asc" },
-  });
-  return data(
-    res,
-    "Categories fetched successfully",
-    categories.map((c) => ({
-      id: c.id,
-      name: c.name,
-      icon: c.icon,
-      color: c.color,
-      description: c.description,
-      is_active: c.isActive,
-      created_at: iso(c.createdAt),
-      updated_at: iso(c.updatedAt),
-    }))
-  );
-});
-
 // ═══════════════════════════════ DONATIONS ═══════════════════════════════════
 // Legacy middleware: checkHeader only — acting user comes from `user_id`.
+// Order creation + settlement moved to the website pipeline the mobile app now
+// calls directly: POST /api/donations → POST /api/payments → checkout →
+// POST /api/payments/verify (see routes/donations.ts + routes/payments.ts).
+// The /razorpay/webhook below stays for async settlement (app killed
+// mid-checkout) and keeps the mobile reward sync (points/card/achievements).
 
-/** DonationController::createDonationOrder */
-wrap(router, "post", "/createDonationOrder", async (req, res) => {
-  const p = params(req);
-  const userId = str(p.user_id);
-  const causeId = str(p.cause_id);
-  const amount = num(p.amount, -1);
-  const notes = optStr(p.notes);
-  if (!userId) return fail(res, "The user id field is required.");
-  if (!causeId) return fail(res, "The cause id field is required.");
-  if (amount < 1 || amount > 99999999.99) return fail(res, "The amount must be between 1 and 99999999.99.");
-
-  const user = await db.user.findUnique({ where: { id: userId } });
-  if (!user) return fail(res, "Selected user id is invalid.");
-
-  const cause = await db.communityPost.findFirst({
-    where: { id: causeId, type: "cause", OR: [{ deadline: null }, { deadline: { gte: new Date() } }] },
-  });
-  if (!cause) return fail(res, "Cause not found or inactive");
-
-  const auth = razorpayAuth();
-  if (!auth) return fail(res, "Failed to create donation order: Razorpay keys not configured");
-
-  let orderId: string;
-  try {
-    const r = await fetch(`${RAZORPAY_API}/orders`, {
-      method: "POST",
-      headers: { Authorization: auth, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: Math.round(amount * 100), // paise
-        currency: "INR",
-        receipt: `donation_${Date.now()}_${userId}`,
-        notes: { user_id: userId, cause_id: causeId, cause_name: cause.desc ?? "", custom_notes: notes ?? "" },
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const body = (await r.json()) as { id?: string };
-    if (!r.ok || !body.id) return fail(res, "Failed to create donation order: gateway rejected the request");
-    orderId = body.id;
-  } catch {
-    return fail(res, "Failed to create donation order: gateway could not be reached");
-  }
-
-  const donation = await db.donation.create({
-    data: {
-      donorId: userId,
-      donorName: user.name,
-      donorEmail: user.email,
-      donorPhone: user.phone,
-      amount,
-      currency: "INR",
-      type: "ONE_TIME",
-      paymentMethod: "RAZORPAY",
-      paymentProvider: "RAZORPAY",
-      paymentStatus: "PENDING",
-      gatewayOrderId: orderId,
-      message: notes,
-      receiptNumber: await nextReceiptNumber(),
-      receiptStatus: "PENDING",
-      causePostId: causeId,
-    },
-  });
-
-  feedEvent("donation.order_created", {
-    donation_id: donation.id,
-    amount,
-    cause_post_id: causeId,
-    user_id: userId,
-  });
-
-  return data(res, "Donation order created successfully", {
-    donation_id: donation.id,
-    order_id: orderId,
-    amount,
-    currency: "INR",
-    razorpay_key: process.env.RAZORPAY_KEY_ID ?? "",
-  });
-});
-
-/** DonationController::verifyDonation */
-wrap(router, "post", "/verifyDonation", async (req, res) => {
-  const p = params(req);
-  const donationId = str(p.donation_id);
-  const orderId = str(p.razorpay_order_id);
-  const paymentId = str(p.razorpay_payment_id);
-  const signature = str(p.razorpay_signature);
-  if (!donationId) return fail(res, "The donation id field is required.");
-  if (!paymentId) return fail(res, "The razorpay payment id field is required.");
-  if (!orderId) return fail(res, "The razorpay order id field is required.");
-  if (!signature) return fail(res, "The razorpay signature field is required.");
-
-  const donation = await db.donation.findUnique({ where: { id: donationId } });
-  if (!donation) return fail(res, "Donation not found");
-
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  if (keySecret) {
-    const expected = createHmac("sha256", keySecret).update(`${orderId}|${paymentId}`).digest("hex");
-    if (expected !== signature) {
-      if (donation.paymentStatus === "PENDING") {
-        await db.donation.update({ where: { id: donation.id }, data: { paymentStatus: "FAILED" } });
-      }
-      return fail(res, "Payment verification failed: Invalid signature");
-    }
-  }
-
-  const settled = await settleDonation(donation.id, paymentId);
-
-  const fresh = await db.donation.findUnique({
-    where: { id: donation.id },
-    include: { donor: true },
-  });
-  const cause = await causeWireFor(donation.causePostId, true);
-  return data(res, "Donation successful! Thank you for your contribution.", {
-    ...serializeDonation({ ...(fresh ?? donation), user: fresh?.donor ? legacyUser(fresh.donor) : null, cause }),
-    ...(settled ? {} : { already_settled: true }),
-  });
-});
-
-/** DonationController::fetchMyDonations */
-wrap(router, "post", "/fetchMyDonations", async (req, res) => {
-  const p = params(req);
-  const userId = str(p.user_id);
-  if (!userId) return fail(res, "The user id field is required.");
-  const { start, limit } = page(req, 20);
-
-  const [rows, agg] = await Promise.all([
-    db.donation.findMany({
-      where: { donorId: userId, paymentStatus: "COMPLETED" },
-      orderBy: { createdAt: "desc" },
-      skip: start,
-      take: limit,
-      include: { donor: true },
-    }),
-    db.donation.aggregate({
-      _sum: { amount: true },
-      where: { donorId: userId, paymentStatus: "COMPLETED" },
-    }),
-  ]);
-
-  const donations = await Promise.all(
-    rows.map(async (d) =>
-      serializeDonation({ ...d, user: d.donor ? legacyUser(d.donor) : null, cause: await causeWireFor(d.causePostId) })
-    )
-  );
-  return data(res, "Donations fetched successfully", {
-    donations,
-    total_donated: agg._sum.amount ?? 0,
-    donation_count: donations.length,
-  });
-});
-
-/** DonationController::fetchCauseDonations */
+/**
+ * DonationController::fetchCauseDonations — mobile adapter for the donations
+ * wall of a campaign. The public GET /api/donations projections hide donor
+ * identities (no avatars), which the app's donor list renders, so this compat
+ * route exposes the same Donation rows by campaignId.
+ */
 wrap(router, "post", "/fetchCauseDonations", async (req, res) => {
   const p = params(req);
-  const causeId = str(p.cause_id);
-  if (!causeId) return fail(res, "The cause id field is required.");
+  const campaignId = str(p.campaign_id) || str(p.cause_id);
+  if (!campaignId) return fail(res, "The campaign id field is required.");
   const { start, limit } = page(req, 20);
 
   let sortBy = str(p.sort_by) || "created_at";
   // legacy wire keys → Prisma columns
   if (sortBy === "created_at") sortBy = "createdAt";
-  if (!['createdAt', "amount"].includes(sortBy)) sortBy = "createdAt";
+  if (!["createdAt", "amount"].includes(sortBy)) sortBy = "createdAt";
   let sortDirection = (str(p.sort_direction) || "desc").toLowerCase();
   if (!["asc", "desc"].includes(sortDirection)) sortDirection = "desc";
 
-  const where = { causePostId: causeId, paymentStatus: "COMPLETED" as const };
+  const where = { campaignId, paymentStatus: "COMPLETED" as const };
   const [rows, total, agg] = await Promise.all([
     db.donation.findMany({
       where,
       orderBy: { [sortBy]: sortDirection },
       skip: start,
       take: limit,
-      include: { donor: true },
+      include: { donor: true, campaign: { select: { id: true, title: true, slug: true } } },
     }),
     db.donation.count({ where }),
     db.donation.aggregate({ _sum: { amount: true }, where }),
   ]);
 
-  const donations = await Promise.all(
-    rows.map(async (d) =>
-      serializeDonation({ ...d, user: d.donor ? legacyUser(d.donor) : null, cause: await causeWireFor(causeId) })
-    )
+  const donations = rows.map((d) =>
+    serializeDonation({ ...d, user: d.donor ? legacyUser(d.donor) : null, campaign: d.campaign })
   );
   return data(res, "Cause donations fetched successfully", {
     donations,
@@ -2285,7 +1906,8 @@ router.post("/community/admin/reports/resolve", mobileAuth, h(async (req, res) =
     return ok(res, "Reported post deleted");
   }
   if (action === "delete_comment" && report.commentId) {
-    await db.communityComment.delete({ where: { id: report.commentId } }).catch(() => undefined);
+    const deleted = await db.communityComment.delete({ where: { id: report.commentId } }).catch(() => null);
+    if (deleted) await syncPostCommentCounts({ postIds: [deleted.postId] });
     await db.communityReport.deleteMany({ where: { commentId: report.commentId } });
     return ok(res, "Reported comment deleted");
   }

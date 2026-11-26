@@ -279,11 +279,13 @@ async function getMessages(req: Request, res: Response) {
         image: m.sender.avatar,
         userid: m.sender.id,
         is_verified: m.sender.isVerified,
+        isVerified: m.sender.isVerified,
       },
       created_at: m.createdAt.toISOString(),
       is_read: m.isRead,
       is_edited: m.isEdited,
       reply_to_message_id: m.replyToMessageId,
+      story_id: m.storyId,
     })),
   });
 }
@@ -305,7 +307,12 @@ async function sendMessage(req: Request, res: Response) {
   const mediaFile = fileByField(req, "media");
   const thumbnailFile = fileByField(req, "thumbnail");
   const messageText = optStr(p.message);
-  if (!mediaFile && !messageText) {
+  // The app also posts plain media URLs as fields (PostService.shared.uploadFile
+  // pre-uploads, then sendMessage carries media_url/thumbnail_url) — an image
+  // with an empty caption must pass validation like a multipart media did.
+  const inlineMediaUrl = optStr(p.media_url);
+  const inlineThumbnailUrl = optStr(p.thumbnail_url);
+  if (!mediaFile && !inlineMediaUrl && !messageText) {
     return fail(res, "The message field is required when media is not present.");
   }
 
@@ -330,8 +337,8 @@ async function sendMessage(req: Request, res: Response) {
     mediaUrl = await storeUpload(req, mediaFile, "mobile/chat");
     if (thumbnailFile) thumbnailUrl = await storeUpload(req, thumbnailFile, "mobile/chat");
   } else {
-    mediaUrl = optStr(p.media_url);
-    thumbnailUrl = optStr(p.thumbnail_url);
+    mediaUrl = inlineMediaUrl;
+    thumbnailUrl = inlineThumbnailUrl;
   }
 
   const message = await db.message.create({

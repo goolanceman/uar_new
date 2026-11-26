@@ -15,7 +15,7 @@ COPY . .
 # Generate the Prisma client for the pinned schema
 RUN bunx prisma generate
 
-EXPOSE 4000
+EXPOSE 3005
 
 # prisma db push happens via the compose service or manually — the container
 # only starts the API server against DATABASE_URL provided at runtime.

@@ -36,6 +36,7 @@ import {
   feedEvent,
   wrap,
   legacyUser,
+  syncPostCommentCounts,
 } from "@/lib/mobile/compat";
 import { multipart, readForm, type MulterFile } from "@/lib/multipart";
 
@@ -57,11 +58,12 @@ type CommentRow = Prisma.CommunityCommentGetPayload<{
   include: { user: true; likes: true; _count: { select: { likes: true } } };
 }>;
 
-const POST_INCLUDE: Prisma.CommunityPostInclude = {
+const POST_INCLUDE = {
   content: { orderBy: { createdAt: "asc" } },
   user: true,
   category: true,
-};
+  _count: { select: { comments: { where: { user: { isBlock: 0 } } } } },
+} satisfies Prisma.CommunityPostInclude;
 type PostRow = Prisma.CommunityPostGetPayload<{ include: typeof POST_INCLUDE }>;
 
 const STORY_INCLUDE: Prisma.CommunityStoryInclude = { user: true };
@@ -168,7 +170,7 @@ function serializePost(
     context_label: p.contextLabel,
     impact_label: p.impactLabel,
     community_label: p.communityLabel,
-    comments_count: p.commentsCount,
+    comments_count: p._count?.comments ?? p.commentsCount,
     likes_count: extra?.likesCount ?? p.likesCount,
     is_restricted: p.isRestricted,
     created_at: iso(p.createdAt),
@@ -541,10 +543,8 @@ wrap(router, "post", "/fetchPostByPostId", async (req, res) => {
   });
   if (!post) return fail(res, "Posts not Available");
 
-  const isLike = await db.communityLike.findFirst({
-    where: { userId: me.id, postId: post.id },
-  });
-  return data(res, "Fetch posts", serializePost(post, { isLike: isLike ? 1 : 0 }));
+  const [wire] = await processPosts([post], me.id);
+  return data(res, "Fetch posts", wire);
 });
 
 /** fetchPostByUser — UserController::fetchPostByUser (post-domain, lives here). */
@@ -611,7 +611,7 @@ wrap(router, "post", "/addComment", async (req, res) => {
   const comment = await db.communityComment.create({
     data: { userId: user.id, postId: post.id, desc: str(p.desc) },
   });
-  await db.communityPost.update({ where: { id: post.id }, data: { commentsCount: { increment: 1 } } });
+  await syncPostCommentCounts({ postIds: [post.id] });
 
   const toUser = post.user;
   if (toUser.id !== user.id && toUser.isPushNotifications === 1) {
@@ -644,7 +644,7 @@ wrap(router, "post", "/fetchComments", async (req, res) => {
   const start = num(p.start);
   const limit = optNum(p.limit) ?? undefined;
   const comments = await db.communityComment.findMany({
-    where: { postId: str(p.post_id) },
+    where: { postId: str(p.post_id), user: { isBlock: 0 } },
     include: {
       user: true,
       likes: { where: { userId: str(p.my_user_id) } },
@@ -675,18 +675,11 @@ wrap(router, "post", "/deleteComment", async (req, res) => {
   });
   if (!comment) return fail(res, "Comment not found");
 
-  const post = await db.communityPost.findUnique({ where: { id: comment.postId } });
-  if (post) {
-    await db.communityPost.update({
-      where: { id: post.id },
-      data: { commentsCount: Math.max(0, post.commentsCount - 1) },
-    });
-  }
-
   await db.savedNotification.deleteMany({
     where: { userId: str(p.user_id), commentId: comment.id, type: 2 },
   });
   await db.communityComment.delete({ where: { id: comment.id } });
+  await syncPostCommentCounts({ postIds: [comment.postId] });
 
   return data(res, "Delete comment successfully", commentWire(comment));
 });

@@ -52,10 +52,10 @@ async function hospitalOrgId(userId: string): Promise<string | null> {
 const BENEFICIARY_SELECT = { id: true, code: true, name: true, phone: true, age: true, gender: true };
 
 // GET /api/camp-registrations?q&campId&status&page&limit
-// ADMIN | VOLUNTEER all; HOSPITAL only camps its org partners.
+// ADMIN | VOLUNTEER all; HOSPITAL only camps its org partners; BENEFICIARY own.
 router.get("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN", "VOLUNTEER", "HOSPITAL", "DOCTOR", "NURSE");
+    const session = await requireRole(req, "ADMIN", "VOLUNTEER", "HOSPITAL", "DOCTOR", "NURSE", "BENEFICIARY");
     const sp = new URL(req.url, "http://localhost").searchParams;
     const q = sp.get("q")?.trim() || undefined;
     const campId = sp.get("campId") || undefined;
@@ -74,6 +74,11 @@ router.get("/", async (req, res) => {
       const ownOrgId = await hospitalOrgId(session.userId);
       if (!ownOrgId) return json(res, envelope([], 0, page, take));
       where.camp = { campPartners: { some: { orgId: ownOrgId } } };
+    }
+    if (session.role === "BENEFICIARY") {
+      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) return json(res, envelope([], 0, page, take));
+      where.beneficiaryId = own.id;
     }
 
     const [items, total] = await Promise.all([

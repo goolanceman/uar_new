@@ -70,10 +70,10 @@ router.get("/", async (req, res) => {
     if (verification) where.verificationStatus = verification.toUpperCase();
     if (q)
       where.OR = [
-        { name: { contains: q } },
-        { phone: { contains: q } },
-        { city: { contains: q } },
-        { code: { contains: q } },
+        { name: { contains: q, mode: "insensitive" } },
+        { phone: { contains: q, mode: "insensitive" } },
+        { city: { contains: q, mode: "insensitive" } },
+        { code: { contains: q, mode: "insensitive" } },
       ];
     if (category) where.category = category;
     if (active === "0" || active === "1") where.isActive = active === "1";

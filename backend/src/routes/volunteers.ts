@@ -190,15 +190,22 @@ router.get("/me", async (req, res) => {
   }
 });
 
-// PATCH /api/volunteers/:id — admin updates the volunteer profile
+// PATCH /api/volunteers/:id — admin updates the volunteer profile; a volunteer
+// may update the self-service roster fields of their own record.
 router.patch("/:id", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN");
+    const session = await requireRole(req, "ADMIN", "VOLUNTEER");
     const { id } = req.params;
-    const body = req.body ?? {};
+    const body = { ...(req.body ?? {}) };
 
     const existing = await db.volunteer.findUnique({ where: { id } });
     if (!existing) throw new ApiError("Volunteer not found", 404);
+    if (session.role === "VOLUNTEER") {
+      if (existing.userId !== session.userId)
+        throw new ApiError("You do not have permission for this action", 403);
+      delete body.status;
+      delete body.assignedArea;
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.skills !== undefined)

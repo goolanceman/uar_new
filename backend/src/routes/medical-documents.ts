@@ -77,14 +77,19 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/medical-documents — ADMIN | DOCTOR | NURSE.
-// { beneficiaryId, campId?, name, kind, url }
+// POST /api/medical-documents — ADMIN | DOCTOR | NURSE; BENEFICIARY adds to
+// their own patient record only. { beneficiaryId, campId?, name, kind, url }
 router.post("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE");
+    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "BENEFICIARY");
     const body = req.body ?? {};
 
-    const beneficiaryId = String(body?.beneficiaryId ?? "").trim();
+    let beneficiaryId = String(body?.beneficiaryId ?? "").trim();
+    if (session.role === "BENEFICIARY") {
+      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) throw new ApiError("No patient record is linked to your account yet", 403);
+      beneficiaryId = own.id;
+    }
     if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
     const beneficiary = await db.beneficiary.findUnique({
       where: { id: beneficiaryId },

@@ -43,9 +43,10 @@ function envelope<T>(items: T[], total: number, page: number, take: number) {
 }
 
 // GET /api/appointments?campId&beneficiaryId&professionalId&type&status&from&to
+// BENEFICIARY sees only appointments of their own patient record.
 router.get("/", async (req, res) => {
   try {
-    await requireRole(req, "ADMIN", "VOLUNTEER");
+    const session = await requireRole(req, "ADMIN", "VOLUNTEER", "DOCTOR", "NURSE", "BENEFICIARY");
     const sp = new URL(req.url, "http://localhost").searchParams;
     const campId = sp.get("campId") || undefined;
     const beneficiaryId = sp.get("beneficiaryId") || undefined;
@@ -62,6 +63,11 @@ router.get("/", async (req, res) => {
     if (professionalId) where.professionalId = professionalId;
     if (type) where.type = type;
     if (status) where.status = status;
+    if (session.role === "BENEFICIARY") {
+      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
+      if (!own) return json(res, envelope([], 0, page, take));
+      where.beneficiaryId = own.id;
+    }
     if (from || to) {
       where.scheduledAt = {
         ...(from ? { gte: new Date(from) } : {}),

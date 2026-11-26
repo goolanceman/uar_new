@@ -20,6 +20,7 @@ async function buildApp() {
   const { router: beneficiariesRouter } = await import("@/routes/beneficiaries");
   const { router: campaignsRouter } = await import("@/routes/campaigns");
   const { router: eventsRouter } = await import("@/routes/events");
+  const { router: volunteerAttendancesRouter } = await import("@/routes/volunteer-attendances");
 
   const app = express();
   app.use(cors({ origin: true, credentials: true }));
@@ -32,6 +33,7 @@ async function buildApp() {
   app.use("/api/beneficiaries", beneficiariesRouter);
   app.use("/api/campaigns", campaignsRouter);
   app.use("/api/events", eventsRouter);
+  app.use("/api/volunteer-attendances", volunteerAttendancesRouter);
   return app;
 }
 
@@ -43,6 +45,7 @@ async function resetDb() {
   await db.donation.deleteMany();
   await db.donor.deleteMany();
   await db.fileAsset.deleteMany();
+  await db.volunteerAttendance.deleteMany();
   await db.volunteerTask.deleteMany();
   await db.volunteer.deleteMany();
   await db.volunteerApplication.deleteMany();
@@ -340,5 +343,70 @@ describe("events stream", () => {
   it("503s when the feature flag is off (default)", async () => {
     const res = await request(app).get("/api/events/stream");
     expect(res.status).toBe(503);
+  });
+});
+
+// ═══════════ VOLUNTEER SELF-SERVICE (mobile + web portal) ═══════════
+describe("volunteer self-service", () => {
+  let tokenA = "";
+  let tokenB = "";
+  let volA = "";
+  let volB = "";
+  let taskA = "";
+
+  beforeAll(async () => {
+    const { db } = await import("@/lib/db");
+    const { issueToken } = await import("@/lib/session");
+    const mk = async (tag: string) => {
+      const user = await db.user.create({
+        data: { name: `Vol ${tag}`, email: `vol-${tag}-${Date.now()}@test.local`, role: "VOLUNTEER", password: "x" },
+      });
+      const vol = await db.volunteer.create({ data: { code: `UAR-VOL-T${tag}${Date.now()}`, userId: user.id, status: "ACTIVE" } });
+      return { token: issueToken({ userId: user.id, role: user.role, name: user.name, email: user.email }), volId: vol.id };
+    };
+    const a = await mk("a");
+    const b = await mk("b");
+    tokenA = a.token;
+    tokenB = b.token;
+    volA = a.volId;
+    volB = b.volId;
+    const task = await db.volunteerTask.create({ data: { volunteerId: volA, title: "Ward 7 drive", location: "Ward 7", scheduledDate: new Date() } });
+    taskA = task.id;
+    await db.volunteerAttendance.create({ data: { volunteerId: volB, date: new Date("2026-01-05"), notes: "B row" } });
+  });
+
+  it("lets an ACTIVE volunteer check in once per day (idempotent)", async () => {
+    const first = await request(app).post("/api/volunteer-attendances").set("Authorization", `Bearer ${tokenA}`).send({ taskId: taskA });
+    expect(first.status).toBe(201);
+    expect(first.body.volunteerId).toBe(volA);
+    expect(first.body.location).toBe("Ward 7");
+    const again = await request(app).post("/api/volunteer-attendances").set("Authorization", `Bearer ${tokenA}`).send({ taskId: taskA });
+    expect(again.status).toBe(200);
+    expect(again.body.checkIn).toBe(first.body.checkIn);
+  });
+
+  it("rejects a check-in against another volunteer's task", async () => {
+    const res = await request(app).post("/api/volunteer-attendances").set("Authorization", `Bearer ${tokenB}`).send({ taskId: taskA });
+    expect(res.status).toBe(404);
+  });
+
+  it("scopes the attendance register to the volunteer's own rows", async () => {
+    const res = await request(app).get(`/api/volunteer-attendances?volunteerId=${volB}`).set("Authorization", `Bearer ${tokenA}`);
+    expect(res.status).toBe(200);
+    expect(res.body.every((r: { volunteerId: string }) => r.volunteerId === volA)).toBe(true);
+  });
+
+  it("lets a volunteer edit own roster fields but not status/area or others", async () => {
+    const own = await request(app)
+      .patch(`/api/volunteers/${volA}`)
+      .set("Authorization", `Bearer ${tokenA}`)
+      .send({ skills: JSON.stringify(["First aid"]), status: "SUSPENDED", assignedArea: "Elsewhere" });
+    expect(own.status).toBe(200);
+    expect(own.body.skills).toContain("First aid");
+    expect(own.body.status).toBe("ACTIVE");
+    expect(own.body.assignedArea).toBeNull();
+
+    const other = await request(app).patch(`/api/volunteers/${volB}`).set("Authorization", `Bearer ${tokenA}`).send({ skills: "[]" });
+    expect(other.status).toBe(403);
   });
 });

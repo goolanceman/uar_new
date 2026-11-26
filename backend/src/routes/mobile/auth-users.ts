@@ -8,8 +8,12 @@
  *   - ProfileVerificationController → /profileVerification
  *   - NotificationController  → /notifications/*
  *   - AdminController         → /fetchPlatformNotification
- *   - VolunteerApplicationController → /user/select-type, /volunteer/*,
- *                               /admin/volunteer/*
+ *   - VolunteerApplicationController → /user/select-type (the apply/status and
+ *                               /admin/volunteer/* copies were REMOVED — the
+ *                               app now calls the website module
+ *                               /api/volunteer-applications directly, same as
+ *                               frontend/src/components/public/volunteer.tsx;
+ *                               PATCH review mirrors volunteerStatus to User)
  *
  * Wire contract: every response is { status: boolean, message: string, data? };
  * business failures are HTTP 200 with status:false — only auth failures 401
@@ -39,6 +43,7 @@ import {
   storeUpload,
   wrap,
   mobileErrorHandler,
+  syncPostCommentCounts,
 } from "@/lib/mobile/compat";
 import { issueToken, hashPassword, verifyPassword } from "@/lib/session";
 import { checkRateLimit, clientIp } from "@/lib/rate-limit";
@@ -310,71 +315,6 @@ function legacyPostRow(
   };
 }
 
-/** VolunteerApplication wire shape — JSON array columns are decoded for the
- *  Dart model (List<String>.from(json['skills']) etc.), status is lowercase. */
-const APP_STATUS_WIRE: Record<string, string> = {
-  PENDING: "pending",
-  APPROVED: "approved",
-  REJECTED: "rejected",
-};
-const APP_STATUS_DB: Record<string, "PENDING" | "APPROVED" | "REJECTED"> = {
-  pending: "PENDING",
-  approved: "APPROVED",
-  rejected: "REJECTED",
-};
-
-function jsonArr(v: unknown): string[] | null {
-  if (v === undefined || v === null || v === "") return null;
-  if (Array.isArray(v)) return v.map((x) => str(x));
-  const s = str(v).trim();
-  if (!s) return null;
-  try {
-    const parsed = JSON.parse(s);
-    if (Array.isArray(parsed)) return parsed.map((x: unknown) => str(x));
-  } catch {
-    /* plain string value */
-  }
-  return [s];
-}
-
-type VolunteerAppRow = Awaited<ReturnType<typeof db.volunteerApplication.findFirstOrThrow>>;
-
-function legacyVolunteerApp(a: VolunteerAppRow) {
-  return {
-    id: a.id,
-    user_id: a.userId,
-    skills: jsonArr(a.skills),
-    custom_skills: jsonArr(a.customSkills),
-    availability: jsonArr(a.availability),
-    service_areas: jsonArr(a.serviceAreas),
-    is_flexible: a.isFlexible,
-    city: a.city,
-    state: a.state,
-    country: a.country,
-    postal_code: a.postalCode,
-    latitude: a.latitude,
-    longitude: a.longitude,
-    willing_to_travel: a.willingToTravel,
-    max_travel_distance: a.maxTravelDistance,
-    remote_volunteering: a.remoteVolunteering,
-    motivation: a.motivation,
-    prior_experience: a.priorExperience,
-    emergency_contact: a.emergencyContact,
-    emergency_phone: a.emergencyPhone,
-    address_line1: a.addressLine1,
-    address_line2: a.addressLine2,
-    status: APP_STATUS_WIRE[a.status] ?? a.status.toLowerCase(),
-    review_note: a.reviewNote,
-    reviewed_by: a.reviewedBy,
-    reviewed_at: iso(a.reviewedAt),
-    rejection_reason: a.rejectionReason,
-    admin_notes: a.adminNotes,
-    submitted_at: iso(a.createdAt),
-    created_at: iso(a.createdAt),
-    updated_at: null, // legacy updated_at column — not present on the new model
-  };
-}
-
 // ─── multipart file helpers (legacy saveFileAndGivePath) ─────────────────────
 
 interface MulterFileLike {
@@ -494,7 +434,11 @@ async function deleteUserCascade(userId: string): Promise<void> {
 
   // Plain cascades / direct children.
   await db.communityPost.deleteMany({ where: { userId } }); // cascades contents/comments/likes
+  const commentedPostIds = (
+    await db.communityComment.findMany({ where: { userId }, select: { postId: true }, distinct: ["postId"] })
+  ).map((c) => c.postId);
   await db.communityComment.deleteMany({ where: { userId } }); // comments on other people's posts
+  await syncPostCommentCounts({ postIds: commentedPostIds });
   await db.communityStory.deleteMany({ where: { userId } });
   await db.profileVerification.deleteMany({ where: { userId } });
   await db.communityReport.deleteMany({ where: { userId } }); // reports about this user
@@ -525,13 +469,26 @@ async function moderatorOrFail(req: Request, res: Response) {
 
 // ─── saved-notification feed (UserController::fetchUserNotification) ─────────
 
+// Wire type for chat-message notifications — SavedNotification types use 1-10
+// (see the SavedNotification model comment), so chat pushes take the next slot.
+const CHAT_NOTIFICATION_TYPE = 11;
+
 async function savedNotificationFeed(myUserId: string, start: number, limit: number) {
-  const rows = await db.savedNotification.findMany({
-    where: { myUserId },
-    orderBy: { createdAt: "desc" },
-    skip: start,
-    take: limit,
-  });
+  const take = start + limit;
+  const [rows, chatRows] = await Promise.all([
+    db.savedNotification.findMany({
+      where: { myUserId },
+      orderBy: { createdAt: "desc" },
+      take,
+    }),
+    // Chat pushes are Notification rows (type MOBILE, data.type = "chat_message")
+    // written by sendPush — pull the newest start+limit of them too.
+    db.notification.findMany({
+      where: { userId: myUserId, type: "MOBILE", data: { contains: '"type":"chat_message"' } },
+      orderBy: { createdAt: "desc" },
+      take,
+    }),
+  ]);
 
   const userIds = [...new Set(rows.map((r) => r.userId).filter((v): v is string => !!v))];
   const postIds = [...new Set(rows.map((r) => r.postId).filter((v): v is string => !!v))];
@@ -551,7 +508,7 @@ async function savedNotificationFeed(myUserId: string, start: number, limit: num
   const roomMap = new Map(rooms.map((r) => [r.id, legacyRoomRow(r)]));
   const reelMap = new Map(reels.map((r) => [r.id, legacyReelRow(r)]));
 
-  return rows.map((r) => ({
+  const savedFeed = rows.map((r) => ({
     id: r.id,
     my_user_id: r.myUserId,
     user_id: r.userId,
@@ -568,6 +525,67 @@ async function savedNotificationFeed(myUserId: string, start: number, limit: num
     room: r.roomId ? (roomMap.get(r.roomId) ?? null) : null,
     reel: r.reelId ? (reelMap.get(r.reelId) ?? null) : null,
   }));
+
+  const chatParsed = chatRows
+    .map((r) => {
+      try {
+        return { row: r, data: JSON.parse(r.data ?? "null") as { type?: string; conversationId?: string; messageId?: string } | null };
+      } catch {
+        return { row: r, data: null };
+      }
+    })
+    .filter(
+      (x): x is { row: (typeof chatRows)[number]; data: { type: string; conversationId: string; messageId: string } } =>
+        x.data?.type === "chat_message" && !!x.data.conversationId && !!x.data.messageId
+    );
+
+  const messageIds = [...new Set(chatParsed.map((x) => x.data.messageId))];
+  const conversationIds = [...new Set(chatParsed.map((x) => x.data.conversationId))];
+  const [messages, conversations] = await Promise.all([
+    messageIds.length
+      ? db.message.findMany({ where: { id: { in: messageIds } }, select: { id: true, senderId: true } })
+      : Promise.resolve([]),
+    conversationIds.length
+      ? db.conversation.findMany({ where: { id: { in: conversationIds } }, select: { id: true, deletedAt: true } })
+      : Promise.resolve([]),
+  ]);
+  const messageMap = new Map(messages.map((m) => [m.id, m]));
+  const aliveConversations = new Set(conversations.filter((c) => !c.deletedAt).map((c) => c.id));
+  const senderIds = [...new Set(messages.map((m) => m.senderId))];
+  const senders = senderIds.length ? await db.user.findMany({ where: { id: { in: senderIds } } }) : [];
+  const senderMap = new Map(senders.map((u) => [u.id, legacyUser(u)]));
+
+  const chatFeed = chatParsed.flatMap((x) => {
+    if (!aliveConversations.has(x.data.conversationId)) return []; // conversation deleted → hide
+    const msg = messageMap.get(x.data.messageId);
+    const sender = msg ? senderMap.get(msg.senderId) : undefined;
+    if (!msg || !sender) return [];
+    return [{
+      id: x.row.id,
+      my_user_id: myUserId,
+      user_id: msg.senderId,
+      post_id: null,
+      room_id: null,
+      comment_id: null,
+      reel_id: null,
+      reel_comment_id: null,
+      type: CHAT_NOTIFICATION_TYPE,
+      created_at: x.row.createdAt.toISOString(),
+      updated_at: x.row.createdAt.toISOString(), // Notification rows carry no updatedAt
+      user: sender,
+      post: null,
+      room: null,
+      reel: null,
+      conversation_id: x.data.conversationId,
+      message_id: x.data.messageId,
+      notification_id: x.row.id,
+      message: x.row.message,
+    }];
+  });
+
+  return [...savedFeed, ...chatFeed]
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
+    .slice(start, start + limit);
 }
 
 // ═══════════════════════════════════ AUTH (AuthController.php) ═══════════════
@@ -908,6 +926,7 @@ wrap(router, "post", "/followUser", async (req, res) => {
       userId: toUser.id,
       title: process.env.APP_NAME || "Chatter",
       body: `${fromUser.name} has stared following you.`, // legacy typo preserved
+      data: { type: "follow", user_id: myId },
     });
   }
   await db.savedNotification.create({
@@ -1206,6 +1225,44 @@ wrap(router, "post", "/searchProfile", async (req, res) => {
   return data(res, "User profile", users.map(legacyUser));
 });
 
+// POST /searchUsersForChat — contacts picker for the Chats tab "new chat"
+// button: paginated + searchable, excluding me, blocked users (isBlock=1),
+// users I blocked and users who blocked me.
+wrap(router, "post", "/searchUsersForChat", async (req, res) => {
+  const p = params(req);
+  const missing = firstMissing(p, ["my_user_id", "start", "limit"]);
+  if (missing) return fail(res, missing);
+
+  const me = await db.user.findUnique({ where: { id: str(p.my_user_id) } });
+  if (!me) return fail(res, "User not found.");
+
+  const keyword = str(p.keyword).trim();
+  const { start, limit } = page(req);
+  const whoBlockedMe = await db.user.findMany({
+    where: { blockUserIds: { contains: me.id } },
+    select: { id: true },
+  });
+  const excluded = [...csvStrs(me.blockUserIds), ...whoBlockedMe.map((u) => u.id)];
+  const users = await db.user.findMany({
+    where: {
+      isBlock: 0,
+      id: { not: me.id, ...(excluded.length ? { notIn: excluded } : {}) },
+      ...(keyword
+        ? {
+            OR: [
+              { username: { contains: keyword, mode: "insensitive" } },
+              { name: { contains: keyword, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    skip: start,
+    take: limit,
+  });
+  return data(res, "User result", users.map(legacyUser));
+});
+
 // POST /logOut — clears the legacy device token.
 wrap(router, "post", "/logOut", async (req, res) => {
   const p = params(req);
@@ -1334,19 +1391,11 @@ wrap(router, "post", "/Moderator/deleteCommentByModerator", async (req, res) => 
   const comment = await db.communityComment.findUnique({ where: { id: commentId } });
   if (!comment) return fail(res, "Comment not found");
 
-  const post = await db.communityPost.findUnique({
-    where: { id: comment.postId },
-    select: { id: true, commentsCount: true },
-  });
-  if (post)
-    await db.communityPost.update({
-      where: { id: post.id },
-      data: { commentsCount: Math.max(0, post.commentsCount - 1) },
-    });
   await db.savedNotification.deleteMany({
     where: { userId: str(params(req).user_id), postId: comment.postId, type: 2 },
   });
   await db.communityComment.delete({ where: { id: commentId } });
+  await syncPostCommentCounts({ postIds: [comment.postId] });
 
   return data(res, "Comment Delete successfully", legacyCommentRow(comment));
 });
@@ -1394,6 +1443,7 @@ wrap(router, "post", "/Moderator/userBlockByModerator", async (req, res) => {
 
   const updated = await db.user.update({ where: { id: toUserId }, data: { isBlock: 1 } });
   await db.communityReport.deleteMany({ where: { userId: toUserId } }); // reports about the user
+  await syncPostCommentCounts({ commenterId: toUserId });
 
   return data(res, "User Blocked successfully", legacyUser(updated));
 });
@@ -1610,6 +1660,7 @@ wrap(router, "post", "/fetchPlatformNotification", async (req, res) => {
       id: r.id,
       title: r.title,
       description: r.message,
+      action_url: r.actionUrl,
       created_at: r.createdAt.toISOString(),
       updated_at: null, // Notification rows carry no updatedAt
     }))
@@ -1644,197 +1695,5 @@ router.post(
       },
     });
     return data(res, "User type selected successfully", legacyUser(updated));
-  })
-);
-
-// POST /volunteer/apply
-router.post(
-  "/volunteer/apply",
-  mobileAuth,
-  h(async (req, res) => {
-    const s = session(req);
-    const p = params(req);
-
-    const skills = jsonArr(p.skills);
-    const availability = jsonArr(p.availability);
-    if (!skills || !skills.length) return fail(res, "The skills field is required.");
-    if (!availability || !availability.length) return fail(res, "The availability field is required.");
-    if (!str(p.city).trim()) return fail(res, "The city field is required.");
-    if (!str(p.state).trim()) return fail(res, "The state field is required.");
-    if (!str(p.motivation).trim()) return fail(res, "The motivation field is required.");
-
-    const user = await db.user.findUnique({ where: { id: s.userId } });
-    if (!user) return fail(res, "User not found");
-    if (user.userType !== "volunteer") return fail(res, "Only volunteer users can submit applications");
-
-    const existing = await db.volunteerApplication.findFirst({ where: { userId: user.id } });
-    if (existing) return fail(res, "You have already submitted an application");
-
-    const application = await db.volunteerApplication.create({
-      data: {
-        userId: user.id,
-        fullName: user.name,
-        email: user.email,
-        phone: user.phone ?? "",
-        city: str(p.city),
-        state: str(p.state),
-        country: optStr(p.country) ?? "USA",
-        skills: JSON.stringify(skills),
-        customSkills: jsonArr(p.custom_skills) ? JSON.stringify(jsonArr(p.custom_skills)) : null,
-        availability: JSON.stringify(availability),
-        isFlexible: bool(p.is_flexible),
-        postalCode: optStr(p.postal_code),
-        latitude: optNum(p.latitude),
-        longitude: optNum(p.longitude),
-        serviceAreas: jsonArr(p.service_areas) ? JSON.stringify(jsonArr(p.service_areas)) : null,
-        willingToTravel: bool(p.willing_to_travel),
-        maxTravelDistance: optNum(p.max_travel_distance),
-        remoteVolunteering: bool(p.remote_volunteering),
-        motivation: str(p.motivation),
-        priorExperience: optStr(p.prior_experience),
-        emergencyContact: optStr(p.emergency_contact),
-        emergencyPhone: optStr(p.emergency_phone),
-        addressLine1: optStr(p.address_line1),
-        addressLine2: optStr(p.address_line2),
-        status: "PENDING",
-      },
-    });
-    return data(res, "Application submitted successfully", legacyVolunteerApp(application));
-  })
-);
-
-// GET /volunteer/status
-router.get(
-  "/volunteer/status",
-  mobileAuth,
-  h(async (req, res) => {
-    const s = session(req);
-    const application = await db.volunteerApplication.findFirst({
-      where: { userId: s.userId },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!application) return res.json({ status: false, message: "No application found", data: null });
-    return data(res, "Application retrieved successfully", legacyVolunteerApp(application));
-  })
-);
-
-// GET /admin/volunteer/applications (admin/moderator gate)
-router.get(
-  "/admin/volunteer/applications",
-  mobileAuth,
-  requireModerator,
-  h(async (req, res) => {
-    const p = params(req);
-    const statusWire = (str(p.status) || "pending").toLowerCase();
-    const statusDb = APP_STATUS_DB[statusWire] ?? "PENDING";
-
-    const pageNum = Math.max(1, num(p.page, 1));
-    const perPage = 25; // legacy paginate(25)
-    const [rows, total] = await Promise.all([
-      db.volunteerApplication.findMany({
-        where: { status: statusDb },
-        orderBy: { createdAt: "desc" },
-        skip: (pageNum - 1) * perPage,
-        take: perPage,
-      }),
-      db.volunteerApplication.count({ where: { status: statusDb } }),
-    ]);
-
-    return data(res, "Applications retrieved successfully", {
-      current_page: pageNum,
-      data: rows.map(legacyVolunteerApp),
-      per_page: perPage,
-      last_page: Math.max(1, Math.ceil(total / perPage)),
-      total,
-    });
-  })
-);
-
-// POST /admin/volunteer/applications/:id/approve
-router.post(
-  "/admin/volunteer/applications/:id/approve",
-  mobileAuth,
-  requireModerator,
-  h(async (req, res) => {
-    const s = session(req);
-    const id = str((req.params as Record<string, string>).id);
-    const p = params(req);
-
-    const application = await db.volunteerApplication.findUnique({ where: { id } });
-    if (!application) return fail(res, "Application not found");
-    if (application.status !== "PENDING") return fail(res, "Application has already been reviewed");
-
-    const notes = optStr(p.notes);
-    const reviewedAt = new Date();
-    await db.volunteerApplication.update({
-      where: { id },
-      data: {
-        status: "APPROVED",
-        reviewedBy: s.userId,
-        reviewedAt,
-        reviewNote: notes,
-        adminNotes: notes,
-        rejectionReason: null,
-      },
-    });
-    await db.user.update({
-      where: { id: application.userId ?? "" },
-      data: {
-        volunteerStatus: "approved",
-        volunteerApprovedAt: reviewedAt,
-        volunteerApprovedBy: s.userId,
-        volunteerRejectionReason: null,
-      },
-    }).catch(() => undefined); // applicant row may already be gone
-
-    return data(res, "Application approved successfully", {
-      application_id: application.id,
-      status: "approved",
-      reviewed_at: reviewedAt.toISOString(),
-    });
-  })
-);
-
-// POST /admin/volunteer/applications/:id/reject
-router.post(
-  "/admin/volunteer/applications/:id/reject",
-  mobileAuth,
-  requireModerator,
-  h(async (req, res) => {
-    const s = session(req);
-    const id = str((req.params as Record<string, string>).id);
-    const p = params(req);
-
-    const reason = str(p.reason);
-    if (!reason) return fail(res, "The reason field is required.");
-
-    const application = await db.volunteerApplication.findUnique({ where: { id } });
-    if (!application) return fail(res, "Application not found");
-    if (application.status !== "PENDING") return fail(res, "Application has already been reviewed");
-
-    const notes = optStr(p.notes);
-    const reviewedAt = new Date();
-    await db.volunteerApplication.update({
-      where: { id },
-      data: {
-        status: "REJECTED",
-        reviewedBy: s.userId,
-        reviewedAt,
-        reviewNote: notes,
-        adminNotes: notes,
-        rejectionReason: reason,
-      },
-    });
-    await db.user.update({
-      where: { id: application.userId ?? "" },
-      data: { volunteerStatus: "rejected", volunteerRejectionReason: reason },
-    }).catch(() => undefined); // applicant row may already be gone
-
-    return data(res, "Application rejected", {
-      application_id: application.id,
-      status: "rejected",
-      rejection_reason: reason,
-      reviewed_at: reviewedAt.toISOString(),
-    });
   })
 );

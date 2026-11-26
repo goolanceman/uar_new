@@ -57,6 +57,7 @@ backend/data-dump.json
 
 # uploaded files & legacy local data
 /upload
+/upload-test
 /db
 
 # backend service

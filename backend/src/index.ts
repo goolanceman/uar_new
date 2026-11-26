@@ -153,7 +153,17 @@ app.get("/api", async (_req, res) => {
 // everything else falls through to the admin routers untouched.
 import { router as mobileCompatRouter, broadcastingAuthHandler } from "./routes/mobile";
 import { startPusherServer } from "@/lib/mobile/pusher";
-app.use("/api", mobileCompatRouter);
+import { syncPostCommentCounts } from "@/lib/mobile/compat";
+app.use("/api", (req, res, next) => {
+  // The gate must live OUTSIDE the compat router: from a router-level
+  // middleware, next() reaches the compat routes themselves, which would claim
+  // colliding paths (/api/auth/*, /api/notifications/*, ...) even without an
+  // apikey and shadow the admin/web routers. Entering the compat router only
+  // for apikey requests keeps /api/auth/login etc. working for both clients —
+  // e.g. the Flutter portal (Bearer token, no apikey) gets the web envelope.
+  if (!req.header("apikey")) return next();
+  return mobileCompatRouter(req, res, next);
+});
 app.post("/broadcasting/auth", broadcastingAuthHandler);
 
 app.use("/api/auth", authRouter);
@@ -246,6 +256,8 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, () => {
   console.log(`[uar-backend] listening on http://localhost:${PORT}`);
 });
+
+syncPostCommentCounts().catch((e) => console.error("[mobile] comment count sync failed", e));
 
 // Pusher-protocol WebSocket server for the mobile app (Laravel Reverb wire
 // format, ws://host:6001/app/chatter-key). Starts after the HTTP listener.

@@ -73,13 +73,26 @@ router.get("/", async (req, res) => {
 // POST /api/camp-staff (ADMIN) {campId, professionalId?, volunteerId?, role}
 router.post("/", async (req, res) => {
   try {
-    const session = await requireRole(req, "ADMIN");
+    const session = await requireRole(req, "ADMIN", "HOSPITAL");
     const body = req.body ?? {};
 
     const campId = String(body.campId ?? "").trim();
     if (!campId) throw new ApiError("campId is required", 400);
     const camp = await db.medicalCamp.findUnique({ where: { id: campId } });
     if (!camp) throw new ApiError("Camp not found", 404);
+
+    // A hospital partner rosters only its own staff on camps it has accepted.
+    if (session.role === "HOSPITAL") {
+      const org = await db.healthcareOrg.findUnique({ where: { ownerUserId: session.userId }, select: { id: true } });
+      if (!org) throw new ApiError("No healthcare organisation is linked to your account", 403);
+      const partner = await db.campPartner.findFirst({ where: { campId, orgId: org.id, status: "ACCEPTED" }, select: { id: true } });
+      if (!partner) throw new ApiError("Accept the camp invitation before assigning staff", 403);
+      if (body.volunteerId) throw new ApiError("Partners can assign only their own staff", 403);
+      const own = body.professionalId
+        ? await db.healthProfessional.findFirst({ where: { id: String(body.professionalId), orgId: org.id }, select: { id: true } })
+        : null;
+      if (!own) throw new ApiError("Partners can assign only their own staff", 403);
+    }
 
     const role = String(body.role ?? "DOCTOR").trim().toUpperCase();
     if (!STAFF_ROLES.includes(role)) throw new ApiError("Invalid role", 400);

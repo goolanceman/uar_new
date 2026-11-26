@@ -13,6 +13,7 @@ import {
   logActivity,
 } from "@/lib/session";
 import { USER_STATUSES } from "@/lib/user-status";
+import { syncPostCommentCounts } from "@/lib/mobile/compat";
 
 export const router = Router();
 
@@ -278,7 +279,11 @@ router.delete("/:id", async (req, res) => {
     await db.beneficiary.updateMany({ where: { userId: id }, data: { userId: null } });
     await db.volunteer.deleteMany({ where: { userId: id } });
 
+    const commentedPostIds = (
+      await db.communityComment.findMany({ where: { userId: id }, select: { postId: true }, distinct: ["postId"] })
+    ).map((c) => c.postId);
     await db.user.delete({ where: { id } });
+    await syncPostCommentCounts({ postIds: commentedPostIds });
 
     await logActivity(
       session.name,

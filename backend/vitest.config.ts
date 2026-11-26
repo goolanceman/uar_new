@@ -10,8 +10,9 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     testTimeout: 30_000,
     pool: "forks", // isolated process — the in-app server + Prisma don't leak state
+    fileParallelism: false, // suites share uar_test; api.test.ts wipes users
     env: {
-      DATABASE_URL: "postgresql://uar:uar_dev_password@localhost:5433/uar_test?schema=public",
+      DATABASE_URL: "postgresql://uar:uar_dev_password@127.0.0.1:5433/uar_test?schema=public",
       SESSION_SECRET: "test-secret-value-at-least-16ch",
       NODE_ENV: "test",
       UPLOAD_DIR: "../upload-test",

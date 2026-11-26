@@ -83,18 +83,30 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/volunteer-applications — public form (or logged-in user)
+// Logged-in callers (web portal AND the mobile app, which now uses this main
+// module instead of its compat /volunteer/apply copy) may omit
+// fullName/email/phone — the signed-in profile fills the gaps.
 router.post("/", async (req, res) => {
   try {
     const body = req.body ?? {};
 
-    const fullName = String(body?.fullName ?? "").trim();
-    const email = String(body?.email ?? "").trim().toLowerCase();
-    const phone = String(body?.phone ?? "").trim();
+    const session = await validateSession(req);
+    const sessionUser = session
+      ? await db.user.findUnique({ where: { id: session.userId } })
+      : null;
+
+    const fullName = String(body?.fullName ?? sessionUser?.name ?? "").trim();
+    const email = String(body?.email ?? sessionUser?.email ?? "").trim().toLowerCase();
+    const phone = String(body?.phone ?? sessionUser?.phone ?? "").trim();
     const city = String(body?.city ?? "").trim();
     const occupation = body?.occupation ? String(body.occupation).trim() : null;
     const motivation = String(body?.motivation ?? "").trim();
 
-    if (!fullName || !email || !phone || !city)
+    if (!fullName || !email || !city)
+      throw new ApiError("Full name, email and city are required", 400);
+    // Anonymous applicants must give a phone; signed-in users may have none on
+    // their profile (the mobile form never collects one).
+    if (!phone && !sessionUser)
       throw new ApiError("Full name, email, phone and city are required", 400);
     if (motivation.length < 20)
       throw new ApiError("Please tell us a bit more — motivation must be at least 20 characters", 400);
@@ -140,7 +152,6 @@ router.post("/", async (req, res) => {
     const willingToTravel = Boolean(body?.willingToTravel);
     const remoteVolunteering = Boolean(body?.remoteVolunteering);
 
-    const session = await validateSession(req);
     let userId: string | null = null;
     let tempCreds: { email: string; password: string; fullName: string } | undefined;
 
@@ -316,7 +327,15 @@ router.patch("/:id", async (req, res) => {
         });
         await db.user.update({
           where: { id: application.userId },
-          data: { role: "VOLUNTEER" },
+          data: {
+            role: "VOLUNTEER",
+            // Mirror the mobile-compat approve: the app routes users by
+            // volunteer_status (pending applicants land on the status screen).
+            volunteerStatus: "approved",
+            volunteerApprovedAt: new Date(),
+            volunteerApprovedBy: session.userId,
+            volunteerRejectionReason: null,
+          },
         });
         const existingVolunteer = await db.volunteer.findUnique({ where: { userId: application.userId } });
         await db.volunteer.upsert({
@@ -337,6 +356,16 @@ router.patch("/:id", async (req, res) => {
       }
     } else if (status === "REJECTED") {
       data.reviewedAt = new Date();
+      if (application.userId) {
+        const reason = body?.reason ? String(body.reason) : null;
+        await db.user.update({
+          where: { id: application.userId },
+          data: {
+            volunteerStatus: "rejected",
+            volunteerRejectionReason: reason ?? (body?.reviewNote ? String(body.reviewNote) : null),
+          },
+        }).catch(() => undefined); // applicant row may already be gone
+      }
     }
 
     const updated = await db.volunteerApplication.update({

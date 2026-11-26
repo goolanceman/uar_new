@@ -35,18 +35,18 @@ services:
       # Inside the compose network the DB hostname is the service name
       # (`postgres`), NOT localhost — overrides the value in backend/.env.
       DATABASE_URL: postgresql://uar:uar_dev_password@postgres:5432/uar?schema=public
-      PORT: 4000
+      PORT: 3005
       # Uploaded files: bind-mounted host dir so files uploaded before
       # containerisation keep working (files/[id]/file serves from here).
       UPLOAD_DIR: /app/uploads
       CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:8090,http://127.0.0.1:8090,http://localhost:9090,http://127.0.0.1:9090,http://192.168.1.8:9090"
     ports:
-      - "4000:4000"
+      - "3005:3005"
       - "6001:6001" # Pusher-protocol WebSocket (mobile chat real-time)
     volumes:
       - ./upload:/app/uploads
     healthcheck:
-      test: ["CMD", "bun", "-e", "await fetch('http://localhost:4000/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "bun", "-e", "await fetch('http://localhost:3005/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 10s
       timeout: 5s
       retries: 6

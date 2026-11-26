@@ -21,6 +21,7 @@
  *    only auth failures use 401 (the app clears its session on 401).
  */
 import type { Request, Response, NextFunction } from "express";
+import { Prisma } from "@prisma/client";
 import { requireAuth, type Session } from "@/lib/session";
 import { db } from "@/lib/db";
 import { broadcastEvent } from "@/lib/events";
@@ -134,6 +135,7 @@ export function legacyUser(u: {
   followingCount: number;
   followersCount: number;
   isModerator: number;
+  role?: string | null;
   loginType: number;
   deviceType: number;
   deviceToken: string | null;
@@ -167,6 +169,7 @@ export function legacyUser(u: {
     following: u.followingCount,
     followers: u.followersCount,
     is_moderator: u.isModerator,
+    role: u.role ?? null,
     login_type: u.loginType,
     device_type: u.deviceType,
     device_token: u.deviceToken,
@@ -322,6 +325,29 @@ export async function sendPush(opts: {
  *  community activity without polling. */
 export function feedEvent(eventName: string, payload: unknown) {
   broadcastEvent(eventName, payload);
+}
+
+// ─── Denormalized counters ────────────────────────────────────────────────────
+
+/**
+ * Recompute app_posts.comments_count from the live comment rows (comments by
+ * non-blocked users — what fetchComments returns). Scope to the given posts,
+ * the posts a user has commented on, or every post when neither is given.
+ */
+export async function syncPostCommentCounts(scope: { postIds?: string[]; commenterId?: string } = {}) {
+  let filter = Prisma.empty;
+  if (scope.postIds) {
+    if (scope.postIds.length === 0) return;
+    filter = Prisma.sql`WHERE p."id" IN (${Prisma.join(scope.postIds)})`;
+  } else if (scope.commenterId) {
+    filter = Prisma.sql`WHERE p."id" IN (SELECT "post_id" FROM "app_comments" WHERE "user_id" = ${scope.commenterId})`;
+  }
+  await db.$executeRaw`
+    UPDATE "app_posts" p SET "comments_count" = (
+      SELECT count(*)::int FROM "app_comments" c
+      INNER JOIN "users" u ON u."id" = c."user_id"
+      WHERE c."post_id" = p."id" AND u."isBlock" = 0
+    ) ${filter}`;
 }
 
 // ─── Shared error handler for compat routes ───────────────────────────────────

@@ -116,13 +116,14 @@ export default function PartnerCamps({ user }: { user: SessionUser }) {
     }
   }, []);
 
-  const assignStaff = async (professionalId: string) => {
+  const assignStaff = async (professionalId: string, kind?: string | null) => {
     if (!camp) return;
     setAssigningId(professionalId);
     try {
-      // Camp roster management is admin-controlled in the current API —
-      // the server may reject with 403 for partner accounts.
-      await post("/api/camp-staff", { campId: camp.id, professionalId, role: "SUPPORT" });
+      // Partners roster their own staff on camps they have accepted.
+      const k = (kind ?? "").toUpperCase();
+      const role = ["DOCTOR", "NURSE", "PHARMACIST", "LAB_TECH"].includes(k) ? k : "COORDINATOR";
+      await post("/api/camp-staff", { campId: camp.id, professionalId, role });
       toast.success("Staff member assigned to the camp");
       await openCamp(camp.id);
     } catch (e) {
@@ -190,7 +191,7 @@ export default function PartnerCamps({ user }: { user: SessionUser }) {
                         Assigned
                       </span>
                     ) : (
-                      <Button size="sm" variant="outline" className="min-h-11 sm:min-h-9" disabled={assigningId === s.id} onClick={() => void assignStaff(s.id)}>
+                      <Button size="sm" variant="outline" className="min-h-11 sm:min-h-9" disabled={assigningId === s.id} onClick={() => void assignStaff(s.id, s.kind)}>
                         Assign
                       </Button>
                     )}
