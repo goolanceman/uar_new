@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarClock, HeartHandshake, Info, MapPin, Pill, Wallet } from "lucide-react";
+import { CalendarClock, CreditCard, HeartHandshake, Info, MapPin, Pill, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
 import { useMasters, labelOf } from "@/hooks/use-masters";
 import { get, patch, post } from "@/lib/api-client";
+import { navigate } from "@/lib/router";
 import { formatINR, formatDate, initials } from "@/lib/format";
 import { StatCard } from "@/components/shared/stat-card";
 import { PageHeader } from "@/components/shared/page-header";
@@ -25,7 +26,7 @@ import {
 import { amountRule, fieldError, minLen, required } from "@/lib/validators";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { asArray } from "./portal-utils";
+import { asArray, payPendingDonation } from "./portal-utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface Cause {
@@ -49,6 +50,22 @@ interface Pledge {
   startDate: string;
   status: string; // ACTIVE | COMPLETED | CANCELLED
   cause?: { code: string; patientName: string } | null;
+  // schedule + payment tracking (backend-computed, additive)
+  totalCommitted?: number;
+  paymentsMade?: number;
+  paymentCount?: number;
+  remaining?: number;
+  nextDueAt?: string | null;
+  completedAt?: string | null;
+  schedule?: Array<{ n: number; dueDate: string; amount: number; covered: boolean }>;
+  installments?: Array<{
+    id: string;
+    receiptNumber: string;
+    amount: number;
+    currency: string;
+    paymentStatus: string;
+    createdAt: string;
+  }>;
 }
 
 const MONTH_OPTIONS = [
@@ -63,7 +80,7 @@ interface PledgeForm {
   startDate: string;
 }
 
-export default function DonorCauses(_props: { user: SessionUser }) {
+export default function DonorCauses({ user }: { user: SessionUser }) {
   const { options: conditionOptions } = useMasters("CONDITION");
   const [causes, setCauses] = useState<Cause[]>([]);
   const [pledges, setPledges] = useState<Pledge[]>([]);
@@ -79,6 +96,10 @@ export default function DonorCauses(_props: { user: SessionUser }) {
   // Cancel pledge
   const [cancelPledge, setCancelPledge] = useState<Pledge | null>(null);
   const [cancelling, setCancelling] = useState(false);
+
+  // Pledge schedule detail + installment payment
+  const [schedulePledge, setSchedulePledge] = useState<Pledge | null>(null);
+  const [payingPledge, setPayingPledge] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -154,6 +175,48 @@ export default function DonorCauses(_props: { user: SessionUser }) {
       toast.error(e instanceof Error ? e.message : "Could not cancel pledge");
     } finally {
       setCancelling(false);
+    }
+  };
+
+  /** Pays the next pledge installment through the normal donation flow. */
+  const payPledgeInstallment = async (p: Pledge) => {
+    setPayingPledge(p.id);
+    try {
+      const created = await post<{ receiptNumber: string; checkoutPending?: boolean }>(
+        "/api/donations",
+        {
+          amount: p.amountPerMonth,
+          pledgeId: p.id,
+          paymentMethod: "RAZORPAY",
+          donorName: user.name,
+          donorEmail: user.email,
+        }
+      );
+      if (!created.checkoutPending) {
+        toast.success(`Installment recorded — receipt ${created.receiptNumber}.`);
+        setSchedulePledge(null);
+        await load();
+        return;
+      }
+      const result = await payPendingDonation({
+        receiptNumber: created.receiptNumber,
+        description: p.cause?.patientName ? `Medicine pledge — ${initials(p.cause.patientName)}` : "Medicine pledge installment",
+        name: user.name,
+        email: user.email,
+      });
+      if (result.ok) {
+        toast.success("Payment confirmed — your pledge commitment is on track!");
+        setSchedulePledge(null);
+        await load();
+      } else {
+        toast.error(result.error);
+        if (result.redirectToDonate) navigate("/donate");
+        else await load();
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not pay this installment");
+    } finally {
+      setPayingPledge(null);
     }
   };
 
@@ -299,38 +362,74 @@ export default function DonorCauses(_props: { user: SessionUser }) {
           </SectionCard>
         ) : (
           <div className="grid gap-3">
-            {pledges.map((p) => (
-              <div key={p.id} className="rounded-xl border bg-card p-4 shadow-sm sm:p-5">
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-mono text-xs text-muted-foreground">
-                        {p.cause?.code ?? "UAR-MED"}
+            {pledges.map((p) => {
+              const showSchedule = schedulePledge?.id === p.id;
+              const canPay = p.status === "ACTIVE" && (p.remaining ?? p.amountPerMonth * p.months) > 0;
+              return (
+                <div key={p.id} className="rounded-xl border bg-card p-4 shadow-sm sm:p-5">
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-mono text-xs text-muted-foreground">
+                          {p.cause?.code ?? "UAR-MED"}
+                        </p>
+                        <StatusBadge status={p.status} />
+                      </div>
+                      <p className="mt-0.5 truncate text-sm font-semibold">
+                        {p.cause?.patientName ?? "Patient"} — {formatINR(p.amountPerMonth)}/mo
                       </p>
-                      <StatusBadge status={p.status} />
+                      <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarClock className="size-3" aria-hidden="true" />
+                        {p.months} months · from {formatDate(p.startDate)}
+                      </p>
+                      {typeof p.paymentsMade === "number" && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Paid {formatINR(p.paymentsMade)} of {formatINR(p.totalCommitted ?? p.amountPerMonth * p.months)} ·{" "}
+                          <span className="font-semibold text-foreground">{formatINR(p.remaining ?? 0)} remaining</span>
+                          {p.status === "ACTIVE" && p.nextDueAt ? ` · next due ${formatDate(p.nextDueAt)}` : ""}
+                        </p>
+                      )}
                     </div>
-                    <p className="mt-0.5 truncate text-sm font-semibold">
-                      {p.cause?.patientName ?? "Patient"} — {formatINR(p.amountPerMonth)}/mo
-                    </p>
-                    <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                      <CalendarClock className="size-3" aria-hidden="true" />
-                      {p.months} months · from {formatDate(p.startDate)}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-h-11 sm:min-h-9"
+                        onClick={() => setSchedulePledge(showSchedule ? null : p)}
+                        aria-expanded={showSchedule}
+                        aria-label={`View payment schedule for ${p.cause?.patientName ?? "patient"}`}
+                      >
+                        Schedule
+                      </Button>
+                      {canPay && (
+                        <Button
+                          size="sm"
+                          className="min-h-11 gap-1.5 sm:min-h-9"
+                          disabled={payingPledge === p.id}
+                          onClick={() => payPledgeInstallment(p)}
+                          aria-label={`Pay the next installment for ${p.cause?.patientName ?? "patient"}`}
+                        >
+                          <CreditCard className="size-4" aria-hidden="true" />
+                          Pay installment
+                        </Button>
+                      )}
+                      {p.status === "ACTIVE" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="min-h-11 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9"
+                          onClick={() => setCancelPledge(p)}
+                          aria-label={`Pause pledge for ${p.cause?.patientName ?? "patient"}`}
+                        >
+                          Pause
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  {p.status === "ACTIVE" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-h-11 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9"
-                      onClick={() => setCancelPledge(p)}
-                      aria-label={`Pause pledge for ${p.cause?.patientName ?? "patient"}`}
-                    >
-                      Pause
-                    </Button>
-                  )}
+                  {showSchedule && <PledgeScheduleDetail p={p} />}
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <p className="text-xs text-muted-foreground">
               Pausing a pledge stops the monthly mandate — the patient may lose
               medicine coverage unless another donor adopts them.
@@ -452,6 +551,90 @@ export default function DonorCauses(_props: { user: SessionUser }) {
         loading={cancelling}
         onConfirm={submitCancel}
       />
+    </div>
+  );
+}
+
+/**
+ * Pledge schedule detail — month-by-month due dates with covered markers,
+ * completed contributions history and the paid-vs-remaining commitment math.
+ * All numbers come from the backend (GET /api/causes/pledges?mine=1 and
+ * GET /api/pledges/:id compute the schedule server-side).
+ */
+function PledgeScheduleDetail({ p }: { p: Pledge }) {
+  const installments = p.installments ?? [];
+  return (
+    <div className="mt-4 space-y-3 border-t pt-4">
+      <div className="grid gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-lg border bg-muted/40 p-3">
+          <p className="text-muted-foreground">Total commitment</p>
+          <p className="mt-0.5 text-sm font-bold">
+            {formatINR(p.totalCommitted ?? p.amountPerMonth * p.months)}
+          </p>
+        </div>
+        <div className="rounded-lg border bg-muted/40 p-3">
+          <p className="text-muted-foreground">Paid so far</p>
+          <p className="mt-0.5 text-sm font-bold">
+            {formatINR(p.paymentsMade ?? 0)}{" "}
+            <span className="text-xs font-normal text-muted-foreground">
+              ({p.paymentCount ?? 0} installment{(p.paymentCount ?? 0) === 1 ? "" : "s"})
+            </span>
+          </p>
+        </div>
+        <div className="rounded-lg border bg-muted/40 p-3">
+          <p className="text-muted-foreground">Remaining</p>
+          <p className="mt-0.5 text-sm font-bold">{formatINR(p.remaining ?? 0)}</p>
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Schedule
+        </p>
+        <div className="grid gap-1.5">
+          {(p.schedule ?? []).map((s) => (
+            <div
+              key={s.n}
+              className="flex items-center justify-between gap-3 rounded-lg border px-3 py-1.5 text-xs"
+            >
+              <span className="text-muted-foreground">#{s.n}</span>
+              <span>{formatDate(s.dueDate)}</span>
+              <span className="font-semibold">{formatINR(s.amount)}</span>
+              {s.covered ? (
+                <StatusBadge status="COMPLETED" />
+              ) : (
+                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 text-[10px] text-amber-700 dark:text-amber-300">
+                  Upcoming
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {installments.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Completed contributions
+          </p>
+          <div className="grid gap-1.5">
+            {installments.map((i) => (
+              <div key={i.id} className="flex items-center justify-between gap-3 text-xs">
+                <span className="font-mono text-muted-foreground">{i.receiptNumber}</span>
+                <span className="text-muted-foreground">{formatDate(i.createdAt)}</span>
+                <StatusBadge status={i.paymentStatus} />
+                <span className="font-semibold">{formatINR(i.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        A pledge is a commitment to give; a completed donation is money already
+        received and receipted. Pay each installment with the button above — the
+        pledge completes automatically once the full commitment is covered.
+      </p>
     </div>
   );
 }

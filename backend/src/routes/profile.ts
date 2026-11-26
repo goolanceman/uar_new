@@ -240,6 +240,7 @@ router.patch("/", multipart, async (req, res) => {
     if (body?.blockUserIds !== undefined) data.blockUserIds = csvValue(body.blockUserIds);
     if (body?.savedMusicIds !== undefined) data.savedMusicIds = csvValue(body.savedMusicIds);
     if (body?.savedReelIds !== undefined) data.savedReelIds = csvValue(body.savedReelIds);
+    if (body?.savedPostIds !== undefined) data.savedPostIds = csvValue(body.savedPostIds);
     // Toggle flags — accept booleans or the legacy 0/1 ints.
     if (body?.pushNotifications !== undefined)
       data.isPushNotifications = body.pushNotifications === true || body.pushNotifications === 1 || body.pushNotifications === "1" ? 1 : 0;

@@ -318,6 +318,35 @@ export async function listFeed(meId: string, opts: { type?: string; skip: number
   return { items: withCauseProgress(posts, wires), total };
 }
 
+/** GET /api/posts/saved — the session user's savedPostIds (the ids are edited
+ *  via PATCH /api/profile, mirroring savedReelIds). */
+export async function listSavedPosts(meId: string, skip: number, take: number) {
+  const me = await db.user.findUnique({ where: { id: meId }, select: { id: true, savedPostIds: true, blockUserIds: true } });
+  if (!me) throw new ApiError("User not found", 404);
+
+  const csv = (me.savedPostIds ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const blockedIds = (me.blockUserIds ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const where: Prisma.CommunityPostWhereInput = {
+    id: { in: csv },
+    user: { isBlock: 0 },
+    isRestricted: 0,
+    ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
+  };
+  const [rows, total] = await Promise.all([
+    db.communityPost.findMany({ where, include: POST_INCLUDE, orderBy: { createdAt: "desc" }, skip, take }),
+    db.communityPost.count({ where }),
+  ]);
+  const wires = await processPosts(rows, me.id);
+  return { items: withCauseProgress(rows, wires), total };
+}
+
 /** GET /api/posts/:id — single feed post. */
 export async function getPost(meId: string, postId: string) {
   const me = await db.user.findUnique({ where: { id: meId } });

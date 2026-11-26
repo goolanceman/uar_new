@@ -4,16 +4,21 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  CreditCard,
   HandCoins,
   Landmark,
+  Pause,
+  Play,
   ReceiptText,
   RefreshCw,
+  Repeat,
   Search,
   ShieldAlert,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionUser } from "@/hooks/use-auth";
-import { get } from "@/lib/api-client";
+import { get, patch, post } from "@/lib/api-client";
 import { navigate } from "@/lib/router";
 import { formatMoney, formatDate, titleCase, DEFAULT_CURRENCY } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -23,6 +28,7 @@ import { SectionCard } from "@/components/shared/section-card";
 import { EmptyState } from "@/components/shared/empty-state";
 import { DataField } from "@/components/shared/data-field";
 import { StatusBadge, humanize } from "@/components/shared/status-badge";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { ExportMenu, downloadCsv, type CsvColumn } from "@/components/shared/csv";
 import { ViewSwitcher, useViewPref, type DataViewMode } from "@/components/shared/view-switcher";
 import { Input } from "@/components/ui/input";
@@ -54,6 +60,7 @@ import {
   fyTimestamps,
   is80gEligible,
   openReceipt,
+  payPendingDonation,
 } from "./portal-utils";
 
 interface Donation {
@@ -108,6 +115,36 @@ function eightyGNote(d: Donation): string {
   return "Eligible for 50% deduction u/s 80G — quote the receipt number in your ITR filing.";
 }
 
+/** A monthly-giving commitment (GET /api/donations/recurring/mine). */
+interface RecurringCommitment {
+  id: string;
+  amount: number;
+  currency: string;
+  recurringFrequency: string; // WEEKLY | MONTHLY | QUARTERLY | YEARLY
+  recurringStatus: string; // ACTIVE | PAUSED | CANCELLED
+  nextChargeAt: string | null;
+  createdAt: string;
+  category?: string;
+  campaign?: { id: string; title: string } | null;
+  installmentCount: number;
+  paidTotal: number;
+  installments: Array<{
+    id: string;
+    receiptNumber: string;
+    amount: number;
+    currency: string;
+    paymentStatus: string;
+    createdAt: string;
+  }>;
+}
+
+const FREQUENCY_LABELS: Record<string, string> = {
+  WEEKLY: "weekly",
+  MONTHLY: "monthly",
+  QUARTERLY: "quarterly",
+  YEARLY: "yearly",
+};
+
 const CSV_COLUMNS: CsvColumn<Donation>[] = [
   { header: "Receipt no.", value: (d) => d.receiptNumber },
   { header: "Date", value: (d) => formatDate(d.createdAt) },
@@ -122,10 +159,17 @@ const CSV_COLUMNS: CsvColumn<Donation>[] = [
   { header: "80G eligible", value: (d) => (is80gEligible(d) ? "Yes" : "No") },
 ];
 
-export default function DonorDonations({ user: _user }: { user: SessionUser }) {
+export default function DonorDonations({ user }: { user: SessionUser }) {
   const [donations, setDonations] = useState<Donation[]>([]);
+  const [recurring, setRecurring] = useState<RecurringCommitment[]>([]);
   const [pan, setPan] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Monthly-giving actions
+  const [recurringBusy, setRecurringBusy] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<
+    { commitment: RecurringCommitment; action: "PAUSED" | "ACTIVE" | "CANCELLED" } | null
+  >(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   // Org default currency for the aggregate strip (each row keeps its own).
   const [orgCurrency, setOrgCurrency] = useState<string>(DEFAULT_CURRENCY);
 
@@ -144,12 +188,15 @@ export default function DonorDonations({ user: _user }: { user: SessionUser }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [d, me, pub] = await Promise.all([
+      const [d, me, pub, rec] = await Promise.all([
         get<unknown>("/api/donations?mine=1"),
         get<{ user?: { pan?: string | null } | null }>("/api/auth/me").catch(() => null),
         get<{ currency?: string }>("/api/settings/public").catch(() => null),
+        // Monthly-giving commitments — 404-safe for backends older than this feature
+        get<unknown>("/api/donations/recurring/mine").catch(() => []),
       ]);
       setDonations(asArray<Donation>(d));
+      setRecurring(asArray<RecurringCommitment>(rec));
       setPan(me?.user?.pan ?? null);
       if (pub?.currency) setOrgCurrency(pub.currency);
     } catch (e) {
@@ -235,6 +282,70 @@ export default function DonorDonations({ user: _user }: { user: SessionUser }) {
   };
 
   const toggleExpand = (id: string) => setExpandedId((prev) => (prev === id ? null : id));
+
+  /* ------------------------ monthly giving actions ----------------------- */
+  const runRecurringAction = async () => {
+    if (!confirmAction) return;
+    const { commitment, action } = confirmAction;
+    setConfirmBusy(true);
+    try {
+      await patch(`/api/donations/recurring/${commitment.id}`, { recurringStatus: action });
+      toast.success(
+        action === "PAUSED"
+          ? "Monthly giving paused — no reminders while it's paused."
+          : action === "ACTIVE"
+            ? "Monthly giving resumed."
+            : "Monthly giving cancelled."
+      );
+      setConfirmAction(null);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update the commitment");
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  const payInstallment = async (c: RecurringCommitment) => {
+    setRecurringBusy(c.id);
+    try {
+      const created = await post<{
+        receiptNumber: string;
+        checkoutPending?: boolean;
+      }>("/api/donations", {
+        amount: c.amount,
+        currency: c.currency || undefined,
+        recurringParentId: c.id,
+        campaignId: c.campaign?.id || undefined,
+        paymentMethod: "RAZORPAY",
+        donorName: user.name,
+        donorEmail: user.email,
+      });
+      if (!created.checkoutPending) {
+        toast.success(`Installment recorded — receipt ${created.receiptNumber}.`);
+        await load();
+        return;
+      }
+      const result = await payPendingDonation({
+        receiptNumber: created.receiptNumber,
+        description: c.campaign?.title ? `Monthly giving — ${c.campaign.title}` : "Monthly giving installment",
+        name: user.name,
+        email: user.email,
+      });
+      if (result.ok) {
+        toast.success("Payment confirmed — thank you for your continued giving!");
+        await load();
+      } else {
+        toast.error(result.error);
+        if (result.redirectToDonate) navigate("/donate");
+        else await load(); // verification may have settled server-side — refresh
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not pay this installment");
+    } finally {
+      setRecurringBusy(null);
+    }
+  };
 
   /* ------------------------------- rows ---------------------------------- */
   const renderDetail = (d: Donation) => (
@@ -392,6 +503,133 @@ export default function DonorDonations({ user: _user }: { user: SessionUser }) {
         </p>
       )}
       </div>
+
+      {/* ---------------------- Monthly giving ---------------------- */}
+      <SectionCard
+        title="Monthly giving"
+        description="Your recurring commitments — every installment is one you approve"
+        icon={<Repeat className="size-5" />}
+      >
+        {loading ? (
+          <div className="space-y-3">
+            {[0, 1].map((i) => (
+              <Skeleton key={i} className="h-20 w-full rounded-xl" />
+            ))}
+          </div>
+        ) : recurring.length === 0 ? (
+          <EmptyState
+            icon={<Repeat className="size-5" />}
+            title="No monthly commitments yet"
+            hint="Set up a recurring gift from the Donate page — you choose the amount and cadence, approve each installment and can pause anytime."
+          >
+            <Button className="min-h-11" onClick={() => navigate("/donate")}>
+              <Repeat className="size-4" aria-hidden="true" />
+              Start monthly giving
+            </Button>
+          </EmptyState>
+        ) : (
+          <div className="grid gap-3">
+            {recurring.map((c) => {
+              const nextDue = c.nextChargeAt ? new Date(c.nextChargeAt) : null;
+              const active = c.recurringStatus === "ACTIVE";
+              const settled = c.installments.filter((i) => i.paymentStatus === "COMPLETED");
+              return (
+                <div key={c.id} className="rounded-xl border bg-background p-4">
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold">
+                          {c.campaign?.title ?? "General fund"}
+                        </p>
+                        <StatusBadge status={c.recurringStatus} />
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {formatMoney(c.amount, c.currency || DEFAULT_CURRENCY)}{" "}
+                        {FREQUENCY_LABELS[c.recurringFrequency] ?? "recurring"} ·{" "}
+                        {c.installmentCount} installment{c.installmentCount === 1 ? "" : "s"} paid{" "}
+                        ({formatMoney(c.paidTotal, c.currency || DEFAULT_CURRENCY)})
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {nextDue && active
+                          ? `Next installment due ${formatDate(nextDue.toISOString())} — we'll remind you, you approve the payment.`
+                          : active
+                            ? "Next date is being scheduled — pay your first installment below."
+                            : c.recurringStatus === "PAUSED"
+                              ? "Paused — resume anytime to keep the reminders coming."
+                              : "Cancelled — start a new commitment from the Donate page."}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {active && (
+                        <Button
+                          size="sm"
+                          className="min-h-11 gap-1.5 sm:min-h-9"
+                          disabled={recurringBusy === c.id}
+                          onClick={() => payInstallment(c)}
+                          aria-label={`Pay the current installment for ${c.campaign?.title ?? "monthly giving"}`}
+                        >
+                          <CreditCard className="size-4" aria-hidden="true" />
+                          Pay installment
+                        </Button>
+                      )}
+                      {(c.recurringStatus === "ACTIVE" || c.recurringStatus === "PAUSED") && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="min-h-11 gap-1.5 sm:min-h-9"
+                            onClick={() => setConfirmAction({ commitment: c, action: c.recurringStatus === "ACTIVE" ? "PAUSED" : "ACTIVE" })}
+                            aria-label={c.recurringStatus === "ACTIVE" ? "Pause monthly giving" : "Resume monthly giving"}
+                          >
+                            {c.recurringStatus === "ACTIVE" ? (
+                              <>
+                                <Pause className="size-4" aria-hidden="true" /> Pause
+                              </>
+                            ) : (
+                              <>
+                                <Play className="size-4" aria-hidden="true" /> Resume
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="min-h-11 gap-1.5 border-red-500/30 text-red-600 hover:bg-red-500/10 hover:text-red-700 dark:text-red-400 sm:min-h-9"
+                            onClick={() => setConfirmAction({ commitment: c, action: "CANCELLED" })}
+                            aria-label="Cancel monthly giving"
+                          >
+                            <XCircle className="size-4" aria-hidden="true" />
+                            Cancel
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {c.installments.length > 0 && (
+                    <details className="mt-3 border-t pt-3">
+                      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                        Previous payments ({settled.length} of {c.installments.length} shown settled)
+                      </summary>
+                      <div className="mt-2 grid gap-1.5">
+                        {c.installments.map((i) => (
+                          <div key={i.id} className="flex items-center justify-between gap-3 text-xs">
+                            <span className="font-mono text-muted-foreground">{i.receiptNumber}</span>
+                            <span className="text-muted-foreground">{formatDate(i.createdAt)}</span>
+                            <StatusBadge status={i.paymentStatus} />
+                            <span className="font-semibold">
+                              {formatMoney(i.amount, i.currency || c.currency || DEFAULT_CURRENCY)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
 
       {/* Toolbar — filters + view switcher */}
       <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4">
@@ -676,6 +914,43 @@ export default function DonorDonations({ user: _user }: { user: SessionUser }) {
           })}
         </div>
       )}
+
+      {/* Monthly-giving pause/resume/cancel confirmation */}
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(o) => !o && setConfirmAction(null)}
+        title={
+          confirmAction?.action === "PAUSED"
+            ? "Pause this monthly commitment?"
+            : confirmAction?.action === "CANCELLED"
+              ? "Cancel this monthly commitment?"
+              : "Resume this monthly commitment?"
+        }
+        recordName={
+          confirmAction
+            ? `${confirmAction.commitment.campaign?.title ?? "General fund"} · ${formatMoney(
+                confirmAction.commitment.amount,
+                confirmAction.commitment.currency || DEFAULT_CURRENCY
+              )} ${FREQUENCY_LABELS[confirmAction.commitment.recurringFrequency] ?? ""}`.trim()
+            : null
+        }
+        description={
+          confirmAction?.action === "CANCELLED"
+            ? "Cancelling stops all future reminders and installments for this commitment. This cannot be undone — start a new commitment anytime from the Donate page."
+            : confirmAction?.action === "PAUSED"
+              ? "Pausing stops reminders while you take a break — resume anytime."
+              : "Resuming brings back the reminders and the pay-installment action."
+        }
+        confirmLabel={
+          confirmAction?.action === "PAUSED"
+            ? "Yes, pause"
+            : confirmAction?.action === "CANCELLED"
+              ? "Yes, cancel commitment"
+              : "Yes, resume"
+        }
+        loading={confirmBusy}
+        onConfirm={runRecurringAction}
+      />
     </div>
   );
 }

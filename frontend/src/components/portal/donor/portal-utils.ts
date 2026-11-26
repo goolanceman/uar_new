@@ -7,6 +7,7 @@
  */
 
 import { financialYear } from "@/lib/format";
+import { post } from "@/lib/api-client";
 
 export function asArray<T>(data: unknown): T[] {
   if (Array.isArray(data)) return data as T[];
@@ -106,4 +107,117 @@ export function openReceipt(receiptNumber: string): void {
 
 export function openCertificate(code: string): void {
   window.open(`/api/certificates/${encodeURIComponent(code)}/html`, "_blank", "noopener");
+}
+
+/* ------------------ gateway checkout for installments --------------------- */
+
+/** POST /api/payments payload — public fields only (Razorpay key id is public). */
+interface GatewayOrder {
+  provider: string;
+  orderId?: string;
+  keyId?: string;
+  amount?: number;
+  currency?: string;
+  checkoutUrl?: string;
+  paymentSessionId?: string;
+}
+
+type RzpInstance = { open: () => void };
+type RzpWindow = {
+  Razorpay?: new (options: {
+    key: string;
+    order_id: string;
+    amount: number;
+    currency: string;
+    name: string;
+    description?: string;
+    prefill?: { name?: string; email?: string; contact?: string };
+    theme?: { color?: string };
+    modal?: { ondismiss?: () => void };
+    handler: (r: {
+      razorpay_order_id: string;
+      razorpay_payment_id: string;
+      razorpay_signature: string;
+    }) => void | Promise<void>;
+  }) => RzpInstance;
+};
+
+/** Loads the Razorpay hosted-checkout SDK once per page session. */
+export async function loadRazorpayCheckout(): Promise<boolean> {
+  const w = window as unknown as RzpWindow;
+  if (w.Razorpay) return true;
+  return new Promise((resolve) => {
+    const el = document.createElement("script");
+    el.src = "https://checkout.razorpay.com/v1/checkout.js";
+    el.async = true;
+    el.onload = () => resolve(Boolean((window as unknown as RzpWindow).Razorpay));
+    el.onerror = () => resolve(false);
+    document.head.appendChild(el);
+  });
+}
+
+export type InstallmentPayResult = { ok: true } | { ok: false; error: string; redirectToDonate?: boolean };
+
+/**
+ * Pays a PENDING donation through the normal gateway flow — the SAME pipeline
+ * the public Donate page uses: POST /api/payments creates the provider order
+ * against the receipt number, Razorpay hosted checkout opens in the portal,
+ * and the signed callback is verified via POST /api/payments/verify. Other
+ * providers are answered honestly (the Donate page owns those checkouts).
+ */
+export async function payPendingDonation(opts: {
+  receiptNumber: string;
+  description: string;
+  name?: string;
+  email?: string;
+  contact?: string;
+}): Promise<InstallmentPayResult> {
+  try {
+    const order = await post<GatewayOrder>("/api/payments", { receiptNumber: opts.receiptNumber });
+    if (order.provider !== "RAZORPAY") {
+      return {
+        ok: false,
+        error: `This gateway (${order.provider}) is supported on the Donate page — please complete the payment there.`,
+        redirectToDonate: true,
+      };
+    }
+    const loaded = await loadRazorpayCheckout();
+    const w = window as unknown as RzpWindow;
+    if (!loaded || !w.Razorpay)
+      return { ok: false, error: "Razorpay checkout could not be loaded — check your connection and try again." };
+
+    return await new Promise<InstallmentPayResult>((resolve) => {
+      const rzp = new w.Razorpay!({
+        key: order.keyId ?? "",
+        order_id: order.orderId ?? "",
+        amount: order.amount ?? 0,
+        currency: order.currency ?? "INR",
+        name: "United Angel Reach",
+        description: opts.description,
+        prefill: { name: opts.name, email: opts.email, contact: opts.contact },
+        theme: { color: "#059669" },
+        modal: {
+          ondismiss: () => resolve({ ok: false, error: "Payment window closed — press Pay again to retry." }),
+        },
+        handler: async (r) => {
+          try {
+            await post("/api/payments/verify", {
+              razorpay_order_id: r.razorpay_order_id,
+              razorpay_payment_id: r.razorpay_payment_id,
+              razorpay_signature: r.razorpay_signature,
+            });
+            resolve({ ok: true });
+          } catch (e) {
+            resolve({
+              ok: false,
+              error: e instanceof Error ? e.message : "Payment verification failed — our team will reconcile your receipt.",
+            });
+          }
+        },
+      });
+      rzp.open();
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Could not start the payment." };
+  }
 }

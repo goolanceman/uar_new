@@ -13,6 +13,7 @@ import {
   logActivity,
 } from "@/lib/session";
 import { recomputeCause } from "@/lib/causes";
+import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
 
 export const router = Router();
 
@@ -37,6 +38,69 @@ router.get("/", async (req, res) => {
       take: 200,
     });
     return json(res, rows);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/pledges/mine — the signed-in donor's pledges with the full
+// payment schedule: months × amountPerMonth from startDate, payments made
+// (linked donations), remaining commitment and next due date. Owner-scoped.
+// NOTE: declared before "/:id".
+router.get("/mine", async (req, res) => {
+  try {
+    const s = await requireAuth(req);
+    const pledges = await db.pledge.findMany({
+      where: { donorId: s.userId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        cause: {
+          select: { code: true, patientName: true, condition: true, monthlyCost: true },
+        },
+      },
+    });
+    const ids = pledges.map((p) => p.id);
+    const payments = ids.length
+      ? await db.donation.findMany({ where: { pledgeId: { in: ids } } })
+      : [];
+    return json(
+      res,
+      pledges.map((p) => {
+        const mine = payments.filter((d) => d.pledgeId === p.id);
+        return {
+          ...p,
+          ...pledgeSchedule(p, mine),
+          installments: pledgeInstallments(mine),
+        };
+      })
+    );
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/pledges/:id — one pledge + schedule + payments (owner or ADMIN)
+router.get("/:id", async (req, res) => {
+  try {
+    const s = await requireAuth(req);
+    const { id } = req.params;
+    const pledge = await db.pledge.findUnique({
+      where: { id },
+      include: {
+        cause: {
+          select: { code: true, patientName: true, condition: true, monthlyCost: true },
+        },
+      },
+    });
+    if (!pledge) throw new ApiError("Pledge not found", 404);
+    if (pledge.donorId !== s.userId && s.role !== "ADMIN")
+      throw new ApiError("You can only view your own pledges", 403);
+    const payments = await db.donation.findMany({ where: { pledgeId: pledge.id } });
+    return json(res, {
+      ...pledge,
+      ...pledgeSchedule(pledge, payments),
+      installments: pledgeInstallments(payments),
+    });
   } catch (e) {
     return handleError(e, res);
   }

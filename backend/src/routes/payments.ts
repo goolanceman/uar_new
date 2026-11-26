@@ -21,6 +21,7 @@ import { gatewayConfig, loadSettings, type GatewayConfig } from "@/lib/notify";
 import { getCurrency } from "@/lib/settings-core";
 import { broadcastEvent } from "@/lib/events";
 import { settleDonationSideEffects } from "@/lib/charity/settlement";
+import { settleDonationCommitments } from "@/lib/recurring";
 
 export const router = Router();
 
@@ -320,6 +321,14 @@ async function settleCompleted(
       amount: donation.amount,
       campaignId: donation.campaignId,
     });
+    // Recurring/pledge linkage — advance the parent's nextChargeAt when this
+    // donation is a recurring installment, fold it into pledge tracking when
+    // it pays a pledge installment (lib/recurring.ts; idempotent).
+    try {
+      await settleDonationCommitments(donation.id);
+    } catch {
+      // commitment tracking must never fail settlement
+    }
     await logActivity(
       donation.donorName,
       "PAYMENT_VERIFIED",

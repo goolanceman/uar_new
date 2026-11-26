@@ -22,6 +22,7 @@ import {
   listPostLikers,
   listPostsByHashtag,
   listPostsByInterest,
+  listSavedPosts,
   listUserPosts,
   reportPost,
   searchHashtags,
@@ -61,6 +62,19 @@ router.get("/", async (req, res) => {
     const { page, limit, skip } = pageParams(req.query);
     const type = String(req.query.type ?? "latest");
     const { items, total } = await listFeed(session.userId, { type, skip, take: limit });
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/posts/saved — the session user's saved posts (ids edited via
+// PATCH /api/profile savedPostIds).
+router.get("/saved", async (req, res) => {
+  try {
+    const session = await actor(req);
+    const { page, limit, skip } = pageParams(req.query);
+    const { items, total } = await listSavedPosts(session.userId, skip, limit);
     return json(res, paged(items, page, limit, total));
   } catch (e) {
     return handleError(e, res);

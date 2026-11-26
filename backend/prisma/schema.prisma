@@ -47,6 +47,7 @@ model User {
   blockUserIds             String? // CSV of User ids
   savedMusicIds            String? // CSV
   savedReelIds             String? // CSV
+  savedPostIds             String? // CSV
   isModerator              Int       @default(0)
   loginType                Int       @default(2) // 0 google | 1 apple | 2 email
   deviceType               Int       @default(0) // 0 android | 1 ios
@@ -155,6 +156,9 @@ model Donation {
   type               String    @default("ONE_TIME") // ONE_TIME | RECURRING
   recurringFrequency String? // WEEKLY | MONTHLY | QUARTERLY | YEARLY
   nextChargeAt       DateTime?
+  recurringStatus    String? // ACTIVE | PAUSED | CANCELLED — lifecycle of a RECURRING parent commitment (null for one-time gifts and installments)
+  recurringParentId  String?
+  pledgeId           String?
   category           String    @default("GENERAL") // GENERAL | MEDICAL | FOOD_DISTRIBUTION | SANITARY_PADS | EDUCATION_SUPPORT | EMERGENCY | ANIMAL_WELFARE | MOBILITY | AWARENESS
   paymentMethod      String    @default("UPI") // UPI | RAZORPAY | CARD | CASH | BANK_TRANSFER | CHEQUE
   paymentProvider    String? // RAZORPAY | CASHFREE | PAYU | STRIPE | MANUAL
@@ -185,10 +189,16 @@ model Donation {
   causePost CommunityPost?  @relation("CausePostDonations", fields: [causePostId], references: [id])
   points    DonationPoint[]
 
+  recurringParent Donation?  @relation("RecurringInstallments", fields: [recurringParentId], references: [id], onDelete: SetNull)
+  installments    Donation[] @relation("RecurringInstallments")
+  pledge          Pledge?    @relation(fields: [pledgeId], references: [id], onDelete: SetNull)
+
   foodEventId String? // set when this donation sponsors a FoodEvent
   causePostId String? // mobile cause donations → CommunityPost (type=cause)
 
   @@index([causePostId])
+  @@index([recurringParentId])
+  @@index([pledgeId])
   @@map("donations")
 }
 
@@ -578,9 +588,11 @@ model Pledge {
   months         Int      @default(6)
   startDate      DateTime @default(now())
   status         String   @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  completedAt    DateTime? // set when linked payments cover the full commitment
   createdAt      DateTime @default(now())
 
-  cause Cause @relation(fields: [causeId], references: [id])
+  cause     Cause      @relation(fields: [causeId], references: [id])
+  donations Donation[] // installment payments made against this pledge via the normal donation flow
 
   @@map("pledges")
 }

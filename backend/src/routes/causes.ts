@@ -15,6 +15,7 @@ import {
   validateSession,
 } from "@/lib/session";
 import { recomputeCause, CAUSE_STATUSES, CAUSE_TRANSITIONS } from "@/lib/causes";
+import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
@@ -88,7 +89,23 @@ router.get("/pledges", async (req, res) => {
         },
       },
     });
-    return json(res, pledges);
+    // Schedule/payment-tracking fields are additive — the flat pledge rows the
+    // web portal and mobile app already parse keep their shape.
+    const ids = pledges.map((p) => p.id);
+    const payments = ids.length
+      ? await db.donation.findMany({ where: { pledgeId: { in: ids } } })
+      : [];
+    return json(
+      res,
+      pledges.map((p) => {
+        const mine = payments.filter((d) => d.pledgeId === p.id);
+        return {
+          ...p,
+          ...pledgeSchedule(p, mine),
+          installments: pledgeInstallments(mine),
+        };
+      })
+    );
   } catch (e) {
     return handleError(e, res);
   }
@@ -268,6 +285,16 @@ router.post("/:id/pledges", async (req, res) => {
     const donorName =
       String(body.donorName ?? "").trim() || session?.name || "Anonymous Donor";
 
+    // The web portal and the app both send a start date for the mandate —
+    // default to now when absent (legacy callers).
+    let startDate = new Date();
+    if (body.startDate) {
+      const parsed = new Date(String(body.startDate));
+      if (Number.isNaN(parsed.getTime()))
+        throw new ApiError("startDate is not a valid date", 400);
+      startDate = parsed;
+    }
+
     const pledge = await db.pledge.create({
       data: {
         causeId: id,
@@ -275,6 +302,7 @@ router.post("/:id/pledges", async (req, res) => {
         donorName,
         amountPerMonth,
         months,
+        startDate,
         status: "ACTIVE",
       },
     });

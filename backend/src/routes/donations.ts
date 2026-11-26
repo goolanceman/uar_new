@@ -19,6 +19,13 @@ import { assertTransition } from "@/lib/workflow";
 import { loadSettings, notifyDonation, emailShell, sendEmail } from "@/lib/notify";
 import { broadcastEvent } from "@/lib/events";
 import { paged, pageParams } from "@/lib/community/serializers";
+import {
+  VALID_FREQUENCIES,
+  RECURRING_STATUSES,
+  RECURRING_STATUS_TRANSITIONS,
+  nextChargeAfter,
+  settleDonationCommitments,
+} from "@/lib/recurring";
 
 export const router = Router();
 
@@ -299,14 +306,50 @@ router.post("/", async (req, res) => {
     if (pan && !PAN_RE.test(pan))
       throw new ApiError("PAN must look like ABCDE1234F", 400);
 
-    const type = body?.type === "RECURRING" ? "RECURRING" : "ONE_TIME";
-    const freqRaw = body?.recurringFrequency ? String(body.recurringFrequency).toUpperCase() : null;
-    const recurringFrequency =
-      type === "RECURRING"
-        ? ["WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"].includes(freqRaw ?? "")
-          ? freqRaw
-          : "MONTHLY"
-        : null;
+    let type = body?.type === "RECURRING" ? "RECURRING" : "ONE_TIME";
+    const freqRaw = body?.recurringFrequency ? String(body.recurringFrequency).trim().toUpperCase() : null;
+    if (type === "RECURRING" && freqRaw && !(VALID_FREQUENCIES as readonly string[]).includes(freqRaw))
+      throw new ApiError("recurringFrequency must be WEEKLY, MONTHLY, QUARTERLY or YEARLY", 400);
+    let recurringFrequency = type === "RECURRING" ? (freqRaw ?? "MONTHLY") : null;
+
+    // Link this donation to an existing recurring commitment (pay the current
+    // installment of my monthly giving) and/or a medicine pledge (pay the next
+    // pledge installment). Both run through the normal payment flow — there
+    // is no auto-debit anywhere.
+    const recurringParentId = body?.recurringParentId ? String(body.recurringParentId) : null;
+    const pledgeId = body?.pledgeId ? String(body.pledgeId) : null;
+    if (recurringParentId && pledgeId)
+      throw new ApiError("A donation cannot pay a recurring commitment and a pledge at the same time", 400);
+
+    let recurringParent: { id: string; campaignId: string | null; recurringFrequency: string | null } | null = null;
+    if (recurringParentId) {
+      const parent = await db.donation.findUnique({ where: { id: recurringParentId } });
+      if (!parent || parent.type !== "RECURRING" || parent.recurringStatus === "CANCELLED")
+        throw new ApiError("That recurring commitment was not found or is cancelled", 400);
+      const owns = session && parent.donorId === session.userId;
+      if (!owns && session?.role !== "ADMIN")
+        throw new ApiError("You can only pay installments on your own recurring commitments", 403);
+      recurringParent = {
+        id: parent.id,
+        campaignId: parent.campaignId,
+        recurringFrequency: parent.recurringFrequency,
+      };
+      // The installment belongs to the parent's series — inherit cadence.
+      type = "RECURRING";
+      recurringFrequency = recurringParent.recurringFrequency ?? recurringFrequency;
+    }
+
+    let pledgeLink: { id: string } | null = null;
+    if (pledgeId) {
+      const pledge = await db.pledge.findUnique({ where: { id: pledgeId } });
+      if (!pledge) throw new ApiError("That pledge was not found", 400);
+      if (pledge.status === "CANCELLED")
+        throw new ApiError("This pledge has been cancelled — start a new one instead", 400);
+      const owns = session && pledge.donorId === session.userId;
+      if (!owns && session?.role !== "ADMIN")
+        throw new ApiError("You can only pay installments on your own pledges", 403);
+      pledgeLink = { id: pledge.id };
+    }
 
     // Display currency for the gift (defaults to INR for legacy donors).
     const currency = body?.currency ? String(body.currency).trim().toUpperCase() : "INR";
@@ -377,20 +420,13 @@ router.post("/", async (req, res) => {
           currency,
           type,
           recurringFrequency,
+          recurringStatus: type === "RECURRING" && !recurringParent ? "ACTIVE" : null,
           nextChargeAt:
-            type === "RECURRING" && recurringFrequency
-              ? new Date(
-                  now.getTime() +
-                    (recurringFrequency === "WEEKLY"
-                      ? 7
-                      : recurringFrequency === "MONTHLY"
-                        ? 30
-                        : recurringFrequency === "QUARTERLY"
-                          ? 90
-                          : 365) *
-                      86400000
-                )
+            type === "RECURRING" && recurringFrequency && !recurringParent
+              ? nextChargeAfter(now, recurringFrequency)
               : null,
+          recurringParentId: recurringParent?.id ?? null,
+          pledgeId: pledgeLink?.id ?? null,
           category: body?.category ? String(body.category) : "GENERAL",
           paymentMethod,
           paymentProvider,
@@ -400,7 +436,7 @@ router.post("/", async (req, res) => {
           receiptNumber,
           receiptStatus: paymentStatus === "COMPLETED" ? "ISSUED" : "PENDING",
           receiptIssuedAt: paymentStatus === "COMPLETED" ? now : null,
-          campaignId,
+          campaignId: campaignId ?? recurringParent?.campaignId ?? null,
           foodEventId,
           message: body?.message ? String(body.message) : null,
           isAnonymous: Boolean(body?.isAnonymous),
@@ -415,6 +451,12 @@ router.post("/", async (req, res) => {
         where: { id: campaignId },
         data: { raisedAmount: { increment: amount } },
       });
+    }
+
+    // Instant (non-gateway) settlement of a linked donation — advance the
+    // recurring parent's nextChargeAt / fold the payment into the pledge.
+    if (paymentStatus === "COMPLETED" && (recurringParent || pledgeLink)) {
+      await settleDonationCommitments(donation.id);
     }
 
     // Persist PAN on the donor profile for 80G receipts
@@ -452,6 +494,125 @@ router.post("/", async (req, res) => {
     // number — flag it so the donate page opens hosted checkout instead of
     // the instant thank-you.
     return json(res, gatewayMethod ? { ...donation, checkoutPending: true } : donation, 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/donations/recurring/mine — the signed-in donor's monthly-giving
+// commitments (RECURRING parents they own), each with status, frequency,
+// amount, campaign, next due date and the installment payments made so far.
+// Owner-scoped: other donors' commitments never leak (admins use GET / with
+// type=RECURRING).
+router.get("/recurring/mine", async (req, res) => {
+  try {
+    const s = await requireAuth(req);
+    const parents = await db.donation.findMany({
+      where: { donorId: s.userId, type: "RECURRING", recurringParentId: null },
+      orderBy: { createdAt: "desc" },
+      include: { campaign: { select: { id: true, title: true, accent: true } } },
+    });
+    const ids = parents.map((p) => p.id);
+    const allInstallments = ids.length
+      ? await db.donation.findMany({
+          where: { recurringParentId: { in: ids } },
+          orderBy: { createdAt: "desc" },
+        })
+      : [];
+
+    const commitments = parents.map((p) => {
+      const installments = allInstallments.filter((i) => i.recurringParentId === p.id);
+      const paid = installments.filter((i) => i.paymentStatus === "COMPLETED");
+      return {
+        id: p.id,
+        amount: p.amount,
+        currency: p.currency,
+        recurringFrequency: p.recurringFrequency,
+        recurringStatus: p.recurringStatus ?? "ACTIVE",
+        nextChargeAt: p.nextChargeAt,
+        createdAt: p.createdAt,
+        category: p.category,
+        campaign: p.campaign ?? null,
+        installmentCount: paid.length,
+        paidTotal: Math.round(paid.reduce((sum, i) => sum + i.amount, 0) * 100) / 100,
+        installments: installments.slice(0, 24).map((i) => ({
+          id: i.id,
+          receiptNumber: i.receiptNumber,
+          amount: i.amount,
+          currency: i.currency,
+          paymentStatus: i.paymentStatus,
+          createdAt: i.createdAt,
+        })),
+      };
+    });
+    return json(res, commitments);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/donations/recurring/:id — the owner (or an admin) manages their
+// recurring commitment: pause/resume/cancel via recurringStatus, and adjust
+// amount / recurringFrequency. Cancelled is terminal.
+router.patch("/recurring/:id", async (req, res) => {
+  try {
+    const s = await requireAuth(req);
+    const { id } = req.params;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const commitment = await db.donation.findUnique({ where: { id } });
+    if (!commitment || commitment.type !== "RECURRING" || commitment.recurringParentId)
+      throw new ApiError("Recurring commitment not found", 404);
+    if (commitment.donorId !== s.userId && s.role !== "ADMIN")
+      throw new ApiError("You can only manage your own recurring commitments", 403);
+
+    const currentStatus = commitment.recurringStatus ?? "ACTIVE";
+    const data: Record<string, unknown> = {};
+
+    if (body.recurringStatus !== undefined) {
+      const next = String(body.recurringStatus).trim().toUpperCase();
+      if (!(RECURRING_STATUSES as readonly string[]).includes(next))
+        throw new ApiError("recurringStatus must be ACTIVE, PAUSED or CANCELLED", 400);
+      assertTransition(
+        RECURRING_STATUS_TRANSITIONS,
+        currentStatus,
+        next,
+        "recurring commitment",
+        400
+      );
+      data.recurringStatus = next;
+    }
+    if (body.amount !== undefined) {
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount <= 0)
+        throw new ApiError("Amount must be greater than zero", 400);
+      data.amount = amount;
+    }
+    if (body.recurringFrequency !== undefined) {
+      const freq = String(body.recurringFrequency).trim().toUpperCase();
+      if (!(VALID_FREQUENCIES as readonly string[]).includes(freq))
+        throw new ApiError("recurringFrequency must be WEEKLY, MONTHLY, QUARTERLY or YEARLY", 400);
+      data.recurringFrequency = freq;
+    }
+    if (Object.keys(data).length === 0)
+      throw new ApiError("Nothing to update", 400);
+
+    const updated = await db.donation.update({ where: { id }, data });
+    await logActivity(
+      s.name,
+      "RECURRING_UPDATE",
+      "DONATION",
+      `${commitment.receiptNumber} → ${Object.keys(data).map((k) => `${k}=${String(data[k])}`).join(", ")}`,
+      s.userId
+    );
+    return json(res, {
+      id: updated.id,
+      amount: updated.amount,
+      currency: updated.currency,
+      recurringFrequency: updated.recurringFrequency,
+      recurringStatus: updated.recurringStatus ?? "ACTIVE",
+      nextChargeAt: updated.nextChargeAt,
+    });
   } catch (e) {
     return handleError(e, res);
   }
@@ -624,6 +785,9 @@ router.patch("/:id", async (req, res) => {
     // never when the record is merely edited while already COMPLETED.
     const statusChanged = donation.paymentStatus !== existing.paymentStatus;
     if (statusChanged && donation.paymentStatus === "COMPLETED") {
+      // Admin-confirmed settlement of a linked donation counts the same as a
+      // gateway verify — advance the recurring parent / pledge tracking.
+      await settleDonationCommitments(donation.id);
       void (async () => {
         try {
           const map = await loadSettings();

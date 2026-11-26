@@ -228,6 +228,14 @@ const WIZARD_STEPS = [
   { n: 4, label: "Thank you", icon: CheckCircle2 },
 ];
 
+/** Recurring cadences the backend accepts (src/routes/donations.ts). */
+const RECURRING_FREQUENCIES = [
+  { value: "WEEKLY", label: "Every week" },
+  { value: "MONTHLY", label: "Every month" },
+  { value: "QUARTERLY", label: "Every 3 months" },
+  { value: "YEARLY", label: "Every year" },
+];
+
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
@@ -291,6 +299,7 @@ export function DonatePage() {
 
   // Step 1
   const [giftType, setGiftType] = useState<"ONE_TIME" | "RECURRING">("ONE_TIME");
+  const [recurringFreq, setRecurringFreq] = useState("MONTHLY");
   const [amount, setAmount] = useState<number>(1000);
   const [customAmount, setCustomAmount] = useState<string>("");
   const [currency, setCurrency] = useState("INR");
@@ -657,6 +666,7 @@ export function DonatePage() {
         amount: effectiveAmount,
         currency,
         type: giftType,
+        recurringFrequency: giftType === "RECURRING" ? recurringFreq : undefined,
         category: selected
           ? (CATEGORY_BY_SLUG[selected.slug ?? ""] ?? "GENERAL")
           : "GENERAL",
@@ -710,6 +720,7 @@ export function DonatePage() {
     setAmount(presetsFor(currency)[0] ?? 1000);
     setCustomAmount("");
     setGiftType("ONE_TIME");
+    setRecurringFreq("MONTHLY");
     setMessage("");
     setAnonymous(false);
     setPaymentMethod("UPI");
@@ -719,6 +730,9 @@ export function DonatePage() {
   };
 
   const firstName = name.trim().split(" ")[0] || "friend";
+  const frequencyLabel =
+    RECURRING_FREQUENCIES.find((f) => f.value === recurringFreq)?.label.toLowerCase() ??
+    "recurring";
 
   /* ================================================================= */
   /* THANK YOU (step 4 content, full-page)                             */
@@ -739,7 +753,7 @@ export function DonatePage() {
             Thank you, {firstName}!
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground sm:text-base">
-            Your {receipt.type === "RECURRING" ? "monthly " : ""}
+            Your {receipt.type === "RECURRING" ? `${frequencyLabel} ` : ""}
             gift of{" "}
             <span className="font-bold text-foreground">
               {formatMoney(receipt.amount, receipt.currency)}
@@ -1004,6 +1018,31 @@ export function DonatePage() {
                         </button>
                       ))}
                     </div>
+
+                    {/* Recurring cadence — the backend-supported list */}
+                    {recurringOn && giftType === "RECURRING" && (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="d-recurring-frequency">How often</Label>
+                        <Select value={recurringFreq} onValueChange={setRecurringFreq}>
+                          <SelectTrigger id="d-recurring-frequency" className="h-11">
+                            <SelectValue placeholder="Choose a cadence" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {RECURRING_FREQUENCIES.map((f) => (
+                              <SelectItem key={f.value} value={f.value}>
+                                {f.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          This first gift is charged today. Every payment after it is
+                          one you approve — we&rsquo;ll remind you when the next one is
+                          due, and you can pause or cancel anytime from your donor
+                          portal under &ldquo;Monthly giving&rdquo;.
+                        </p>
+                      </div>
+                    )}
 
                     {/* Currency switcher (public feature flag) */}
                     {currencySwitcherOn && (
