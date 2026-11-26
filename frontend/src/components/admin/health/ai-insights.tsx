@@ -87,6 +87,7 @@ export default function AiInsightsTab({ revision }: TabProps) {
         notes: notes.trim() || undefined,
       });
       const text =
+        (d as { plan?: string }).plan ??
         (d as { output?: string }).output ??
         (d as { result?: string }).result ??
         (d as { interaction?: { output?: string } }).interaction?.output ??
