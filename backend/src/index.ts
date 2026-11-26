@@ -96,10 +96,20 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: "10mb" }));
-// The mobile app's NewApiService posts application/x-www-form-urlencoded
-// (http package default for Map bodies) — parse both body styles. Harmless
-// for the admin frontend, which always sends JSON.
+app.use(
+  express.json({
+    limit: "10mb",
+    // Stash the raw request body for webhook HMAC verification (e.g. the
+    // Razorpay signature in /api/payments/webhook — re-serialized JSON is
+    // only byte-identical for compact payloads).
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  })
+);
+// The mobile app's PusherChannelAuthorizer posts application/x-www-form-urlencoded
+// to POST /api/realtime/auth (http package default for Map bodies) — parse both
+// body styles. Harmless for the admin frontend, which always sends JSON.
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ─── Health + root dashboard stats (converted from src/app/api/route.ts) ────
@@ -147,24 +157,8 @@ app.get("/api", async (_req, res) => {
 });
 
 // ─── Mount all routers ───────────────────────────────────────────────────────
-// ─── Mobile wire-compat layer (Flutter app) ──────────────────────────────────
-// Mounted BEFORE the routers below: claims only requests carrying the mobile
-// `apikey` header and serves the legacy {status, message, data} envelope;
-// everything else falls through to the admin routers untouched.
-import { router as mobileCompatRouter, broadcastingAuthHandler } from "./routes/mobile";
-import { startPusherServer } from "@/lib/mobile/pusher";
-import { syncPostCommentCounts } from "@/lib/mobile/compat";
-app.use("/api", (req, res, next) => {
-  // The gate must live OUTSIDE the compat router: from a router-level
-  // middleware, next() reaches the compat routes themselves, which would claim
-  // colliding paths (/api/auth/*, /api/notifications/*, ...) even without an
-  // apikey and shadow the admin/web routers. Entering the compat router only
-  // for apikey requests keeps /api/auth/login etc. working for both clients —
-  // e.g. the Flutter portal (Bearer token, no apikey) gets the web envelope.
-  if (!req.header("apikey")) return next();
-  return mobileCompatRouter(req, res, next);
-});
-app.post("/broadcasting/auth", broadcastingAuthHandler);
+import { startPusherServer } from "@/lib/realtime/pusher";
+import { syncPostCommentCounts } from "@/lib/community/counters";
 
 app.use("/api/auth", authRouter);
 app.use("/api/users", usersRouter);
@@ -237,6 +231,55 @@ app.use("/api/volunteer-attendances", volunteerAttendancesRouter);
 app.use("/api/volunteer-tasks", volunteerTasksRouter);
 app.use("/api/assistant", assistantRouter);
 app.use("/api/events", eventsRouter);
+
+// ─── Generic community routers (shared by web + mobile) ─────────────────────
+// S6 — charity domain: charity card / points / achievements / goals / events
+// + the community admin surface, migrated off the mobile-only compat layer.
+import { router as charityRouter } from "./routes/charity";
+import { router as communityAdminRouter } from "./routes/community-admin";
+app.use("/api/charity", charityRouter);
+app.use("/api/community/admin", communityAdminRouter);
+
+// S1 — auth-users/profile/notifications/config: social users, app settings,
+// FAQs (the auth/profile/notifications routers themselves were extended in place).
+import { router as communityUsersRouter } from "./routes/community-users";
+import { router as faqsRouter } from "./routes/faqs";
+app.use("/api/community/users", communityUsersRouter);
+app.use("/api/faqs", faqsRouter);
+
+// S2 — posts/stories/interests: feeds, post CRUD (owner-or-moderator delete),
+// reactions, comments (author-or-moderator delete), 24h stories and the
+// interest list, migrated off the mobile-only compat layer.
+import { router as communityPostsRouter } from "./routes/posts";
+import { router as communityStoriesRouter } from "./routes/stories";
+import { router as communityInterestsRouter } from "./routes/interests";
+app.use("/api/posts", communityPostsRouter);
+app.use("/api/stories", communityStoriesRouter);
+app.use("/api/interests", communityInterestsRouter);
+
+// S4 — rooms: /api/rooms (create/edit/delete, join/leave, invitations, join
+// requests, members/admins, mute, suggested/random/by-interest), migrated off
+// the mobile-only compat layer.
+import { router as communityRoomsRouter } from "./routes/rooms";
+app.use("/api/rooms", communityRoomsRouter);
+
+// S5 — realtime + chat + audio spaces: Pusher channel auth, Agora tokens,
+// conversations/messages and Agora voice rooms (shared by web + mobile — the
+// Flutter app's websocket client authorizes private channels here too).
+import { router as realtimeRouter } from "./routes/realtime";
+import { router as chatRouter } from "./routes/chat";
+import { router as audioSpacesRouter } from "./routes/audio-spaces";
+app.use("/api/realtime", realtimeRouter);
+app.use("/api/chat", chatRouter);
+app.use("/api/audio-spaces", audioSpacesRouter);
+
+// S3 — reels + music: reel feeds, reel CRUD (owner-or-moderator delete), likes,
+// views, comments (author/reel-owner/moderator delete), reports and the reel
+// music library, migrated off the mobile-only compat layer.
+import { router as reelsRouter } from "./routes/reels";
+import { router as musicRouter } from "./routes/music";
+app.use("/api/reels", reelsRouter);
+app.use("/api/music", musicRouter);
 
 // ─── 404 + error handling ────────────────────────────────────────────────────
 app.use("/api", (_req, res) => {

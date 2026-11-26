@@ -2,8 +2,8 @@
 
 /**
  * Community — admin surface for the mobile app's community domain
- * (the legacy Laravel "chatter" charity features, now served by
- * backend/src/routes/mobile/charity.ts).
+ * (the legacy Laravel "chatter" charity features, now served by the generic
+ * routers /api/community/admin/* — shared with the mobile app).
  *
  * Tabs:
  *  - Users     — mobile users with their charity profile (tier, points,
@@ -17,12 +17,8 @@
  *  - Volunteer applications — summary + link; full approve/reject flows
  *                already live in the Volunteers section (volunteers-view.tsx)
  *
- * NOTE on transport: the community endpoints live on the mobile compat layer
- * (mounted at /api BEFORE the admin routers). A request is claimed by that
- * layer only when it carries the mobile `apikey` header — the admin JWT still
- * authenticates it (Authorization header) and the endpoint itself is
- * role-gated (ADMIN/MODERATOR) inside the backend. See the header comment in
- * src/routes/mobile/charity.ts.
+ * Transport: the generic community routers answer raw JSON (paged lists,
+ * camelCase fields) to the same Bearer session the api-client attaches.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -42,7 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { getToken } from "@/lib/api-client";
+import { get, post } from "@/lib/api-client";
 import { formatDate, formatINR, formatINRCompact, titleCase } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { PageHeader } from "@/components/shared/page-header";
@@ -84,35 +80,12 @@ import {
 
 /* ───────────────────────────── transport ─────────────────────────────── */
 
-/** Mobile-compat gate header — any non-empty value passes when MOBILE_API_KEYS
- *  is unset; the endpoints are session-role-gated regardless. */
-const MOBILE_APIKEY = "uar-admin-console";
-
-interface Envelope {
-  status?: boolean;
-  message?: string;
-  data?: unknown;
-}
-
-async function mfetch<T>(path: string, body?: unknown): Promise<T> {
-  const token = getToken();
-  const res = await fetch(path, {
-    method: body !== undefined ? "POST" : "GET",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: MOBILE_APIKEY,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-  });
-  const json = (await res.json().catch(() => null)) as Envelope | null;
-  if (json && typeof json.status === "boolean") {
-    if (!json.status) throw new Error(json.message || "Request failed");
-    return (json.data ?? json) as T;
-  }
-  if (!res.ok) throw new Error(`Request failed (${res.status})`);
-  return json as T;
+interface Paged<T> {
+  items: T[];
+  page: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
 }
 
 /* ─────────────────────────────── types ───────────────────────────────── */
@@ -121,34 +94,34 @@ interface AdminUser {
   id: string;
   name: string;
   username: string | null;
-  email: string;
+  email?: string;
   avatar: string | null;
   about: string | null;
   city: string | null;
-  phone: string | null;
+  phone?: string | null;
   role: string;
   status: string;
-  isBlock: number;
-  isVerified: number;
+  isBlocked: boolean;
+  isVerified: boolean;
   userType: string | null;
   volunteerStatus: string | null;
   totalPoints: number;
   lifetimeDonated: number;
   impactScore: number;
   currentTier: string;
-  member_since: string | null;
-  created_at: string;
+  memberSince: string | null;
+  createdAt: string;
   followingCount: number;
   followersCount: number;
-  post_count: number;
-  cause_count: number;
-  donation_count: number;
-  donation_total: number;
+  postCount: number;
+  causeCount: number;
+  donationCount: number;
+  donationTotal: number;
 }
 
 interface PostContent {
   id: string;
-  content_type: number;
+  contentType: number;
   content: string;
 }
 
@@ -156,25 +129,25 @@ interface AdminPost {
   id: string;
   desc: string | null;
   type: string;
-  goal_amount: number | null;
-  raised_amount: number;
+  goalAmount: number | null;
+  raisedAmount: number;
   deadline: string | null;
-  is_verified: boolean;
-  is_emergency: boolean;
-  is_restricted: number;
-  comment_count: number;
-  like_count: number;
-  report_count: number;
-  donation_count: number;
-  created_at: string;
-  user: { id: string; full_name: string | null; username: string | null; profile: string | null } | null;
+  isVerified: boolean;
+  isEmergency: boolean;
+  isRestricted: number;
+  commentCount: number;
+  likeCount: number;
+  reportCount: number;
+  donationCount: number;
+  createdAt: string;
+  author: { id: string; name: string | null; username: string | null; avatar: string | null } | null;
   content: PostContent[];
   category: { id: number; name: string } | null;
 }
 
 interface AdminCause extends AdminPost {
-  follower_count: number;
-  progress_percentage: number;
+  causeFollowerCount: number;
+  progressPercentage: number;
 }
 
 interface AdminReport {
@@ -182,10 +155,10 @@ interface AdminReport {
   type: number | null; // 0 room | 1 post | 2 user | 3 reel
   reason: string;
   desc: string;
-  created_at: string;
-  reporter: { id: string; name: string; username: string | null; avatar: string | null } | null;
-  post: { id: string; desc: string | null; type: string; is_restricted: number; user: { id: string; name: string; username: string | null } | null } | null;
-  comment: { id: string; desc: string; user: { id: string; name: string; username: string | null } | null } | null;
+  createdAt: string;
+  reporter: { id: string; name: string; username: string | null; avatar: string | null; email?: string } | null;
+  post: { id: string; desc: string | null; type: string; isRestricted: number; author: { id: string; name: string; username: string | null } | null } | null;
+  comment: { id: string; desc: string; author: { id: string; name: string; username: string | null } | null } | null;
   room: { id: string; title: string } | null;
   reel: { id: string; description: string | null; thumbnail: string | null } | null;
 }
@@ -234,16 +207,16 @@ export default function CommunityView() {
     setLoading(true);
     try {
       const [users, posts, causes, reports] = await Promise.all([
-        mfetch<{ users: AdminUser[]; total_count: number }>("/api/community/admin/users?limit=1"),
-        mfetch<{ posts: AdminPost[]; total_count: number }>("/api/community/admin/posts?limit=1"),
-        mfetch<{ causes: AdminCause[]; total_count: number }>("/api/community/admin/causes?limit=1"),
-        mfetch<{ reports: AdminReport[]; total_count: number }>("/api/community/admin/reports?limit=1"),
+        get<Paged<AdminUser>>("/api/community/admin/users?limit=1"),
+        get<Paged<AdminPost>>("/api/community/admin/posts?limit=1"),
+        get<Paged<AdminCause>>("/api/community/admin/causes?limit=1"),
+        get<Paged<AdminReport>>("/api/community/admin/reports?limit=1"),
       ]);
       setTotals({
-        users: users.total_count,
-        posts: posts.total_count,
-        causes: causes.total_count,
-        reports: reports.total_count,
+        users: users.total,
+        posts: posts.total,
+        causes: causes.total,
+        reports: reports.total,
       });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load community stats");
@@ -325,8 +298,8 @@ function UsersTab() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await mfetch<{ users: AdminUser[] }>("/api/community/admin/users?limit=100");
-      setUsers(res.users ?? []);
+      const res = await get<Paged<AdminUser>>("/api/community/admin/users?limit=100");
+      setUsers(res.items ?? []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load members");
     } finally {
@@ -429,7 +402,7 @@ function UsersTab() {
                           {u.username ? `@${u.username}` : u.email}
                         </p>
                       </div>
-                      {u.isBlock === 1 && <Badge variant="destructive" className="ml-1 text-[10px]">Blocked</Badge>}
+                      {u.isBlocked && <Badge variant="destructive" className="ml-1 text-[10px]">Blocked</Badge>}
                     </div>
                   </TableCell>
                   <TableCell className="hidden md:table-cell">
@@ -438,7 +411,7 @@ function UsersTab() {
                   <TableCell className="text-right font-mono text-sm tabular-nums">{u.totalPoints}</TableCell>
                   <TableCell className="hidden text-right text-sm tabular-nums sm:table-cell">{formatINRCompact(u.lifetimeDonated)}</TableCell>
                   <TableCell className="hidden text-right text-sm tabular-nums lg:table-cell">{u.impactScore}</TableCell>
-                  <TableCell className="hidden text-xs text-muted-foreground lg:table-cell">{formatDate(u.created_at)}</TableCell>
+                  <TableCell className="hidden text-xs text-muted-foreground lg:table-cell">{formatDate(u.createdAt)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -460,9 +433,9 @@ function UsersTab() {
               ["Charity points", String(sheet.totalPoints)],
               ["Lifetime donated", formatINR(sheet.lifetimeDonated)],
               ["Impact score", String(sheet.impactScore)],
-              ["Member since", sheet.member_since ? formatDate(sheet.member_since) : "—"],
-              ["Donations", `${sheet.donation_count} · ${formatINR(sheet.donation_total)}`],
-              ["Posts / causes", `${sheet.post_count} / ${sheet.cause_count}`],
+              ["Member since", sheet.memberSince ? formatDate(sheet.memberSince) : "—"],
+              ["Donations", `${sheet.donationCount} · ${formatINR(sheet.donationTotal)}`],
+              ["Posts / causes", `${sheet.postCount} / ${sheet.causeCount}`],
               ["Followers / following", `${sheet.followersCount} / ${sheet.followingCount}`],
               ["User type", sheet.userType ? titleCase(sheet.userType) : "—"],
               ["Volunteer status", sheet.volunteerStatus ? titleCase(sheet.volunteerStatus) : "—"],
@@ -495,8 +468,8 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await mfetch<{ posts: AdminPost[] }>("/api/community/admin/posts?limit=100");
-      setPosts(res.posts ?? []);
+      const res = await get<Paged<AdminPost>>("/api/community/admin/posts?limit=100");
+      setPosts(res.items ?? []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load posts");
     } finally {
@@ -508,10 +481,10 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
     void load();
   }, [load]);
 
-  const moderate = async (post: AdminPost, action: string) => {
-    setBusy(post.id + action);
+  const moderate = async (item: AdminPost, action: string) => {
+    setBusy(item.id + action);
     try {
-      await mfetch("/api/community/admin/posts/moderate", { post_id: post.id, action });
+      await post("/api/community/admin/posts/moderate", { postId: item.id, action });
       toast.success(
         action === "delete" ? "Post deleted"
           : action === "verify" ? "Post verified"
@@ -532,7 +505,7 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
     const q = search.trim().toLowerCase();
     return posts.filter((p) => {
       if (typeFilter !== "ALL" && p.type !== typeFilter) return false;
-      if (q && !`${p.desc ?? ""}`.toLowerCase().includes(q) && !`${p.user?.full_name ?? ""}`.toLowerCase().includes(q)) return false;
+      if (q && !`${p.desc ?? ""}`.toLowerCase().includes(q) && !`${p.author?.name ?? ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [posts, search, typeFilter]);
@@ -580,45 +553,45 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
           {filtered.map((p) => (
             <li key={p.id} className="flex items-start gap-3 px-3 py-3 sm:px-4">
               <Avatar className="size-8 shrink-0">
-                <AvatarFallback className="text-xs">{(p.user?.full_name ?? "?").slice(0, 1).toUpperCase()}</AvatarFallback>
+                <AvatarFallback className="text-xs">{(p.author?.name ?? "?").slice(0, 1).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-sm font-medium">{p.user?.full_name ?? "Unknown"}</span>
+                  <span className="text-sm font-medium">{p.author?.name ?? "Unknown"}</span>
                   <Badge variant="outline" className="text-[10px]">{titleCase(p.type)}</Badge>
-                  {p.is_verified && (
+                  {p.isVerified && (
                     <Badge variant="outline" className="gap-0.5 border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-700 dark:text-emerald-400">
                       <BadgeCheck className="size-3" aria-hidden="true" /> Verified
                     </Badge>
                   )}
-                  {p.is_restricted === 1 && (
+                  {p.isRestricted === 1 && (
                     <Badge variant="outline" className="gap-0.5 border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400">
                       <Ban className="size-3" aria-hidden="true" /> Restricted
                     </Badge>
                   )}
-                  {p.is_emergency && <Badge variant="destructive" className="text-[10px]">Emergency</Badge>}
-                  {p.report_count > 0 && (
+                  {p.isEmergency && <Badge variant="destructive" className="text-[10px]">Emergency</Badge>}
+                  {p.reportCount > 0 && (
                     <Badge variant="outline" className="gap-0.5 border-red-500/30 bg-red-500/10 text-[10px] text-red-600 dark:text-red-400">
-                      <Flag className="size-3" aria-hidden="true" /> {p.report_count} report{p.report_count === 1 ? "" : "s"}
+                      <Flag className="size-3" aria-hidden="true" /> {p.reportCount} report{p.reportCount === 1 ? "" : "s"}
                     </Badge>
                   )}
                 </div>
                 <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{p.desc ?? "—"}</p>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {p.like_count} likes · {p.comment_count} comments
-                  {p.type === "cause" ? ` · ${formatINRCompact(p.raised_amount)} of ${formatINRCompact(p.goal_amount ?? 0)}` : ""}
+                  {p.likeCount} likes · {p.commentCount} comments
+                  {p.type === "cause" ? ` · ${formatINRCompact(p.raisedAmount)} of ${formatINRCompact(p.goalAmount ?? 0)}` : ""}
                   {" · "}
-                  {formatDate(p.created_at)}
+                  {formatDate(p.createdAt)}
                 </p>
               </div>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" aria-label={`Moderate post from ${p.user?.full_name ?? "user"}`} disabled={busy === p.id + "delete"}>
+                  <Button variant="ghost" size="sm" aria-label={`Moderate post from ${p.author?.name ?? "user"}`} disabled={busy === p.id + "delete"}>
                     <ShieldCheck className="size-4" /> Moderate
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
-                  {p.is_verified ? (
+                  {p.isVerified ? (
                     <DropdownMenuItem onSelect={() => void moderate(p, "unverify")}>
                       <X className="size-4" /> Remove verification
                     </DropdownMenuItem>
@@ -627,7 +600,7 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
                       <BadgeCheck className="size-4" /> Verify
                     </DropdownMenuItem>
                   )}
-                  {p.is_restricted === 1 ? (
+                  {p.isRestricted === 1 ? (
                     <DropdownMenuItem onSelect={() => void moderate(p, "unrestrict")}>
                       <CheckCircle2 className="size-4" /> Unrestrict
                     </DropdownMenuItem>
@@ -676,8 +649,8 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await mfetch<{ causes: AdminCause[] }>("/api/community/admin/causes?limit=100");
-      setCauses(res.causes ?? []);
+      const res = await get<Paged<AdminCause>>("/api/community/admin/causes?limit=100");
+      setCauses(res.items ?? []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load causes");
     } finally {
@@ -692,7 +665,7 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
   const moderate = async (cause: AdminCause, action: string) => {
     setBusy(cause.id);
     try {
-      await mfetch("/api/community/admin/posts/moderate", { post_id: cause.id, action });
+      await post("/api/community/admin/posts/moderate", { postId: cause.id, action });
       toast.success(action === "verify" ? "Cause verified" : "Verification removed");
       await load();
       onChanged();
@@ -707,13 +680,13 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
     const q = search.trim().toLowerCase();
     if (!q) return causes;
     return causes.filter(
-      (c) => `${c.desc ?? ""}`.toLowerCase().includes(q) || `${c.user?.full_name ?? ""}`.toLowerCase().includes(q)
+      (c) => `${c.desc ?? ""}`.toLowerCase().includes(q) || `${c.author?.name ?? ""}`.toLowerCase().includes(q)
     );
   }, [causes, search]);
 
   const totals = useMemo(() => {
-    const goal = causes.reduce((s, c) => s + (c.goal_amount ?? 0), 0);
-    const raised = causes.reduce((s, c) => s + (c.raised_amount ?? 0), 0);
+    const goal = causes.reduce((s, c) => s + (c.goalAmount ?? 0), 0);
+    const raised = causes.reduce((s, c) => s + (c.raisedAmount ?? 0), 0);
     return { goal, raised };
   }, [causes]);
 
@@ -750,7 +723,7 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
       ) : (
         <ul className="space-y-2">
           {filtered.map((c) => {
-            const pct = Math.round(c.progress_percentage ?? 0);
+            const pct = Math.round(c.progressPercentage ?? 0);
             return (
               <li key={c.id} className="rounded-xl border bg-muted/20 px-3 py-3 sm:px-4">
                 <div className="flex flex-wrap items-start gap-2">
@@ -758,7 +731,7 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="truncate text-sm font-medium">{c.desc?.slice(0, 80) ?? "Untitled cause"}</span>
                       {c.category && <Badge variant="outline" className="text-[10px]">{c.category.name}</Badge>}
-                      {c.is_verified ? (
+                      {c.isVerified ? (
                         <Badge variant="outline" className="gap-0.5 border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-700 dark:text-emerald-400">
                           <BadgeCheck className="size-3" aria-hidden="true" /> Verified
                         </Badge>
@@ -769,23 +742,23 @@ function CausesTab({ onChanged }: { onChanged: () => void }) {
                       )}
                     </div>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      by {c.user?.full_name ?? "Unknown"} · {c.follower_count} followers · {c.donation_count} donation{c.donation_count === 1 ? "" : "s"}
+                      by {c.author?.name ?? "Unknown"} · {c.causeFollowerCount} followers · {c.donationCount} donation{c.donationCount === 1 ? "" : "s"}
                       {c.deadline ? ` · ends ${formatDate(c.deadline)}` : ""}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <span className="text-sm font-semibold tabular-nums">
-                      {formatINRCompact(c.raised_amount)}{" "}
-                      <span className="text-xs font-normal text-muted-foreground">/ {formatINRCompact(c.goal_amount ?? 0)}</span>
+                      {formatINRCompact(c.raisedAmount)}{" "}
+                      <span className="text-xs font-normal text-muted-foreground">/ {formatINRCompact(c.goalAmount ?? 0)}</span>
                     </span>
                     <Button
-                      variant={c.is_verified ? "outline" : "default"}
+                      variant={c.isVerified ? "outline" : "default"}
                       size="sm"
                       disabled={busy === c.id}
-                      onClick={() => void moderate(c, c.is_verified ? "unverify" : "verify")}
+                      onClick={() => void moderate(c, c.isVerified ? "unverify" : "verify")}
                     >
                       <BadgeCheck className="size-4" aria-hidden="true" />
-                      {c.is_verified ? "Unverify" : "Verify"}
+                      {c.isVerified ? "Unverify" : "Verify"}
                     </Button>
                   </div>
                 </div>
@@ -810,8 +783,8 @@ function ReportsTab({ onChanged }: { onChanged: () => void }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await mfetch<{ reports: AdminReport[] }>("/api/community/admin/reports?limit=100");
-      setReports(res.reports ?? []);
+      const res = await get<Paged<AdminReport>>("/api/community/admin/reports?limit=100");
+      setReports(res.items ?? []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load reports");
     } finally {
@@ -826,7 +799,7 @@ function ReportsTab({ onChanged }: { onChanged: () => void }) {
   const resolve = async (report: AdminReport, action: string) => {
     setBusy(report.id);
     try {
-      await mfetch("/api/community/admin/reports/resolve", { report_id: report.id, action });
+      await post("/api/community/admin/reports/resolve", { reportId: report.id, action });
       toast.success(action === "dismiss" ? "Report dismissed" : "Reported content removed");
       await load();
       onChanged();
@@ -855,7 +828,7 @@ function ReportsTab({ onChanged }: { onChanged: () => void }) {
       ) : (
         reports.map((r) => {
           const target = r.post
-            ? `Post: ${r.post.desc?.slice(0, 70) ?? "—"}${r.post.user ? ` — ${r.post.user.name ?? ""}` : ""}`
+            ? `Post: ${r.post.desc?.slice(0, 70) ?? "—"}${r.post.author ? ` — ${r.post.author.name ?? ""}` : ""}`
             : r.comment
               ? `Comment: ${r.comment.desc.slice(0, 70)}`
               : r.reel
@@ -874,7 +847,7 @@ function ReportsTab({ onChanged }: { onChanged: () => void }) {
                   <Badge variant="destructive" className="text-[10px]">{r.reason}</Badge>
                   <Badge variant="outline" className="text-[10px]">{REPORT_TYPES[r.type ?? -1] ?? "Unknown"}</Badge>
                   <span className="text-[11px] text-muted-foreground">
-                    by {r.reporter?.name ?? "Unknown"} · {formatDate(r.created_at)}
+                    by {r.reporter?.name ?? "Unknown"} · {formatDate(r.createdAt)}
                   </span>
                 </div>
                 <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{r.desc}</p>
@@ -907,17 +880,7 @@ function VolunteersTab() {
   useEffect(() => {
     (async () => {
       try {
-        const token = getToken();
-        const res = await fetch("/api/volunteer-applications?status=PENDING", {
-          cache: "no-store",
-          // apikey: the mobile compat layer mounted upstream 401s requests
-          // without it (see charity.ts header note) — the JWT still authorizes.
-          headers: {
-            apikey: MOBILE_APIKEY,
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-        const rows = res.ok ? ((await res.json()) as PendingApplication[]) : [];
+        const rows = await get<PendingApplication[]>("/api/volunteer-applications?status=PENDING");
         setPending(Array.isArray(rows) ? rows : []);
       } catch {
         setPending([]);

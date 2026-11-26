@@ -81,6 +81,10 @@ router.get("/", async (req, res) => {
 // `kyc/<userId>` — a logical namespace the file manager filters on. Forcing
 // the folder server-side prevents non-admins from planting files into admin
 // folders (path abuse). Admins keep full folder control + the 20-file cap.
+// Exception: every authenticated user may target the shared `community`
+// folder — the community/media upload used by the web + mobile clients.
+// The response also carries `urls` — absolute public URLs (one per file), the
+// shape the generic community clients consume directly.
 router.post("/", multipart, async (req, res) => {
   try {
     const session = await requireAuth(req);
@@ -97,13 +101,15 @@ router.post("/", multipart, async (req, res) => {
     }
 
     // Admins pick any (sanitized) folder; everyone else is pinned to their
-    // own kyc/<userId> namespace regardless of what the client sent.
+    // own kyc/<userId> namespace regardless of what the client sent — unless
+    // they explicitly asked for the shared `community` media folder.
     const folderField = form.fields.folder;
+    const requested = typeof folderField === "string" ? sanitizeFolder(folderField) : "general";
     const folder = isAdmin
-      ? typeof folderField === "string"
-        ? sanitizeFolder(folderField)
-        : "general"
-      : `kyc/${session.userId}`; // userId is a server-generated cuid — safe
+      ? requested
+      : requested === "community"
+        ? "community"
+        : `kyc/${session.userId}`; // userId is a server-generated cuid — safe
 
     const uploaded: FileAsset[] = [];
     for (const file of files) {
@@ -122,7 +128,14 @@ router.post("/", multipart, async (req, res) => {
       `${uploaded.length} file(s) → ${folder}`,
       session.userId
     );
-    return json(res, { files: uploaded }, 201);
+
+    // Absolute public URLs (same shape the profile/community uploads return).
+    const host = req.get("host") ?? "localhost";
+    const proto =
+      (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim() ?? req.protocol ?? "http";
+    const urls = uploaded.map((a) => `${proto}://${host}/api/files/${a.id}/file`);
+
+    return json(res, { files: uploaded, urls }, 201);
   } catch (e) {
     return handleError(e, res);
   }

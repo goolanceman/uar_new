@@ -1,5 +1,5 @@
 /**
- * Mobile Causes → Campaigns (vitest + supertest).
+ * Campaigns → donations pipeline (vitest + supertest).
  *
  * The mobile Causes feature consumes the SAME endpoints as the public website
  * (frontend/src/components/public/campaigns.tsx + donate.tsx):
@@ -8,10 +8,10 @@
  *   POST /api/donations          — PENDING Donation with campaignId
  *   POST /api/payments           — gateway order (errors must reach the app)
  *   POST /api/payments/verify    — settle (HMAC contract)
- *   GET  /api/donations?mine=1   — mobile donation history (session)
+ *   GET  /api/donations?mine=1   — donation history (session)
  *
- * Mobile requests carry `apikey: test` (mobileGate) and fall through the
- * mobile compat router to these routers, mounted like src/index.ts.
+ * Requests go straight to the generic routers (no apikey — the web envelope);
+ * mounted like src/index.ts.
  * Only touches rows it creates (unique prefixes; no table wipes).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -32,7 +32,6 @@ let donationId: string;
 let authToken: string;
 
 async function buildApp() {
-  const { router: mobileRouter } = await import("@/routes/mobile");
   const { router: campaignsRouter } = await import("@/routes/campaigns");
   const { router: donationsRouter } = await import("@/routes/donations");
   const { router: paymentsRouter } = await import("@/routes/payments");
@@ -40,12 +39,6 @@ async function buildApp() {
   const a = express();
   a.use(express.json({ limit: "10mb" }));
   a.use(express.urlencoded({ extended: true, limit: "10mb" }));
-  // same order AND same gate placement as src/index.ts: the apikey gate lives
-  // OUTSIDE the compat router so non-apikey requests never reach it
-  a.use("/api", (req, res, next) => {
-    if (!req.header("apikey")) return next();
-    return mobileRouter(req, res, next);
-  });
   a.use("/api/auth", authRouter);
   a.use("/api/campaigns", campaignsRouter);
   a.use("/api/donations", donationsRouter);
@@ -53,12 +46,12 @@ async function buildApp() {
   return a;
 }
 
-/** Mobile-style call: apikey header like ApiService/NewApiService. */
+/** Plain web-style calls (no apikey — the generic envelope). */
 function mget(path: string) {
-  return request(app).get(`/api/${path}`).set("apikey", "test");
+  return request(app).get(`/api/${path}`);
 }
 function mpost(path: string, body: Record<string, unknown>, token?: string) {
-  const r = request(app).post(`/api/${path}`).set("apikey", "test");
+  const r = request(app).post(`/api/${path}`);
   if (token) r.set("Authorization", `Bearer ${token}`);
   return r.send(body);
 }
@@ -129,7 +122,7 @@ beforeAll(async () => {
   await setSetting("finance.razorpayKeyId", "");
   await setSetting("finance.gatewayKeySecret", "");
 
-  // the mobile app logs in like the website does and sends the bearer token
+  // the app logs in like the website does and sends the bearer token
   const login = await request(app)
     .post("/api/auth/login")
     .send({ email: meEmail, password: "test-1234" });
@@ -145,7 +138,7 @@ afterAll(async () => {
 });
 
 // ═══════════════════════ LIST — website parity ═══════════════════════
-describe("GET /api/campaigns (mobile apikey falls through to the website router)", () => {
+describe("GET /api/campaigns — website parity", () => {
   it("returns exactly the website-visible campaigns (no DRAFTs)", async () => {
     const res = await mget("campaigns");
     expect(res.status).toBe(200);
@@ -294,8 +287,8 @@ describe("POST /api/payments/verify — website contract, mobile caller", () => 
   });
 });
 
-// ═══════════════════════ MOBILE DONATION HISTORY ═══════════════════════
-describe("GET /api/donations?mine=1 — mobile donation history", () => {
+// ═══════════════════════ DONATION HISTORY ═══════════════════════
+describe("GET /api/donations?mine=1 — session donation history", () => {
   it("rejects mine=1 without a session (history is private)", async () => {
     const anon = await mget("donations?mine=1");
     expect(anon.status).toBe(401);

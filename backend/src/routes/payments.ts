@@ -14,12 +14,13 @@
  * No secrets are ever returned — only the public key id (Razorpay key id).
  */
 import crypto from "crypto";
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { db } from "@/lib/db";
 import { ApiError, json, handleError, logActivity } from "@/lib/session";
 import { gatewayConfig, loadSettings, type GatewayConfig } from "@/lib/notify";
 import { getCurrency } from "@/lib/settings-core";
 import { broadcastEvent } from "@/lib/events";
+import { settleDonationSideEffects } from "@/lib/charity/settlement";
 
 export const router = Router();
 
@@ -272,10 +273,12 @@ async function settleCompleted(
     id: string;
     amount: number;
     campaignId: string | null;
+    causePostId?: string | null;
+    donorId?: string | null;
     donorName: string;
     receiptNumber: string;
   },
-  patch: { transactionId: string; paymentProvider: string }
+  patch: { transactionId?: string; paymentProvider: string }
 ): Promise<{ settled: { receiptNumber: string; amount: number; currency: string; paymentStatus: string }; settledNow: boolean }> {
   const result = await db.donation.updateMany({
     where: { id: donation.id, paymentStatus: "PENDING" },
@@ -283,7 +286,8 @@ async function settleCompleted(
       paymentStatus: "COMPLETED",
       receiptStatus: "ISSUED",
       receiptIssuedAt: new Date(),
-      ...patch,
+      ...(patch.transactionId ? { transactionId: patch.transactionId } : {}),
+      paymentProvider: patch.paymentProvider,
     },
   });
   const settledNow = result.count > 0;
@@ -297,12 +301,30 @@ async function settleCompleted(
       } catch {
         // campaign totals must never fail settlement
       }
+    } else if (donation.causePostId) {
+      // legacy community-cause donations target a CommunityPost
+      try {
+        await db.communityPost.update({
+          where: { id: donation.causePostId },
+          data: { raisedAmount: { increment: donation.amount } },
+        });
+      } catch {
+        // cause post may be gone — donation still settles
+      }
     }
+    // Donor rewards — points row + charity card sync + achievements + push
+    // + SSE feed (shared with the mobile app; lib/charity/settlement.ts).
+    await settleDonationSideEffects({
+      id: donation.id,
+      donorId: donation.donorId,
+      amount: donation.amount,
+      campaignId: donation.campaignId,
+    });
     await logActivity(
       donation.donorName,
       "PAYMENT_VERIFIED",
       "DONATION",
-      `${donation.receiptNumber} · ${patch.paymentProvider} payment ${patch.transactionId}`
+      `${donation.receiptNumber} · ${patch.paymentProvider} payment ${patch.transactionId ?? ""}`
     );
   }
   const fresh = await db.donation.findUniqueOrThrow({ where: { id: donation.id } });
@@ -481,6 +503,66 @@ router.post("/verify", async (req, res) => {
     }
 
     throw new ApiError("Missing payment confirmation fields — nothing to verify.", 400);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /api/payments/webhook — Razorpay server-to-server settlement
+// (moved from the mobile compat router /razorpay/webhook). NO session auth:
+// the Razorpay HMAC-SHA256 signature over the RAW request body is the auth
+// (RAZORPAY_WEBHOOK_SECRET, falling back to RAZORPAY_KEY_SECRET). Settles
+// async checkouts (donor closed the app before POST /verify) through the
+// same settleCompleted pipeline the web verify uses — points/card/achievements
+// included via lib/charity/settlement.ts.
+router.post("/webhook", async (req, res) => {
+  try {
+    const signature = req.header("X-Razorpay-Signature") ?? "";
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) return res.status(400).json({ error: "Webhook secret not configured" });
+
+    // express.json() is configured with a `verify` callback in index.ts that
+    // stashes the raw bytes — verify over those (fallback: the re-serialized
+    // parsed body, byte-identical for Razorpay's compact JSON payloads).
+    const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+    const hmacInput = rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
+    const expected = crypto.createHmac("sha256", secret).update(hmacInput).digest("hex");
+    const expectedBuf = Buffer.from(expected, "utf8");
+    const signatureBuf = Buffer.from(signature, "utf8");
+    if (
+      expectedBuf.length !== signatureBuf.length ||
+      !crypto.timingSafeEqual(expectedBuf, signatureBuf)
+    ) {
+      return res.status(400).json({ error: "Invalid webhook signature" });
+    }
+
+    const payload = (req.body ?? {}) as {
+      event?: string;
+      payload?: { payment?: { entity?: { id?: string; order_id?: string } } };
+    };
+    const event = payload.event ?? "";
+    const entity = payload.payload?.payment?.entity;
+    const paymentId = entity?.id ?? null;
+    const orderId = entity?.order_id;
+
+    if ((event === "payment.authorized" || event === "payment.captured") && orderId) {
+      const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
+      if (donation && donation.paymentStatus === "PENDING") {
+        await settleCompleted(donation, {
+          ...(paymentId ? { transactionId: paymentId } : {}),
+          paymentProvider: "RAZORPAY",
+        });
+      }
+    }
+
+    if (event === "payment.failed" && orderId) {
+      const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
+      if (donation && donation.paymentStatus === "PENDING") {
+        await db.donation.update({ where: { id: donation.id }, data: { paymentStatus: "FAILED" } });
+      }
+    }
+
+    return res.json({ ok: true });
   } catch (e) {
     return handleError(e, res);
   }

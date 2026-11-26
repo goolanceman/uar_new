@@ -152,3 +152,64 @@ router.get("/public", async (_req, res) => {
     return handleError(e, res);
   }
 });
+
+// GET /api/settings/app — no auth. Mobile app configuration (legacy
+// fetchSetting): the "mobile.app" KV config blob plus the interests,
+// document types, report reasons and username restrictions the Flutter
+// Settings model reads. Secret-looking KV keys are stripped — the config is
+// served to every unauthenticated client.
+const APP_SECRET_KEY_RE = /secret|password|token|privatekey/i;
+router.get("/app", async (_req, res) => {
+  try {
+    const row = await db.setting.findUnique({ where: { key: "mobile.app" } });
+    if (!row) throw new ApiError("Settings not configured", 404);
+
+    let settings: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(row.value);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      settings = parsed;
+    } catch {
+      throw new ApiError("Settings not configured", 404);
+    }
+    for (const key of Object.keys(settings)) {
+      if (APP_SECRET_KEY_RE.test(key)) delete settings[key];
+    }
+
+    const [interests, reasons, restrictions, docTypesRow] = await Promise.all([
+      db.communityInterest.findMany({ orderBy: { id: "asc" } }),
+      db.reportReason.findMany({ orderBy: { id: "asc" } }),
+      db.usernameRestriction.findMany({ orderBy: { id: "asc" } }),
+      db.setting.findUnique({ where: { key: "mobile.documentTypes" } }),
+    ]);
+
+    let documentTypes: Array<{ id: number; title: string }> = [];
+    try {
+      const docs = JSON.parse(docTypesRow?.value ?? "[]");
+      if (Array.isArray(docs)) documentTypes = docs.map((t: unknown, i: number) => ({ id: i, title: String(t) }));
+    } catch {
+      // missing/corrupt KV row → empty list
+    }
+
+    const commonRow = (r: { id: number; title: string; createdAt: Date; updatedAt: Date }) => ({
+      id: r.id,
+      title: r.title,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    });
+
+    return json(res, {
+      ...settings,
+      id: row.id,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      interests: interests.map((i) => ({ ...commonRow(i), totalRoomOfInterest: 0 })),
+      documentTypes,
+      documentType: documentTypes, // legacy alias kept for older clients
+      reportReasons: reasons.map(commonRow),
+      restrictedUsernames: restrictions.map(commonRow),
+    });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});

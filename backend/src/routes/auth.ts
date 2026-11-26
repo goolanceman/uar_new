@@ -3,7 +3,7 @@
  * Converted 1:1 from src/app/api/auth/* (Next.js route handlers) to Express.
  */
 import { Router } from "express";
-import { randomInt } from "node:crypto";
+import { randomInt, randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 import {
   setSession,
@@ -20,6 +20,7 @@ import {
 } from "@/lib/session";
 import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 import { loadSettings, emailShell, sendEmail } from "@/lib/notify";
+import { deleteUserCascade } from "@/lib/community/users";
 
 export const router = Router();
 
@@ -59,6 +60,16 @@ router.post("/login", async (req, res) => {
     if (user.status === "SUSPENDED")
       throw new ApiError("Account suspended", 403);
 
+    // Optional device registration on login (mobile sends it; web does not).
+    const deviceToken = String(b?.deviceToken ?? "").trim();
+    const deviceType = Number.isFinite(Number(b?.deviceType)) ? Number(b?.deviceType) : null;
+    if (deviceToken) {
+      await db.user.update({
+        where: { id: user.id },
+        data: { deviceToken, ...(deviceType !== null ? { deviceType } : {}) },
+      });
+    }
+
     const session = {
       userId: user.id,
       role: user.role,
@@ -96,12 +107,13 @@ router.post("/register", async (req, res) => {
     const b = await Promise.resolve(req.body ?? {});
     const name = String(b?.name ?? "").trim();
     const email = String(b?.email ?? "").trim().toLowerCase();
-    const phone = String(b?.phone ?? "").trim();
+    // Phone is optional (web signup collects it; mobile signup may not).
+    const phone = b?.phone ? String(b.phone).trim() : null;
     const city = b?.city ? String(b.city).trim() : null;
     const role = ALLOWED_ROLES.includes(String(b?.role)) ? String(b.role) : "DONOR";
 
-    if (!name || !email || !phone)
-      throw new ApiError("Name, email and phone are required", 400);
+    if (!name || !email)
+      throw new ApiError("Name and email are required", 400);
     if (!/^\S+@\S+\.\S+$/.test(email))
       throw new ApiError("Please enter a valid email address", 400);
 
@@ -122,6 +134,10 @@ router.post("/register", async (req, res) => {
         password: hashPassword(password),
         status: role === "VOLUNTEER" ? "PENDING" : "ACTIVE",
         isActive: role !== "VOLUNTEER",
+        // Mobile signup may register its push credentials inline (web omits them).
+        ...(String(b?.deviceToken ?? "").trim()
+          ? { deviceToken: String(b.deviceToken).trim(), ...(Number.isFinite(Number(b?.deviceType)) ? { deviceType: Number(b.deviceType) } : {}) }
+          : {}),
       },
     });
 
@@ -213,6 +229,46 @@ function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
+/**
+ * Issue a 6-digit OTP over email — shared by forgot-password and
+ * send-verification-otp (both store hashed codes in PasswordReset rows).
+ * The plaintext OTP is NEVER returned in an API response; without a mail
+ * transport it is logged server-side (documented dev behavior).
+ */
+async function issueOtpEmail(email: string, userName: string, purpose: "reset" | "verify"): Promise<void> {
+  const otp = generateOtp();
+  // Supersede any previous pending codes for this email.
+  await db.passwordReset.updateMany({ where: { email, usedAt: null }, data: { usedAt: new Date() } });
+  await db.passwordReset.create({
+    data: {
+      email,
+      otpHash: hashPassword(otp), // scrypt — plaintext OTP never stored
+      expiresAt: new Date(Date.now() + OTP_TTL_MS),
+    },
+  });
+
+  const map = await loadSettings();
+  const org = {
+    name: map["org.name"] || "United Angel Reach",
+    footer: map["receipts.footer"] || undefined,
+  };
+  const subject =
+    purpose === "reset" ? `Your password reset code — ${org.name}` : `Your verification code — ${org.name}`;
+  const bodyHtml = `
+    <p style="margin:0 0 8px;">Hello ${userName},</p>
+    <p style="margin:0 0 12px;">Use the verification code below — it expires in <strong>15 minutes</strong>.</p>
+    <p style="margin:16px 0;text-align:center;">
+      <span style="display:inline-block;font-size:28px;letter-spacing:8px;font-weight:700;color:#064e3b;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:12px 24px;">${otp}</span>
+    </p>
+    <p style="margin:0;">— The ${org.name} Team</p>`;
+  const out = await sendEmail(map, { to: email, subject, html: emailShell(subject, bodyHtml, org) });
+  if (out.skipped) {
+    console.log(`[auth] ${purpose === "reset" ? "password reset" : "verification"} OTP for ${email}: ${otp} (email transport not configured)`);
+  } else if (!out.ok) {
+    console.error(`[auth] ${purpose} OTP email failed:`, out.message);
+  }
+}
+
 // POST /api/auth/forgot-password { email } — ALWAYS 200 { ok: true }
 // (no account enumeration, mirrors the legacy contract minus the OTP leak).
 router.post("/forgot-password", async (req, res) => {
@@ -232,48 +288,7 @@ router.post("/forgot-password", async (req, res) => {
         throw new ApiError("Too many reset requests. Please try again later.", 429);
 
       const user = await db.user.findFirst({ where: { email: { equals: email } } });
-      if (user) {
-        const otp = generateOtp();
-        // Supersede any previous pending codes for this email.
-        await db.passwordReset.updateMany({
-          where: { email, usedAt: null },
-          data: { usedAt: new Date() },
-        });
-        await db.passwordReset.create({
-          data: {
-            email,
-            otpHash: hashPassword(otp), // scrypt — plaintext OTP never stored
-            expiresAt: new Date(Date.now() + OTP_TTL_MS),
-          },
-        });
-
-        const map = await loadSettings();
-        const org = {
-          name: map["org.name"] || "United Angel Reach",
-          footer: map["receipts.footer"] || undefined,
-        };
-        const bodyHtml = `
-          <p style="margin:0 0 8px;">Hello ${user.name},</p>
-          <p style="margin:0 0 12px;">We received a request to reset the password for your ${org.name} account. Use the verification code below — it expires in <strong>15 minutes</strong>.</p>
-          <p style="margin:16px 0;text-align:center;">
-            <span style="display:inline-block;font-size:28px;letter-spacing:8px;font-weight:700;color:#064e3b;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:12px 24px;">${otp}</span>
-          </p>
-          <p style="margin:0 0 12px;">Enter this code on the reset-password screen together with your new password. If you did not request a reset, you can safely ignore this email — your current password keeps working.</p>
-          <p style="margin:0;">— The ${org.name} Team</p>`;
-        const out = await sendEmail(map, {
-          to: email,
-          subject: `Your password reset code — ${org.name}`,
-          html: emailShell("Password reset code", bodyHtml, org),
-        });
-        if (out.skipped) {
-          // No email transport configured — documented DEV behavior: the OTP
-          // is logged server-side so local flows stay testable. NEVER returned
-          // in the API response.
-          console.log(`[auth] password reset OTP for ${email}: ${otp} (email transport not configured)`);
-        } else if (!out.ok) {
-          console.error("[auth] password reset email failed:", out.message);
-        }
-      }
+      if (user) await issueOtpEmail(email, user.name, "reset");
     }
 
     return json(res, { ok: true });
@@ -338,6 +353,169 @@ router.post("/reset-password", async (req, res) => {
 
     await logActivity(user.name, "PASSWORD_RESET", "USER", user.role, user.id);
     return json(res, { ok: true, message: "Password updated — you can sign in with your new password." });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Mobile-parity extensions (generic REST — shared by web + mobile) ────────
+
+// POST /api/auth/send-verification-otp { email } — emails a 6-digit code for
+// email verification (same PasswordReset rows as forgot-password). The OTP is
+// never returned in the response.
+router.post("/send-verification-otp", async (req, res) => {
+  try {
+    const b = await Promise.resolve(req.body ?? {});
+    const email = String(b?.email ?? "").trim().toLowerCase();
+    if (!email || !/^\S+@\S+\.\S+$/.test(email))
+      throw new ApiError("Please enter a valid email address", 400);
+
+    const rl = checkRateLimit(
+      `verify-otp:${email}:${clientIp(req.headers)}`,
+      5,
+      60 * 60 * 1000
+    );
+    if (!rl.allowed) throw new ApiError("Too many requests. Please try again later.", 429);
+
+    const user = await db.user.findFirst({ where: { email: { equals: email } } });
+    if (!user) throw new ApiError("User not found with this email", 404);
+    if (user.emailVerifiedAt) throw new ApiError("Email already verified", 400);
+
+    await issueOtpEmail(email, user.name, "verify");
+    return json(res, { ok: true, message: "Verification OTP sent to email" });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /api/auth/verify-email { email, otp } — consumes the code and stamps
+// emailVerifiedAt. Returns the updated user (raw shape minus password).
+router.post("/verify-email", async (req, res) => {
+  try {
+    const b = await Promise.resolve(req.body ?? {});
+    const email = String(b?.email ?? "").trim().toLowerCase();
+    const otp = String(b?.otp ?? "").trim();
+
+    if (!/^\S+@\S+\.\S+$/.test(email))
+      throw new ApiError("Please enter a valid email address", 400);
+    if (!/^\d{6}$/.test(otp))
+      throw new ApiError("Please enter the 6-digit code from the email", 400);
+
+    const pending = await db.passwordReset.findMany({
+      where: { email, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+    const match = pending.find((row) => verifyPassword(otp, row.otpHash));
+    if (!match) throw new ApiError("Invalid or expired code", 400);
+
+    const user = await db.user.findFirst({ where: { email: { equals: email } } });
+    if (!user) throw new ApiError("User not found", 404);
+
+    const updated = await db.user.update({
+      where: { id: user.id },
+      data: { emailVerifiedAt: new Date() },
+    });
+    await db.passwordReset.updateMany({ where: { email, usedAt: null }, data: { usedAt: new Date() } });
+
+    const { password: _pw, ...userSafe } = updated;
+    return json(res, { ok: true, user: userSafe });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /api/auth/social — sign in (or register) by external identity.
+// Replaces the legacy POST /addUser: { identity, loginType (0 google |
+// 1 apple | 2 email), deviceType?, deviceToken?, fullName? }. The identity is
+// stored in the (unique) email column, like the legacy wire format did.
+router.post("/social", async (req, res) => {
+  try {
+    const b = await Promise.resolve(req.body ?? {});
+    const identity = String(b?.identity ?? "").trim();
+    if (!identity) throw new ApiError("identity is required", 400);
+
+    const ip = clientIp(req.headers);
+    if (!checkRateLimit(`social:ip:${ip}`, 20, 10 * 60 * 1000).allowed)
+      throw new ApiError("Too many attempts. Please try again later.", 429);
+
+    const email = identity.toLowerCase();
+    const loginType = Number.isFinite(Number(b?.loginType ?? b?.login_type)) ? Number(b?.loginType ?? b?.login_type) : 2;
+    const deviceType = Number.isFinite(Number(b?.deviceType ?? b?.device_type)) ? Number(b?.deviceType ?? b?.device_type) : null;
+    const deviceToken = String(b?.deviceToken ?? b?.device_token ?? "").trim();
+    const deviceData = {
+      ...(deviceType !== null ? { deviceType } : {}),
+      ...(deviceToken ? { deviceToken } : {}),
+    };
+
+    const existing = await db.user.findFirst({ where: { email: { equals: email } } });
+    if (existing) {
+      if (existing.status === "SUSPENDED") throw new ApiError("Account suspended", 403);
+      const updated = await db.user.update({ where: { id: existing.id }, data: deviceData });
+      const { password: _pw, ...userSafe } = updated;
+      const session = { userId: updated.id, role: updated.role, name: updated.name, email: updated.email };
+      return json(res, { user: userSafe, token: issueToken(session), created: false });
+    }
+
+    // Unique username from the identity (legacy AuthController::generateUsername).
+    const base = identity.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "") || "user";
+    let username = base;
+    let counter = 1;
+    while (await db.user.findFirst({ where: { username }, select: { id: true } })) {
+      username = `${base}${counter++}`;
+    }
+
+    const name = String(b?.fullName ?? b?.full_name ?? "").trim() || "User";
+    const user = await db.user.create({
+      data: {
+        email,
+        name,
+        // Social logins have no password of their own — a random one blocks
+        // password-login on this account until a reset is requested.
+        password: hashPassword(randomBytes(24).toString("hex")),
+        username,
+        loginType,
+        status: "ACTIVE",
+        ...deviceData,
+      },
+    });
+
+    const session = { userId: user.id, role: user.role, name: user.name, email: user.email };
+    const { password: _pw, ...userSafe } = user;
+    await logActivity(user.name, "REGISTER", "USER", user.role, user.id);
+    return json(res, { user: userSafe, token: issueToken(session), created: true });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/auth/username-available?username= — legacy POST /checkUsername.
+router.get("/username-available", async (req, res) => {
+  try {
+    const username = String(req.query.username ?? "").trim();
+    if (!username) return json(res, { available: true });
+    const taken = await db.user.findFirst({ where: { username }, select: { id: true } });
+    return json(res, { available: !taken });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// DELETE /api/auth/account — self-service account deletion (legacy
+// /auth/delete-account + /deleteUser cascade). Optional { password } double-check.
+router.delete("/account", async (req, res) => {
+  try {
+    const session = await requireAuth(req);
+    const b = await Promise.resolve(req.body ?? {});
+    const user = await db.user.findUnique({ where: { id: session.userId } });
+    if (!user) throw new ApiError("Account not found", 404);
+
+    const given = String(b?.password ?? "");
+    if (given !== "" && !verifyPassword(given, user.password))
+      throw new ApiError("Invalid password", 400);
+
+    await deleteUserCascade(user.id);
+    clearSession(res);
+    return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
   }

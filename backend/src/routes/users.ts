@@ -13,7 +13,7 @@ import {
   logActivity,
 } from "@/lib/session";
 import { USER_STATUSES } from "@/lib/user-status";
-import { syncPostCommentCounts } from "@/lib/mobile/compat";
+import { deleteUserCascade } from "@/lib/community/users";
 
 export const router = Router();
 
@@ -254,7 +254,10 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/users/:id — admin removes a user
+// DELETE /api/users/:id — admin removes a user (community cascade via
+// deleteUserCascade — likes, follows, rooms, reels, posts, stories,
+// verifications, reports, saved notifications — plus the CRM detachments the
+// admin flow needs: donations, activity logs, beneficiary/donor profiles).
 router.delete("/:id", async (req, res) => {
   try {
     const session = await requireRole(req, "ADMIN");
@@ -272,18 +275,14 @@ router.delete("/:id", async (req, res) => {
         throw new ApiError("You cannot delete the only administrator account", 409);
     }
 
-    // Detach FK children before deleting
+    // Detach CRM children that point back at the user before the cascade.
     await db.donation.updateMany({ where: { donorId: id }, data: { donorId: null } });
-    await db.notification.updateMany({ where: { userId: id }, data: { userId: null } });
     await db.activityLog.updateMany({ where: { userId: id }, data: { userId: null } });
     await db.beneficiary.updateMany({ where: { userId: id }, data: { userId: null } });
-    await db.volunteer.deleteMany({ where: { userId: id } });
 
-    const commentedPostIds = (
-      await db.communityComment.findMany({ where: { userId: id }, select: { postId: true }, distinct: ["postId"] })
-    ).map((c) => c.postId);
-    await db.user.delete({ where: { id } });
-    await syncPostCommentCounts({ postIds: commentedPostIds });
+    // Full community cascade (also deletes the user row and their
+    // notifications + volunteer profile).
+    await deleteUserCascade(id);
 
     await logActivity(
       session.name,

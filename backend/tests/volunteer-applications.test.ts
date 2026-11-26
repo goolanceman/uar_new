@@ -1,10 +1,8 @@
 /**
- * Mobile consolidation — volunteer applications (vitest + supertest).
+ * Volunteer applications (vitest + supertest).
  *
- * The mobile apply/status/admin-review copies in the wire-compat layer
- * (routes/mobile/auth-users.ts: /volunteer/apply, /volunteer/status,
- * /admin/volunteer/*) were REMOVED — the Flutter app now calls the SAME
- * website module the web frontend uses
+ * The legacy mobile-only apply/status/admin-review copies are gone — the Flutter
+ * app calls the SAME website module the web frontend uses
  * (frontend/src/components/public/volunteer.tsx + admin volunteers-view.tsx):
  *   POST /api/volunteer-applications        — apply (session profile fills
  *                                             fullName/email/phone)
@@ -12,11 +10,9 @@
  *   PATCH /api/volunteer-applications/:id   — admin review (mirrors
  *                                             User.volunteerStatus so the
  *                                             app's badge/login routing works)
- *   POST /api/user/select-type              — kept on the compat layer (no
- *                                             main equivalent)
  *
- * Mobile requests carry `apikey` (mobileGate) + the same bearer token the web
- * sends. Only touches rows it creates (unique email prefix; no table wipes).
+ * Requests go straight to the generic routers (no apikey — the web envelope).
+ * Only touches rows it creates (unique email prefix; no table wipes).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
@@ -33,34 +29,27 @@ let adminToken: string;
 let applicationId: string;
 
 async function buildApp() {
-  const { router: mobileRouter } = await import("@/routes/mobile");
   const { router: volunteerApplicationsRouter } = await import("@/routes/volunteer-applications");
   const { router: authRouter } = await import("@/routes/auth");
   const a = express();
   a.use(express.json({ limit: "10mb" }));
   a.use(express.urlencoded({ extended: true, limit: "10mb" }));
-  // same order AND same gate placement as src/index.ts: the apikey gate lives
-  // OUTSIDE the compat router so non-apikey requests never reach it
-  a.use("/api", (req, res, next) => {
-    if (!req.header("apikey")) return next();
-    return mobileRouter(req, res, next);
-  });
   a.use("/api/auth", authRouter);
   a.use("/api/volunteer-applications", volunteerApplicationsRouter);
   return a;
 }
 
-/** Mobile-style calls: apikey header like ApiService, plus the bearer token. */
+/** Plain web-style calls (no apikey — the generic envelope). */
 function mget(path: string) {
-  return request(app).get(`/api/${path}`).set("apikey", "test");
+  return request(app).get(`/api/${path}`);
 }
 function mpost(path: string, body: Record<string, unknown>, token?: string) {
-  const r = request(app).post(`/api/${path}`).set("apikey", "test");
+  const r = request(app).post(`/api/${path}`);
   if (token) r.set("Authorization", `Bearer ${token}`);
   return r.send(body);
 }
 function mpatch(path: string, body: Record<string, unknown>, token?: string) {
-  const r = request(app).patch(`/api/${path}`).set("apikey", "test");
+  const r = request(app).patch(`/api/${path}`);
   if (token) r.set("Authorization", `Bearer ${token}`);
   return r.send(body);
 }
@@ -136,7 +125,7 @@ afterAll(async () => {
 });
 
 // ═══════════ APPLY — the website module, mobile caller ═══════════
-describe("POST /api/volunteer-applications (mobile apikey falls through to the website router)", () => {
+describe("POST /api/volunteer-applications (the website module, app caller)", () => {
   it("creates the application from the session profile when the body omits identity fields", async () => {
     const res = await mpost(
       "volunteer-applications",
@@ -196,21 +185,13 @@ describe("POST /api/volunteer-applications (mobile apikey falls through to the w
     expect(res.body.application).toBeNull();
   });
 
-  it("removed the compat copies: POST /volunteer/apply and GET /volunteer/status are 404", async () => {
-    const apply = await mpost("volunteer/apply", { skills: ["x"] }, authToken);
+  it("a legacy apikey request to a retired compat path is a plain 404", async () => {
+    const apply = await request(app)
+      .post("/api/volunteer/apply")
+      
+      .set("Authorization", `Bearer ${authToken}`)
+      .send({ skills: ["x"] });
     expect(apply.status).toBe(404);
-    const status = await mget("volunteer/status").set("Authorization", `Bearer ${authToken}`);
-    expect(status.status).toBe(404);
-  });
-});
-
-// ═══════════ SELECT-TYPE — still on the compat layer (no main equivalent) ══
-describe("POST /api/user/select-type (compat)", () => {
-  it("keeps the legacy {status, message, data} envelope", async () => {
-    const res = await mpost("user/select-type", { user_type: "supporter" }, token2);
-    expect(res.status).toBe(200);
-    expect(res.body.status).toBe(true);
-    expect(res.body.data.user_type).toBe("supporter");
   });
 });
 

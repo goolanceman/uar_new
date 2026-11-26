@@ -18,6 +18,7 @@ import { CURRENCY_CODES } from "@/lib/settings-core";
 import { assertTransition } from "@/lib/workflow";
 import { loadSettings, notifyDonation, emailShell, sendEmail } from "@/lib/notify";
 import { broadcastEvent } from "@/lib/events";
+import { paged, pageParams } from "@/lib/community/serializers";
 
 export const router = Router();
 
@@ -114,7 +115,7 @@ function parseDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// GET /api/donations — mine=1 | public feed | admin filtered list
+// GET /api/donations — mine=1 | public feed | wall=1 donor wall | admin filtered list
 router.get("/", async (req, res) => {
   try {
     const sp = new URL(req.url, "http://localhost").searchParams;
@@ -132,6 +133,57 @@ router.get("/", async (req, res) => {
         include: { campaign: { select: { title: true, accent: true } } },
       });
       return json(res, donations);
+    }
+
+    // Donor wall (moved from the mobile-only fetchCauseDonations) — the
+    // public-safe donor list of one campaign: masked/anonymised names, no
+    // contact PII. Same projection the public wall uses, paginated.
+    if (sp.get("wall") === "1") {
+      const campaignId = sp.get("campaignId");
+      if (!campaignId) throw new ApiError("campaignId is required for the donor wall", 400);
+      const { page, limit, skip } = pageParams(req.query as Record<string, unknown>);
+      let sortBy = sp.get("sortBy") ?? "createdAt";
+      if (!(["createdAt", "amount"].includes(sortBy))) sortBy = "createdAt";
+      const sortDirection = sp.get("sortDirection") === "asc" ? "asc" : "desc";
+
+      const where = { campaignId, paymentStatus: "COMPLETED" as const };
+      const [rows, total, agg] = await Promise.all([
+        db.donation.findMany({
+          where,
+          orderBy: { [sortBy]: sortDirection },
+          skip,
+          take: limit,
+          include: {
+            campaign: { select: { id: true, title: true, slug: true } },
+            donor: { select: { id: true, name: true, username: true, avatar: true } },
+          },
+        }),
+        db.donation.count({ where }),
+        db.donation.aggregate({ _sum: { amount: true }, where }),
+      ]);
+      const items = rows.map((d) => ({
+        id: d.id,
+        donorName: d.isAnonymous ? "Anonymous" : maskName(d.donorName),
+        amount: d.amount,
+        currency: d.currency,
+        type: d.type,
+        category: d.category,
+        message: d.message,
+        createdAt: d.createdAt,
+        campaign: d.campaign,
+        // donor id only for the app's "my donations" highlight; hidden for
+        // anonymous gifts (the UI then shows the Anonymous placeholder)
+        userId: d.isAnonymous ? null : d.donorId,
+        user: d.isAnonymous || !d.donor
+          ? null
+          : {
+              id: d.donor.id,
+              full_name: maskName(d.donor.name),
+              username: d.donor.username ?? "",
+              profile: d.donor.avatar,
+            },
+      }));
+      return json(res, { ...paged(items, page, limit, total), totalRaised: agg._sum.amount ?? 0 });
     }
 
     if (isPublic || !session) {

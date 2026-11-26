@@ -62,3 +62,11 @@ export function multipartErrorHandler(
   }
   next(err);
 }
+
+/** One uploaded part (multer any()) as a native File for saveUpload — null when absent. */
+export function filePart(req: Request, field: string): File | null {
+  type RawMulterFile = MulterFile & { fieldname: string };
+  const raw = ((req.files as RawMulterFile[] | undefined) ?? []).find((f) => f.fieldname === field);
+  if (!raw) return null;
+  return new File([raw.buffer], raw.originalname, { type: raw.mimetype || "application/octet-stream" });
+}
