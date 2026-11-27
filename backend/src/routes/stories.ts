@@ -9,7 +9,7 @@ import { Router, type Request } from "express";
 import { requireAuth, ApiError, json, handleError, body } from "@/lib/session";
 import { paged, pageParams } from "@/lib/community/serializers";
 import { multipart, type MulterFile } from "@/lib/multipart";
-import { createStory, deleteStory, getStory, listStories, viewStory } from "@/lib/community/stories";
+import { createStory, deleteStory, getStory, listStories, updateStory, viewStory } from "@/lib/community/stories";
 
 export const router = Router();
 
@@ -89,6 +89,25 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const story = await deleteStory(session.userId, session.role, idParam(req));
+    return json(res, { ok: true, story });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/stories/:id — edit metadata (type/duration/content/thumbnail).
+// The owner may always edit; a moderator may edit anyone's (legacy
+// stories/update from the admin portal).
+router.patch("/:id", async (req, res) => {
+  try {
+    const session = await requireAuth(req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const story = await updateStory(session.userId, session.role, idParam(req), {
+      type: b.type !== undefined ? Number(b.type) : undefined,
+      duration: b.duration !== undefined ? Number(b.duration) : undefined,
+      content: b.content !== undefined ? String(b.content) : undefined,
+      thumbnail: b.thumbnail !== undefined ? String(b.thumbnail) : undefined,
+    });
     return json(res, { ok: true, story });
   } catch (e) {
     return handleError(e, res);

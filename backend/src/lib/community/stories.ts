@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { ApiError } from "@/lib/session";
 import { communityAuthor, communityUser } from "@/lib/community/serializers";
 import { saveCommunityUpload, isActorModerator } from "@/lib/community/posts";
+import { feedEvent } from "@/lib/community/push";
 
 const STORY_INCLUDE = { user: true } satisfies Prisma.CommunityStoryInclude;
 
@@ -119,4 +120,36 @@ export async function deleteStory(meId: string, role: string | undefined, storyI
 
   await db.communityStory.delete({ where: { id: story.id } });
   return serializeStory(story);
+}
+
+export interface UpdateStoryInput {
+  type?: number;
+  duration?: number;
+  content?: string;
+  thumbnail?: string | null;
+}
+
+/** PATCH /api/stories/:id — edit metadata (type/duration/content/thumbnail).
+ *  The owner may always edit; a moderator may edit anyone's (legacy
+ *  stories/update from the admin portal). */
+export async function updateStory(meId: string, role: string | undefined, storyId: string, input: UpdateStoryInput) {
+  const moderator = await isActorModerator(meId, role);
+  const story = await db.communityStory.findUnique({ where: { id: storyId } });
+  if (!story) throw new ApiError("Story not found", 404);
+  if (story.userId !== meId && !moderator) {
+    throw new ApiError("You do not have permission for this action", 403);
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (input.content !== undefined) patch.content = input.content;
+  if (input.thumbnail !== undefined) patch.thumbnail = input.thumbnail;
+  if (input.duration !== undefined) patch.duration = input.duration;
+  if (input.type !== undefined) patch.type = input.type === 1 ? 1 : 0;
+  if (Object.keys(patch).length === 0) throw new ApiError("Nothing to update", 400);
+
+  const updated = await db.communityStory.update({ where: { id: story.id }, data: patch });
+  if (moderator && updated.userId !== meId) {
+    feedEvent("story.moderated", { id: storyId, changes: Object.keys(patch).join(","), by: meId });
+  }
+  return serializeStory(updated);
 }

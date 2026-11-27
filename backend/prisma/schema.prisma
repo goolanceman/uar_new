@@ -2623,3 +2623,17 @@ model TblPage {
 
   @@map("app_tbl_pages")
 }
+
+// Platform announcements sent by the admin dashboard (sendNotification /
+// repeatNotification / updateNotification / deleteNotification in the legacy
+// AdminController). The row is the announcement record; the per-user
+// Notification rows created by the push fan-out are the delivery log.
+model AdminNotification {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("app_admin_notifications")
+}

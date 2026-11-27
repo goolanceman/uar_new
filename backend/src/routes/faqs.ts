@@ -2,12 +2,15 @@
  * FAQs routes — /api/faqs (shared by web + mobile).
  * Generic REST port of the legacy mobile fetchFAQs handler: FAQ types with
  * their nested faqs, soft-deleted types excluded.
+ * Admin CRUD (legacy FAQsController add/update/delete for types + faqs) is
+ * gated to ADMIN/MODERATOR; every mutation drops the faqs catalog cache.
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
-import { json, handleError } from "@/lib/session";
+import { ApiError, json, handleError } from "@/lib/session";
 import { paged, pageParams } from "@/lib/community/serializers";
-import { cached, cacheKeyPart, cacheTtl, catalogKey } from "@/lib/cache";
+import { requireElevated } from "@/lib/community/admin";
+import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
 
 export const router = Router();
 
@@ -19,6 +22,141 @@ router.get("/", async (req, res) => {
       loadFaqs(skip, page, limit)
     );
     return json(res, payload);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Admin CRUD — FAQ types ───────────────────────────────────────────────
+
+// POST /api/faqs/types {title}
+router.post("/types", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    if (title.length > 55) throw new ApiError("The title may be at most 55 characters.", 400);
+    const dup = await db.faqType.findFirst({ where: { title, isDeleted: 0 }, select: { id: true } });
+    if (dup) throw new ApiError(`FAQ type "${title}" already exists`, 409);
+    const row = await db.faqType.create({ data: { title } });
+    await invalidateCatalog("faqs");
+    return json(res, row, 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/faqs/types/:id {title}
+router.patch("/types/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!Number.isInteger(id)) throw new ApiError("Invalid FAQ type id", 400);
+    if (!title) throw new ApiError("The title field is required.", 400);
+    if (title.length > 55) throw new ApiError("The title may be at most 55 characters.", 400);
+    const row = await db.faqType.findFirst({ where: { id, isDeleted: 0 } });
+    if (!row) throw new ApiError("FAQ type not found", 404);
+    const dup = await db.faqType.findFirst({ where: { title, isDeleted: 0, id: { not: id } }, select: { id: true } });
+    if (dup) throw new ApiError(`FAQ type "${title}" already exists`, 409);
+    const updated = await db.faqType.update({ where: { id }, data: { title } });
+    await invalidateCatalog("faqs");
+    return json(res, updated);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// DELETE /api/faqs/types/:id — soft-delete the type and hard-delete its faqs
+// (the legacy type delete emptied the section).
+router.delete("/types/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    if (!Number.isInteger(id)) throw new ApiError("Invalid FAQ type id", 400);
+    const row = await db.faqType.findFirst({ where: { id, isDeleted: 0 } });
+    if (!row) throw new ApiError("FAQ type not found", 404);
+    await db.faq.deleteMany({ where: { faqsTypeId: id } });
+    await db.faqType.update({ where: { id }, data: { isDeleted: 1 } });
+    await invalidateCatalog("faqs");
+    return json(res, { id, deleted: true });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Admin CRUD — FAQs ──────────────────────────────────────────────────
+
+// POST /api/faqs {faqsTypeId, question, answer}
+router.post("/", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const body = req.body ?? {};
+    const faqsTypeId = Number(body.faqsTypeId);
+    const question = String(body.question ?? "").trim();
+    const answer = String(body.answer ?? "").trim();
+    if (!Number.isInteger(faqsTypeId)) throw new ApiError("The faqsTypeId field is required.", 400);
+    if (!question) throw new ApiError("The question field is required.", 400);
+    if (!answer) throw new ApiError("The answer field is required.", 400);
+    const type = await db.faqType.findFirst({ where: { id: faqsTypeId, isDeleted: 0 }, select: { id: true } });
+    if (!type) throw new ApiError("FAQ type not found", 404);
+    const row = await db.faq.create({ data: { faqsTypeId, question, answer } });
+    await invalidateCatalog("faqs");
+    return json(res, row, 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/faqs/:id {question?, answer?, faqsTypeId?}
+router.patch("/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    if (!Number.isInteger(id)) throw new ApiError("Invalid FAQ id", 400);
+    const row = await db.faq.findUnique({ where: { id } });
+    if (!row) throw new ApiError("FAQ not found", 404);
+
+    const body = req.body ?? {};
+    const patch: Record<string, unknown> = {};
+    if (body.question !== undefined) {
+      const question = String(body.question ?? "").trim();
+      if (!question) throw new ApiError("The question field is required.", 400);
+      patch.question = question;
+    }
+    if (body.answer !== undefined) {
+      const answer = String(body.answer ?? "").trim();
+      if (!answer) throw new ApiError("The answer field is required.", 400);
+      patch.answer = answer;
+    }
+    if (body.faqsTypeId !== undefined) {
+      const faqsTypeId = Number(body.faqsTypeId);
+      if (!Number.isInteger(faqsTypeId)) throw new ApiError("Invalid faqsTypeId", 400);
+      const type = await db.faqType.findFirst({ where: { id: faqsTypeId, isDeleted: 0 }, select: { id: true } });
+      if (!type) throw new ApiError("FAQ type not found", 404);
+      patch.faqsTypeId = faqsTypeId;
+    }
+    if (Object.keys(patch).length === 0) throw new ApiError("Nothing to update", 400);
+
+    const updated = await db.faq.update({ where: { id }, data: patch });
+    await invalidateCatalog("faqs");
+    return json(res, updated);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// DELETE /api/faqs/:id
+router.delete("/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    if (!Number.isInteger(id)) throw new ApiError("Invalid FAQ id", 400);
+    const row = await db.faq.findUnique({ where: { id } });
+    if (!row) throw new ApiError("FAQ not found", 404);
+    await db.faq.delete({ where: { id } });
+    await invalidateCatalog("faqs");
+    return json(res, { id, deleted: true });
   } catch (e) {
     return handleError(e, res);
   }

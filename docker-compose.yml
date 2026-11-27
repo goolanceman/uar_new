@@ -59,7 +59,12 @@ services:
       # Uploaded files: bind-mounted host dir so files uploaded before
       # containerisation keep working (files/[id]/file serves from here).
       UPLOAD_DIR: /app/uploads
-      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:8090,http://127.0.0.1:8090,http://localhost:9090,http://127.0.0.1:9090,http://192.168.1.8:9090"
+      # Inside the compose network the RustFS (S3) hostname is the service
+      # name — overrides the localhost value in backend/.env. Presigned URLs
+      # are signed against S3_PUBLIC_ENDPOINT (backend/.env) so browsers get
+      # the host-published :9000 address instead.
+      S3_ENDPOINT: http://rustfs:9000
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:3006,http://127.0.0.1:3006,http://localhost:8090,http://127.0.0.1:8090,http://localhost:9090,http://127.0.0.1:9090,http://192.168.1.8:9090,http://192.168.1.9:9090,http://192.168.1.9:3006"
       # Media pipeline (all optional — defaults in code; set via backend/.env):
       #   STORAGE_DRIVER (local|s3), PUBLIC_BASE_URL, MEDIA_SIGNING_SECRET,
       #   S3_BUCKET, S3_REGION, S3_ENDPOINT, S3_ACCESS_KEY_ID,
@@ -78,6 +83,27 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  # ─── UAR web frontend (Next.js standalone, /api proxied to api:3005) ──────
+  # next.config.ts rewrites /api/* to BACKEND_URL; set at build time (rewrites
+  # are baked into the standalone output) and again at runtime.
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://api:3005
+    container_name: uar-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      BACKEND_URL: http://api:3005
+      NODE_ENV: production
+      PORT: 3006
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3006:3006"
 
   # S3-compatible object store for media (reels, post videos, music).
   # RustFS speaks the S3 API, so the backend's s3 driver talks to it unchanged.

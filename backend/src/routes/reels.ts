@@ -17,6 +17,7 @@ import {
   createReel,
   getReel,
   deleteReel,
+  updateReel,
   listExploreReels,
   listReelsByUser,
   searchReelsByInterest,
@@ -252,6 +253,34 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const reel = await deleteReel(session.userId, session.role, reelId(req));
+    return json(res, { ok: true, reel });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/reels/:id — edit metadata (description/hashtags/interests/
+// thumbnail/content/music). The owner may always edit; a moderator may edit
+// anyone's (legacy reels/update from the admin portal).
+router.patch("/:id", async (req, res) => {
+  try {
+    const session = await requireAuth(req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const numOrNull = (v: unknown): number | null | undefined => {
+      if (v === undefined) return undefined;
+      if (v === null || v === "") return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const reel = await updateReel(session.userId, session.role, reelId(req), {
+      description: b.description !== undefined ? String(b.description) : b.desc !== undefined ? String(b.desc) : undefined,
+      hashtags: b.hashtags !== undefined ? String(b.hashtags) : undefined,
+      interestIds:
+        b.interestIds !== undefined ? String(b.interestIds) : b.interest_ids !== undefined ? String(b.interest_ids) : undefined,
+      thumbnail: b.thumbnail !== undefined ? String(b.thumbnail) : undefined,
+      content: b.content !== undefined ? String(b.content) : b.media !== undefined ? String(b.media) : undefined,
+      musicId: numOrNull(b.musicId ?? b.music_id),
+    });
     return json(res, { ok: true, reel });
   } catch (e) {
     return handleError(e, res);

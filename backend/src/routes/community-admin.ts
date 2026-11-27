@@ -8,16 +8,25 @@
  * JSON, camelCase fields, paged() lists, ApiError → {error}.
  *
  * Endpoints (legacy equivalent in brackets):
- *   GET  /users              [GET /community/admin/users]
- *   GET  /posts              [GET /community/admin/posts]
- *   POST /posts/moderate     [POST /community/admin/posts/moderate]
- *   GET  /reports            [GET /community/admin/reports]
- *   POST /reports/resolve    [POST /community/admin/reports/resolve]
- *   GET  /causes             [GET /community/admin/causes]
- *   GET  /donations          [GET /community/admin/donations]
+ *   GET  /users                     [GET /community/admin/users]
+ *   GET  /posts                     [GET /community/admin/posts]
+ *   POST /posts/moderate            [POST /community/admin/posts/moderate]
+ *   GET  /reports                   [GET /community/admin/reports]
+ *   POST /reports/resolve           [POST /community/admin/reports/resolve]
+ *   GET  /causes                    [GET /community/admin/causes]
+ *   GET  /donations                 [GET /community/admin/donations]
+ *   GET/POST/PATCH/DELETE /document-types/:id  [addDocumentType/updateDocumentType/deleteDocumentType]
+ *   GET/POST/PATCH/DELETE /report-reasons/:id  [reportReasonList/addreportReason/updateReportReason/deleteReportReasonType]
+ *   GET/POST/PATCH/DELETE /username-restrictions/:id [RestrictionController]
+ *   GET  /verifications (?status=&q=)      [profileVerificationList]
+ *   GET  /verifications/members            [verified members roster]
+ *   POST /verifications/:userId/approve|reject [approvedProfileVerification]
+ *   GET/POST  /notifications          [adminNotificationList/sendNotification]
+ *   PATCH/DELETE /notifications/:id   [updateNotification/deleteNotification]
+ *   POST /notifications/:id/repeat    [repeatNotification]
  */
 import { Router } from "express";
-import { handleError, json } from "@/lib/session";
+import { ApiError, handleError, json } from "@/lib/session";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
   requireElevated,
@@ -29,6 +38,26 @@ import {
   resolveReport,
   adminCauses,
   adminDonations,
+  listDocumentTypes,
+  addDocumentType,
+  updateDocumentType,
+  deleteDocumentType,
+  listReportReasons,
+  addReportReason,
+  updateReportReason,
+  deleteReportReason,
+  listUsernameRestrictions,
+  addUsernameRestrictions,
+  updateUsernameRestriction,
+  deleteUsernameRestriction,
+  listVerifications,
+  listVerifiedMembers,
+  resolveVerification,
+  listAdminNotifications,
+  sendAdminNotification,
+  updateAdminNotification,
+  repeatAdminNotification,
+  deleteAdminNotification,
 } from "@/lib/community/admin";
 
 export const router = Router();
@@ -141,6 +170,266 @@ router.get("/donations", async (req, res) => {
     const causePostId = req.query.causePostId ? String(req.query.causePostId) : req.query.cause_post_id ? String(req.query.cause_post_id) : null;
     const { items, total, totalRaised } = await adminDonations(causePostId, skip, limit);
     return json(res, { ...paged(items, page, limit, total), totalRaised });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Config lists — document types / report reasons / username restrictions ──
+
+// GET /api/community/admin/document-types — titles served to the mobile app
+// (KV-backed; id = array index).
+router.get("/document-types", async (req, res) => {
+  try {
+    await requireElevated(req);
+    return json(res, await listDocumentTypes());
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.post("/document-types", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, await addDocumentType(title), 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.patch("/document-types/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!Number.isInteger(id) || id < 0) throw new ApiError("Invalid document type id", 400);
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, await updateDocumentType(id, title));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.delete("/document-types/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    if (!Number.isInteger(id) || id < 0) throw new ApiError("Invalid document type id", 400);
+    return json(res, await deleteDocumentType(id));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Report reasons ────────────────────────────────────────────────────────
+
+router.get("/report-reasons", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 50);
+    const { items, total } = await listReportReasons(skip, limit);
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.post("/report-reasons", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, await addReportReason(title), 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.patch("/report-reasons/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, await updateReportReason(Number((req.params as Record<string, string>).id), title));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.delete("/report-reasons/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    return json(res, await deleteReportReason(Number((req.params as Record<string, string>).id)));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Username restrictions ────────────────────────────────────────────────
+
+router.get("/username-restrictions", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 50);
+    const { items, total } = await listUsernameRestrictions(skip, limit);
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST accepts a single title or a comma-separated batch (legacy batch add).
+router.post("/username-restrictions", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, { items: await addUsernameRestrictions(title) }, 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.patch("/username-restrictions/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const title = String((req.body ?? {}).title ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    return json(res, await updateUsernameRestriction(Number((req.params as Record<string, string>).id), title));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.delete("/username-restrictions/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    return json(res, await deleteUsernameRestriction(Number((req.params as Record<string, string>).id)));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Profile verifications ────────────────────────────────────────────────
+
+// GET ?status=pending|verified|not_verified&q=
+router.get("/verifications", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 30);
+    const q = String(req.query.q ?? "").trim();
+    const status = req.query.status ? String(req.query.status) : undefined;
+    const { items, total } = await listVerifications({ q: q || undefined, status, skip, take: limit });
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// Verified members roster — User rows with isVerified >= 2.
+router.get("/verifications/members", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 30);
+    const q = String(req.query.q ?? "").trim();
+    const { items, total } = await listVerifiedMembers({ q: q || undefined, skip, take: limit });
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /verifications/:userId/approve | /reject — sets the user's isVerified
+// (2 verified | 0 not) and removes the pending request row.
+router.post("/verifications/:userId/approve", async (req, res) => {
+  try {
+    const session = await requireElevated(req);
+    const userId = String((req.params as Record<string, string>).userId ?? "");
+    if (!userId) throw new ApiError("User id is required", 400);
+    return json(res, await resolveVerification(session, userId, true));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.post("/verifications/:userId/reject", async (req, res) => {
+  try {
+    const session = await requireElevated(req);
+    const userId = String((req.params as Record<string, string>).userId ?? "");
+    if (!userId) throw new ApiError("User id is required", 400);
+    return json(res, await resolveVerification(session, userId, false));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// ─── Platform announcements (AdminNotification + push fan-out) ────────────
+
+router.get("/notifications", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 20);
+    const q = String(req.query.q ?? "").trim();
+    const { items, total } = await listAdminNotifications({ q: q || undefined, skip, take: limit });
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /notifications {title, description} — create + fan-out push to every
+// user with push notifications enabled.
+router.post("/notifications", async (req, res) => {
+  try {
+    const session = await requireElevated(req);
+    const body = req.body ?? {};
+    const title = String(body.title ?? "").trim();
+    const description = String(body.description ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    if (!description) throw new ApiError("The description field is required.", 400);
+    return json(res, await sendAdminNotification(session, title, description), 201);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.patch("/notifications/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const body = req.body ?? {};
+    const title = String(body.title ?? "").trim();
+    const description = String(body.description ?? "").trim();
+    if (!title) throw new ApiError("The title field is required.", 400);
+    if (!description) throw new ApiError("The description field is required.", 400);
+    return json(res, await updateAdminNotification(Number((req.params as Record<string, string>).id), title, description));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// POST /notifications/:id/repeat — re-fan-out an existing announcement
+// (explicit title/description overrides win when provided).
+router.post("/notifications/:id/repeat", async (req, res) => {
+  try {
+    const session = await requireElevated(req);
+    const body = req.body ?? {};
+    return json(res, await repeatAdminNotification(
+      session,
+      Number((req.params as Record<string, string>).id),
+      body.title !== undefined ? String(body.title) : undefined,
+      body.description !== undefined ? String(body.description) : undefined
+    ));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+router.delete("/notifications/:id", async (req, res) => {
+  try {
+    await requireElevated(req);
+    return json(res, await deleteAdminNotification(Number((req.params as Record<string, string>).id)));
   } catch (e) {
     return handleError(e, res);
   }

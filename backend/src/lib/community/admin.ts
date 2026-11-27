@@ -8,9 +8,9 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { ApiError, requireAuth, type Session } from "@/lib/session";
 import { communityAuthor, communityAuthorSelect, communityUser } from "@/lib/community/serializers";
-import { feedEvent } from "@/lib/community/push";
+import { feedEvent, sendPush } from "@/lib/community/push";
 import { syncPostCommentCounts } from "@/lib/community/counters";
-import { getCachedMediaMany } from "@/lib/cache";
+import { getCachedMediaMany, invalidateSettings } from "@/lib/cache";
 
 /**
  * Moderator/admin gate — the session role must be ADMIN/MODERATOR, with the
@@ -395,4 +395,293 @@ export async function adminReels(q: string, status: string | null, skip: number,
       : null,
   }));
   return { items, total };
+}
+
+// ═════════════════════ Admin config + verification + announcements ═══════════
+// Ported from the mobile-only admin compat module onto the generic surface
+// (legacy AdminController / SettingsController / RestrictionController /
+// ProfileVerificationController).
+
+// ─── Document types — Setting KV "mobile.documentTypes" (JSON array of
+// title strings; the array index IS the id, matching the mobile fetchSetting
+// nesting). Direct KV writes drop the settings cache via invalidateSettings.
+const DOCS_KV_KEY = "mobile.documentTypes";
+const DOCS_KV_DESC = "Profile verification document types for the mobile app";
+
+async function readDocKv(): Promise<string[]> {
+  const row = await db.setting.findUnique({ where: { key: DOCS_KV_KEY } });
+  try {
+    const parsed = JSON.parse(row?.value ?? "[]");
+    if (Array.isArray(parsed)) return parsed.map((t) => String(t));
+  } catch {
+    // missing/corrupt KV row → empty list
+  }
+  return [];
+}
+
+async function writeDocKv(titles: string[]): Promise<void> {
+  await db.setting.upsert({
+    where: { key: DOCS_KV_KEY },
+    update: { value: JSON.stringify(titles) },
+    create: { key: DOCS_KV_KEY, value: JSON.stringify(titles), description: DOCS_KV_DESC },
+  });
+  await invalidateSettings();
+}
+
+export function listDocumentTypes() {
+  return readDocKv().then((titles) => ({
+    items: titles.map((title, id) => ({ id, title })),
+    total: titles.length,
+  }));
+}
+
+export async function addDocumentType(title: string) {
+  const titles = await readDocKv();
+  if (titles.includes(title)) throw new ApiError(`Document type "${title}" already exists`, 409);
+  titles.push(title);
+  await writeDocKv(titles);
+  feedEvent("app.document_types.updated", { action: "add", title });
+  return { id: titles.length - 1, title };
+}
+
+export async function updateDocumentType(id: number, title: string) {
+  const titles = await readDocKv();
+  if (id < 0 || id >= titles.length) throw new ApiError("Document type not found", 404);
+  if (titles.includes(title)) throw new ApiError(`Document type "${title}" already exists`, 409);
+  titles[id] = title;
+  await writeDocKv(titles);
+  feedEvent("app.document_types.updated", { action: "update", id, title });
+  return { id, title };
+}
+
+export async function deleteDocumentType(id: number) {
+  const titles = await readDocKv();
+  if (id < 0 || id >= titles.length) throw new ApiError("Document type not found", 404);
+  const [removed] = titles.splice(id, 1);
+  await writeDocKv(titles);
+  feedEvent("app.document_types.updated", { action: "delete", id });
+  return { id, title: removed };
+}
+
+// ─── Report reasons (ReportReason rows) ──────────────────────────────────
+
+async function titleTaken(
+  model: "communityInterest" | "reportReason" | "usernameRestriction",
+  title: string,
+  excludeId?: number
+): Promise<boolean> {
+  const where = { title, ...(excludeId !== undefined ? { id: { not: excludeId } } : {}) };
+  const row = await (db[model] as typeof db.communityInterest).findFirst({ where, select: { id: true } });
+  return !!row;
+}
+
+export async function listReportReasons(skip: number, take: number) {
+  const [rows, total] = await Promise.all([
+    db.reportReason.findMany({ orderBy: { id: "desc" }, skip, take }),
+    db.reportReason.count(),
+  ]);
+  return { items: rows, total };
+}
+
+export async function addReportReason(title: string) {
+  if (await titleTaken("reportReason", title)) throw new ApiError(`Report reason "${title}" already exists`, 409);
+  return db.reportReason.create({ data: { title } });
+}
+
+export async function updateReportReason(id: number, title: string) {
+  const row = await db.reportReason.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Report reason not found", 404);
+  if (await titleTaken("reportReason", title, id)) throw new ApiError(`Report reason "${title}" already exists`, 409);
+  return db.reportReason.update({ where: { id }, data: { title } });
+}
+
+export async function deleteReportReason(id: number) {
+  const row = await db.reportReason.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Report reason not found", 404);
+  await db.reportReason.delete({ where: { id } });
+  return row;
+}
+
+// ─── Username restrictions (UsernameRestriction rows; add accepts a
+// comma-separated batch like the legacy addUsernameRestrictions) ─────────
+
+export async function listUsernameRestrictions(skip: number, take: number) {
+  const [rows, total] = await Promise.all([
+    db.usernameRestriction.findMany({ orderBy: { id: "desc" }, skip, take }),
+    db.usernameRestriction.count(),
+  ]);
+  return { items: rows, total };
+}
+
+export async function addUsernameRestrictions(title: string) {
+  const parts = Array.from(
+    new Set(
+      title
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  );
+  if (parts.length === 0) throw new ApiError("The title field is required.", 400);
+  const created = [];
+  for (const part of parts) {
+    if (await titleTaken("usernameRestriction", part)) continue; // batch add skips dups
+    created.push(await db.usernameRestriction.create({ data: { title: part } }));
+  }
+  return created;
+}
+
+export async function updateUsernameRestriction(id: number, title: string) {
+  const row = await db.usernameRestriction.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Username restriction not found", 404);
+  if (await titleTaken("usernameRestriction", title, id)) throw new ApiError(`Username restriction "${title}" already exists`, 409);
+  return db.usernameRestriction.update({ where: { id }, data: { title } });
+}
+
+export async function deleteUsernameRestriction(id: number) {
+  const row = await db.usernameRestriction.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Username restriction not found", 404);
+  await db.usernameRestriction.delete({ where: { id } });
+  return row;
+}
+
+// ─── Profile verifications (ProfileVerification rows; the user's isVerified
+// 0 not | 1 pending | 2 verified is the status the legacy grid showed;
+// approved/rejected requests are removed, the roster lives on the user) ─────
+
+export async function listVerifications(opts: { q?: string; status?: string; skip: number; take: number }) {
+  const where: Record<string, unknown> = {};
+  if (opts.q) {
+    where.OR = [
+      { fullName: { contains: opts.q } },
+      { documentType: { contains: opts.q } },
+      { user: { is: { OR: [{ name: { contains: opts.q } }, { username: { contains: opts.q } }, { email: { contains: opts.q } }] } } },
+    ];
+  }
+  if (opts.status === "pending") where.user = { is: { isVerified: 1 } };
+  if (opts.status === "verified") where.user = { is: { isVerified: 2 } };
+  if (opts.status === "not_verified") where.user = { is: { isVerified: 0 } };
+
+  const [rows, total] = await Promise.all([
+    db.profileVerification.findMany({
+      where,
+      include: { user: { select: { id: true, name: true, username: true, email: true, avatar: true, isVerified: true } } },
+      orderBy: { createdAt: "desc" },
+      skip: opts.skip,
+      take: opts.take,
+    }),
+    db.profileVerification.count({ where }),
+  ]);
+  return {
+    items: rows.map((v) => ({
+      id: v.id,
+      userId: v.userId,
+      selfie: v.selfie,
+      document: v.document,
+      documentType: v.documentType,
+      fullName: v.fullName,
+      status: v.user.isVerified,
+      createdAt: v.createdAt.toISOString(),
+      user: v.user,
+    })),
+    total,
+  };
+}
+
+export async function listVerifiedMembers(opts: { q?: string; skip: number; take: number }) {
+  const where: Record<string, unknown> = { isVerified: { gte: 2 } };
+  if (opts.q) {
+    where.OR = [
+      { name: { contains: opts.q } },
+      { username: { contains: opts.q } },
+      { email: { contains: opts.q } },
+    ];
+  }
+  const [rows, total] = await Promise.all([
+    db.user.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip: opts.skip,
+      take: opts.take,
+      select: {
+        id: true, email: true, name: true, username: true, avatar: true,
+        isVerified: true, currentTier: true, totalPoints: true, memberSince: true, createdAt: true,
+      },
+    }),
+    db.user.count({ where }),
+  ]);
+  return { items: rows, total };
+}
+
+export async function resolveVerification(session: Session, userId: string, approve: boolean) {
+  const user = await db.user.findUnique({ where: { id: userId } });
+  if (!user) throw new ApiError("Profile not found", 404);
+  const verification = await db.profileVerification.findFirst({ where: { userId } });
+  if (!verification) throw new ApiError("Record not found", 404);
+
+  await db.user.update({ where: { id: userId }, data: { isVerified: approve ? 2 : 0 } });
+  await db.profileVerification.delete({ where: { id: verification.id } });
+
+  feedEvent(approve ? "verification.approved" : "verification.rejected", {
+    userId, name: user.name, by: session.userId,
+  });
+  return { userId, isVerified: approve ? 2 : 0 };
+}
+
+// ─── Platform announcements (AdminNotification rows + push fan-out) ───────
+
+/** Push to every user with push notifications enabled, batched. Returns the
+ *  number of users reached (per-user FCM failures never abort the loop). */
+async function fanOutPush(title: string, description: string): Promise<number> {
+  const users = await db.user.findMany({ where: { isPushNotifications: 1 }, select: { id: true } });
+  const BATCH = 50;
+  let sent = 0;
+  for (let i = 0; i < users.length; i += BATCH) {
+    const results = await Promise.allSettled(
+      users.slice(i, i + BATCH).map((u) => sendPush({ userId: u.id, title, body: description, type: "ADMIN" }))
+    );
+    sent += results.filter((r) => r.status === "fulfilled").length;
+  }
+  return sent;
+}
+
+export async function listAdminNotifications(opts: { q?: string; skip: number; take: number }) {
+  const where = opts.q
+    ? { OR: [{ title: { contains: opts.q, mode: "insensitive" as const } }, { description: { contains: opts.q, mode: "insensitive" as const } }] }
+    : {};
+  const [rows, total] = await Promise.all([
+    db.adminNotification.findMany({ where, orderBy: { id: "desc" }, skip: opts.skip, take: opts.take }),
+    db.adminNotification.count({ where }),
+  ]);
+  return { items: rows, total };
+}
+
+export async function sendAdminNotification(session: Session, title: string, description: string) {
+  const row = await db.adminNotification.create({ data: { title, description } });
+  const recipients = await fanOutPush(title, description);
+  feedEvent("notification.sent", { id: row.id, title, recipients, by: session.userId });
+  return { id: row.id, title, description, recipients };
+}
+
+export async function updateAdminNotification(id: number, title: string, description: string) {
+  const row = await db.adminNotification.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Notification not found", 404);
+  return db.adminNotification.update({ where: { id }, data: { title, description } });
+}
+
+export async function repeatAdminNotification(session: Session, id: number, title?: string, description?: string) {
+  const row = await db.adminNotification.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Notification not found", 404);
+  const t = title?.trim() || row.title;
+  const d = description?.trim() || row.description;
+  const recipients = await fanOutPush(t, d);
+  feedEvent("notification.repeated", { id: row.id, title: t, recipients, by: session.userId });
+  return { id: row.id, recipients };
+}
+
+export async function deleteAdminNotification(id: number) {
+  const row = await db.adminNotification.findUnique({ where: { id } });
+  if (!row) throw new ApiError("Notification not found", 404);
+  await db.adminNotification.delete({ where: { id } });
+  return row;
 }

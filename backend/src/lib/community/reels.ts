@@ -363,9 +363,44 @@ export async function deleteReel(actorId: string, actorRole: string | undefined,
   }
   await db.savedNotification.deleteMany({ where: { reelId, type: { in: commentTypes } } });
   await db.communityReel.delete({ where: { id: reel.id } });
-
   feedEvent("community.reel.deleted", { reelId, userId: actorId });
   return await reelJson(reel);
+}
+
+export interface UpdateReelInput {
+  description?: string | null;
+  hashtags?: string | null;
+  interestIds?: string | null;
+  thumbnail?: string | null;
+  content?: string | null;
+  musicId?: number | null;
+}
+
+/** PATCH /api/reels/:id — edit metadata. The owner may always edit; a
+ *  moderator may edit anyone's (legacy reels/update by the admin portal). */
+export async function updateReel(actorId: string, actorRole: string | undefined, reelId: string, input: UpdateReelInput) {
+  const reel = await findReel(reelId);
+  if (!reel) throw new ApiError("Reel not found", 404);
+
+  const moderator = await isModerator(actorId, actorRole);
+  if (reel.userId !== actorId && !moderator) throw new ApiError("You do not have permission to edit this reel", 403);
+
+  const patch: Record<string, unknown> = {};
+  if (input.description !== undefined) patch.description = input.description;
+  if (input.hashtags !== undefined) patch.hashtags = input.hashtags;
+  if (input.interestIds !== undefined) patch.interestIds = input.interestIds;
+  if (input.thumbnail !== undefined) patch.thumbnail = input.thumbnail;
+  if (input.content !== undefined) patch.content = input.content;
+  if (input.musicId !== undefined) patch.musicId = input.musicId;
+  if (Object.keys(patch).length === 0) throw new ApiError("Nothing to update", 400);
+
+  await db.communityReel.update({ where: { id: reel.id }, data: patch });
+  if (moderator && reel.userId !== actorId) {
+    feedEvent("community.reel.moderated", { reelId, changes: Object.keys(patch).join(","), by: actorId });
+  }
+  const fresh = await findReel(reel.id);
+  if (!fresh) throw new ApiError("Reel not found", 404);
+  return serializeReel(fresh, actorId);
 }
 
 // ─── Listing ──────────────────────────────────────────────────────────────────

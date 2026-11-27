@@ -29,6 +29,7 @@ import {
   searchPosts,
   toggleCommentLike,
   unlikePost,
+  updatePost,
 } from "@/lib/community/posts";
 
 export const router = Router();
@@ -229,6 +230,25 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await actor(req);
     const post = await deletePost(session.userId, session.role, idParam(req));
+    return json(res, { ok: true, post });
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// PATCH /api/posts/:id — edit desc/tags/interests/restriction. The owner may
+// always edit; a moderator may edit anyone's (legacy feed/update).
+router.patch("/:id", async (req, res) => {
+  try {
+    const session = await actor(req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const post = await updatePost(session.userId, session.role, idParam(req), {
+      desc: b.desc !== undefined ? String(b.desc) : b.description !== undefined ? String(b.description) : undefined,
+      tags: b.tags !== undefined ? String(b.tags) : undefined,
+      interestIds:
+        b.interestIds !== undefined ? String(b.interestIds) : b.interest_ids !== undefined ? String(b.interest_ids) : undefined,
+      isRestricted: b.isRestricted !== undefined ? (Number(b.isRestricted) ? 1 : 0) : undefined,
+    });
     return json(res, { ok: true, post });
   } catch (e) {
     return handleError(e, res);

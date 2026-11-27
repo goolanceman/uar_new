@@ -562,6 +562,33 @@ export async function deletePost(meId: string, role: string | undefined, postId:
   return wire;
 }
 
+export interface UpdatePostInput {
+  desc?: string;
+  tags?: string;
+  interestIds?: string;
+  isRestricted?: number;
+}
+
+/** PATCH /api/posts/:id — edit desc/tags/interests/restriction. The owner may
+ *  always edit; a moderator may edit anyone's (legacy feed/update). */
+export async function updatePost(meId: string, role: string | undefined, postId: string, input: UpdatePostInput) {
+  const moderator = await isActorModerator(meId, role);
+  await postOr403(postId, meId, moderator);
+
+  const patch: Record<string, unknown> = {};
+  if (input.desc !== undefined) patch.desc = input.desc;
+  if (input.tags !== undefined) patch.tags = input.tags;
+  if (input.interestIds !== undefined) patch.interestIds = input.interestIds;
+  if (input.isRestricted !== undefined) patch.isRestricted = input.isRestricted;
+  if (Object.keys(patch).length === 0) throw new ApiError("Nothing to update", 400);
+
+  const updated = await db.communityPost.update({ where: { id: postId }, data: patch, include: POST_INCLUDE });
+  if (moderator && updated.userId !== meId) {
+    feedEvent("feed.moderated", { id: postId, changes: Object.keys(patch).join(","), by: meId });
+  }
+  return serializePost(updated);
+}
+
 // ─── Search / filters ─────────────────────────────────────────────────────────
 
 /** GET /api/posts/search?q= (legacy searchPost). */
