@@ -7,6 +7,7 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   validateSession,
@@ -50,6 +51,8 @@ import {
 import { notifyRequestOutcome } from "@/lib/food-notify";
 import { validPin } from "@/lib/validators";
 import { assertTransition } from "@/lib/workflow";
+
+const log = logger.child("food");
 
 export const router = Router();
 
@@ -1967,7 +1970,7 @@ router.post("/insights", async (req, res) => {
   } catch (e) {
     if (e instanceof ApiError) return handleError(e, res);
     // AI provider unavailable — fail loudly, log nothing sensitive.
-    console.error("[food-insights] AI unavailable", e instanceof Error ? e.message : e);
+    log.warn("ai_unavailable", { error: e instanceof Error ? e.message : String(e) });
     return json(res, { error: "AI assistant is unavailable right now — please try again later" }, 503);
   }
 });

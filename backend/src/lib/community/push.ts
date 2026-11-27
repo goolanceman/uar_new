@@ -4,7 +4,10 @@
  * routers never import from the legacy module.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { broadcastEvent } from "@/lib/events";
+
+const log = logger.child("community:push");
 
 /**
  * Push notification — persists into the existing Notification model
@@ -54,7 +57,7 @@ export async function sendPush(opts: {
         }),
       });
     } catch (e) {
-      console.error("[push] FCM delivery failed", e);
+      log.error("fcm_delivery_failed", { userId: opts.userId, notificationId: row.id, error: e instanceof Error ? e : String(e) });
     }
   }
   return row;

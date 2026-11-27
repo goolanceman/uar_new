@@ -20,6 +20,9 @@ import { channelAuth } from "@/lib/realtime/pusher";
 import { buildRtcToken } from "@/lib/realtime/agora";
 import { findConversation, hasConversationAccess } from "@/lib/community/chat";
 import { findSpace, getSpaceParticipant } from "@/lib/community/audio-spaces";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("realtime");
 
 export const router = Router();
 
@@ -104,7 +107,10 @@ export async function broadcastingAuthHandler(req: Request, res: Response) {
     }
     return res.json({ auth: channelAuth(socketId, channelName) });
   } catch (e) {
-    console.error("[realtime] channel auth failed", e);
+    log.error("channel_auth_failed", {
+      error: e instanceof Error ? e : String(e),
+      channel: String(req.body?.channel_name ?? ""),
+    });
     return res.status(500).json({ error: "auth failed" });
   }
 }

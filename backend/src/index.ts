@@ -3,6 +3,8 @@ import express from "express";
 import cors from "cors";
 import { db } from "@/lib/db";
 import { handleError } from "@/lib/session";
+import { logger } from "@/lib/logger";
+import { requestLogger } from "@/lib/middleware/request-logger";
 
 // ─── Routers (1:1 conversions of src/app/api/**/route.ts) ───────────────────
 import { router as authRouter } from "./routes/auth";
@@ -80,6 +82,10 @@ import { router as eventsRouter } from "./routes/events";
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
 
+// Wide-event request logging FIRST so every request (even ones that error
+// during body parsing) emits exactly one structured log line on completion.
+app.use(requestLogger);
+
 // ─── Middleware ──────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000")
   .split(",")
@@ -149,7 +155,9 @@ app.get("/api", async (_req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error fetching dashboard stats:", error);
+    logger.error("dashboard_stats_failed", {
+      error: error instanceof Error ? error : String(error),
+    });
     return res
       .status(500)
       .json({ success: false, error: "Failed to fetch dashboard stats" });
@@ -291,8 +299,15 @@ app.use("/api", (_req, res) => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("[backend]", err);
+app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Stash for the request wide-event, then log the full stack once.
+  (res.locals as Record<string, unknown>).error = err;
+  logger.error("unhandled_error", {
+    request_id: req.requestId,
+    method: req.method,
+    path: req.originalUrl,
+    error: err,
+  });
   try {
     handleError(err, res);
   } catch {
@@ -301,10 +316,16 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 app.listen(PORT, () => {
-  console.log(`[uar-backend] listening on http://localhost:${PORT}`);
+  logger.info("server_started", {
+    port: PORT,
+    env: process.env.NODE_ENV || "development",
+    log_level: process.env.LOG_LEVEL || "info",
+  });
 });
 
-syncPostCommentCounts().catch((e) => console.error("[mobile] comment count sync failed", e));
+syncPostCommentCounts().catch((e) =>
+  logger.error("comment_count_sync_failed", { error: e instanceof Error ? e : String(e) })
+);
 
 // Background video transcoder (DB-backed queue — see lib/media/transcoder.ts).
 // No-ops when TRANSCODER_ENABLED === "false" or under NODE_ENV=test.
@@ -317,7 +338,7 @@ assertStorageConfig();
 try {
   startTranscoder();
 } catch (e) {
-  console.error("[media] transcoder failed to start", e);
+  logger.error("transcoder_start_failed", { error: e instanceof Error ? e : String(e) });
 }
 
 // Pusher-protocol WebSocket server for the mobile app (Laravel Reverb wire
@@ -325,5 +346,5 @@ try {
 try {
   startPusherServer();
 } catch (e) {
-  console.error("[mobile] pusher server failed to start", e);
+  logger.error("pusher_server_start_failed", { error: e instanceof Error ? e : String(e) });
 }

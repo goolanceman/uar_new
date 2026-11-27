@@ -21,6 +21,9 @@
  * by the TTL — it never serves a deleted row forever.
  */
 import Redis from "ioredis";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("cache");
 
 const URL = process.env.REDIS_URL?.trim() || "";
 
@@ -76,7 +79,7 @@ function redis(): Promise<Redis | null> {
   conn.on("error", (err) => {
     // One log per outage — a dead Redis must not flood the API logs or
     // block a file request.
-    if (!failed) console.error("[cache] redis unavailable, serving from the database:", err.message);
+    if (!failed) log.error("redis_unavailable", { error: err.message });
     failed = true;
   });
   connecting = conn

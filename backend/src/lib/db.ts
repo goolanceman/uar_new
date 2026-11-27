@@ -9,8 +9,12 @@ const globalForPrisma = globalThis as unknown as {
 export const queryCounter = { enabled: false, count: 0 }
 
 function makeClient(): PrismaClient {
+  // Prisma query logging floods stdout (docker logs) with SQL — gate it behind
+  // LOG_PRISMA_QUERIES=true (debugging aid). Errors/warnings always log.
+  const prismaLog: ("query" | "error" | "warn")[] =
+    process.env.LOG_PRISMA_QUERIES === "true" ? ["query"] : ["error", "warn"];
   return new PrismaClient({
-    log: process.env.NODE_ENV === "test" ? [] : ["query"],
+    log: process.env.NODE_ENV === "test" ? [] : prismaLog,
   })
 }
 

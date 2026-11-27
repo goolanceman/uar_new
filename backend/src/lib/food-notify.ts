@@ -5,13 +5,19 @@
  * Content is PII-minimal — first name + reference number only.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { loadSettings, sendSms, emailShell, sendEmail } from "@/lib/notify";
+
+const log = logger.child("food-notify");
 
 async function inApp(userId: string | null, title: string, message: string, actionUrl?: string) {
   try {
     await db.notification.create({ data: { userId, title, message, type: "DISTRIBUTION", actionUrl } });
   } catch (e) {
-    console.error("[food-notify] in-app notification failed", e);
+    log.error("in_app_notification_failed", {
+      error: e instanceof Error ? e : String(e),
+      userId,
+    });
   }
 }
 
@@ -49,7 +55,11 @@ export async function notifyRequestOutcome(a: {
       void sendEmail;
     }
   } catch (e) {
-    console.error("[food-notify] applicant SMS failed", e);
+    log.error("applicant_sms_failed", {
+      error: e instanceof Error ? e : String(e),
+      refCode: a.refCode,
+      status: a.status,
+    });
   }
 }
 
@@ -69,6 +79,9 @@ export async function notifyDistributionReminder(a: {
     const map = await loadSettings();
     if (a.phone) await sendSms(map, { to: a.phone, text });
   } catch (e) {
-    console.error("[food-notify] reminder SMS failed", e);
+    log.error("reminder_sms_failed", {
+      error: e instanceof Error ? e : String(e),
+      regCode: a.regCode,
+    });
   }
 }

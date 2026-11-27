@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { assertTransition } from "@/lib/workflow";
 import {
   requireRole,
@@ -13,6 +14,8 @@ import {
   logActivity,
 } from "@/lib/session";
 import { loadSettings, notifyContactQuery } from "@/lib/notify";
+
+const log = logger.child("contact-queries");
 
 export const router = Router();
 
@@ -83,7 +86,10 @@ router.post("/", async (req, res) => {
           { name: query.name, email: query.email }
         );
       } catch (e) {
-        console.error("[notify] contact-query ack failed", e);
+        log.warn("contact_query_ack_failed", {
+          error: e instanceof Error ? e : String(e),
+          queryId: query.id,
+        });
       }
     })();
 

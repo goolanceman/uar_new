@@ -56,6 +56,14 @@ services:
       # Inside the compose network the cache hostname is the service name.
       REDIS_URL: redis://redis:6379
       PORT: 3005
+      # Structured logging (see backend/src/lib/logger.ts):
+      #   LOG_LEVEL          debug|info|warn|error (default info)
+      #   LOG_FILE           JSON-line logfile inside the container; "" disables
+      #   LOG_HEALTH=true    re-enables /api/health request logs (debug spam)
+      #   LOG_PRISMA_QUERIES SQL query logging (noisy; debugging only)
+      LOG_LEVEL: info
+      LOG_FILE: /app/logs/backend.log
+      LOG_PRISMA_QUERIES: "false"
       # Uploaded files: bind-mounted host dir so files uploaded before
       # containerisation keep working (files/[id]/file serves from here).
       UPLOAD_DIR: /app/uploads
@@ -77,6 +85,8 @@ services:
       - "6001:6001" # Pusher-protocol WebSocket (mobile chat real-time)
     volumes:
       - ./upload:/app/uploads
+      # JSON-line application logs persist on the host: uar_new/backend/logs/
+      - ./backend/logs:/app/logs
     healthcheck:
       test: ["CMD", "bun", "-e", "await fetch('http://localhost:3005/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 10s

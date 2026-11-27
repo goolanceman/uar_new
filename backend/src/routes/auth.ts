@@ -23,6 +23,9 @@ import { loadSettings, emailShell, sendEmail } from "@/lib/notify";
 import { deleteUserCascade } from "@/lib/community/users";
 import { DEMO_ACCOUNTS } from "@/lib/demo-accounts";
 import { isTestingMode } from "@/lib/testing-mode";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("auth");
 
 export const router = Router();
 
@@ -310,9 +313,9 @@ async function issueOtpEmail(email: string, userName: string, purpose: "reset" |
     <p style="margin:0;">— The ${org.name} Team</p>`;
   const out = await sendEmail(map, { to: email, subject, html: emailShell(subject, bodyHtml, org) });
   if (out.skipped) {
-    console.log(`[auth] ${purpose === "reset" ? "password reset" : "verification"} OTP for ${email}: ${otp} (email transport not configured)`);
+    log.debug("otp_dev_fallback", { purpose, email });
   } else if (!out.ok) {
-    console.error(`[auth] ${purpose} OTP email failed:`, out.message);
+    log.error("otp_email_failed", { purpose, error: out.message });
   }
 }
 

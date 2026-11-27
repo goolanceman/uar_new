@@ -8,8 +8,11 @@
  */
 import { Router } from "express";
 import { subscribeEvents } from "@/lib/events";
+import { logger } from "@/lib/logger";
 import { loadSettings } from "@/lib/notify";
 import { isFlagOn } from "@/lib/settings-core";
+
+const log = logger.child("events");
 
 export const router = Router();
 
@@ -22,7 +25,7 @@ router.get("/stream", async (_req, res) => {
     }
     subscribeEvents(res);
   } catch (e) {
-    console.error("[events] stream failed to open", e);
+    log.error("stream_failed_to_open", { error: e instanceof Error ? e : String(e) });
     return res.status(500).json({ error: "Could not open event stream" });
   }
 });

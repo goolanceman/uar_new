@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   ApiError,
   handleError,
@@ -18,6 +19,8 @@ import { loadSettings, emailShell, sendEmail } from "@/lib/notify";
 import { nextVolunteerCode } from "@/lib/codes";
 import { assertTransition } from "@/lib/workflow";
 import { setUserStatus } from "@/lib/user-status";
+
+const log = logger.child("volunteer-applications");
 
 export const router = Router();
 
@@ -374,9 +377,9 @@ router.post("/", async (req, res) => {
           html: emailShell("Volunteer application received", bodyHtml, org),
         });
         if (out && !out.ok && !out.skipped)
-          console.error("[notify] volunteer application ack failed:", out.message);
+          log.error("application_ack_email_failed", { error: out.message, applicationId: application.id, userId: userId ?? undefined });
       } catch (e) {
-        console.error("[notify] volunteer application ack failed", e);
+        log.error("application_ack_email_failed", { error: e, applicationId: application.id, userId: userId ?? undefined });
       }
     })();
 
@@ -645,7 +648,7 @@ router.patch("/:id", async (req, res) => {
               html: emailShell("Volunteer application approved", bodyHtml, org),
             });
             if (out && !out.ok && !out.skipped)
-              console.error("[notify] volunteer approval email failed:", out.message);
+              log.error("approval_email_failed", { error: out.message, applicationId: application.id, userId: application.userId });
           } else {
             const bodyHtml = `
               <p style="margin:0 0 8px;">Dear ${application.fullName},</p>
@@ -658,10 +661,10 @@ router.patch("/:id", async (req, res) => {
               html: emailShell("Volunteer application update", bodyHtml, org),
             });
             if (out && !out.ok && !out.skipped)
-              console.error("[notify] volunteer decline email failed:", out.message);
+              log.error("decline_email_failed", { error: out.message, applicationId: application.id, userId: application.userId });
           }
         } catch (e) {
-          console.error("[notify] volunteer decision email failed", e);
+          log.error("decision_email_failed", { error: e, applicationId: application.id, userId: application.userId });
         }
       })();
     }

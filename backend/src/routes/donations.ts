@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -27,6 +28,8 @@ import {
   nextChargeAfter,
   settleDonationCommitments,
 } from "@/lib/recurring";
+
+const log = logger.child("donations");
 
 export const router = Router();
 
@@ -819,7 +822,11 @@ router.patch("/:id", async (req, res) => {
             }
           );
         } catch (e) {
-          console.error("[notify] donation ack failed", e);
+          log.error("donation_ack_failed", {
+            error: e instanceof Error ? e : String(e),
+            donationId: donation.id,
+            receiptNumber: donation.receiptNumber,
+          });
         }
       })();
     } else if (statusChanged && donation.paymentStatus === "FAILED") {
@@ -841,9 +848,17 @@ router.patch("/:id", async (req, res) => {
             html: emailShell("Payment attempt failed", bodyHtml, org),
           });
           if (out && !out.ok && !out.skipped)
-            console.error("[notify] donation failure email failed:", out.message);
+            log.error("donation_failure_email_failed", {
+              error: out.message,
+              donationId: donation.id,
+              receiptNumber: donation.receiptNumber,
+            });
         } catch (e) {
-          console.error("[notify] donation failure email failed", e);
+          log.error("donation_failure_email_failed", {
+            error: e instanceof Error ? e : String(e),
+            donationId: donation.id,
+            receiptNumber: donation.receiptNumber,
+          });
         }
       })();
     }

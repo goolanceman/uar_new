@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import {
 } from "@/lib/session";
 import { assertTransition } from "@/lib/workflow";
 import { checkRateLimit, clientIp } from "@/lib/rate-limit";
+
+const log = logger.child("health-ai");
 
 export const router = Router();
 
@@ -174,7 +177,10 @@ router.post("/", async (req, res) => {
           `Patient: ${beneficiary.code}, age ${beneficiary.age ?? "unknown"}, ${beneficiary.gender ?? "gender unknown"}.\nChief complaint: ${chiefComplaint}\nObservations: ${observations}\nVitals summary: ${vitalSummary}`
         );
       } catch (e) {
-        console.error("[health-ai] consult-draft failed", e);
+        log.error("consult_draft_failed", {
+          error: e instanceof Error ? e : String(e),
+          beneficiaryId,
+        });
         throw new ApiError("AI service is unavailable — nothing was recorded. Please retry later.", 503);
       }
 
@@ -234,7 +240,10 @@ router.post("/", async (req, res) => {
           `Beneficiary ${beneficiary.code} activity: encounters=${encounters}, vitals records=${vitals}, screenings=${screenings}, prescriptions=${rx}, lab orders awaiting result/review=${labsPending}, open referrals=${referralsOpen}, pending follow-ups=${followUpsPending}.`
         );
       } catch (e) {
-        console.error("[health-ai] timeline-summary failed", e);
+        log.error("timeline_summary_failed", {
+          error: e instanceof Error ? e : String(e),
+          beneficiaryId,
+        });
         throw new ApiError("AI service is unavailable — nothing was recorded. Please retry later.", 503);
       }
 
@@ -314,7 +323,10 @@ router.post("/", async (req, res) => {
         // Degrade like /api/assistant/chat does: a deterministic offline plan
         // built from the SAME aggregate stats — the request still succeeds
         // and the interaction is still recorded for review (status PENDING).
-        console.error("[health-ai] camp-plan failed, using offline fallback", e);
+        log.warn("camp_plan_failed_offline_fallback", {
+          error: e instanceof Error ? e : String(e),
+          city,
+        });
         plan = [
           "Offline plan — AI service unavailable. Generated deterministically from the aggregate camp stats:",
           `1. Frequency: build on the current cadence (${totalCamps} camp(s) on record${city ? ` in/near ${city}` : ""}); schedule the next editions in the cities with the most camps so far (${topCities.map((c) => c.city ?? "unknown").join(", ") || "none on record"}).`,
@@ -380,7 +392,10 @@ router.post("/", async (req, res) => {
           text
         );
       } catch (e) {
-        console.error("[health-ai] doc-extract failed", e);
+        log.error("doc_extract_failed", {
+          error: e instanceof Error ? e : String(e),
+          documentId,
+        });
         throw new ApiError("AI service is unavailable — nothing was recorded. Please retry later.", 503);
       }
 

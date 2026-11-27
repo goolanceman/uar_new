@@ -11,6 +11,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { communityAuthor } from "@/lib/community/serializers";
 import { deleteStored } from "@/lib/files";
@@ -18,6 +19,8 @@ import { mediaWire } from "@/lib/media/media-asset";
 import { storage } from "@/lib/storage";
 import { invalidateMedia } from "@/lib/cache";
 import { sendPush, feedEvent } from "@/lib/community/push";
+
+const log = logger.child("community:reels");
 
 // ─── Legacy constants (app/Models/Constants.php + SavedNotification types) ────
 const UNBLOCKED = 0;
@@ -75,7 +78,7 @@ export async function deleteFileByUrl(url: string | null | undefined): Promise<v
     await db.fileAsset.delete({ where: { id: asset.id } });
     await deleteStored(asset.storedName).catch(() => {});
   } catch (e) {
-    console.error("[community] file delete failed", e);
+    log.error("file_delete_failed", { fileId: m[1], url, error: e instanceof Error ? e : String(e) });
   }
 }
 

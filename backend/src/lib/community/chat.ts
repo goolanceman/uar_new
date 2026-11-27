@@ -15,6 +15,7 @@
  *   cleared_at JSON {"<uid>": "dYYYY-MM-DD HH:MM:SS"}     (delete = 'd' prefix)
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { communityAuthor } from "@/lib/community/serializers";
 import { sendPush, feedEvent } from "@/lib/community/push";
@@ -27,6 +28,8 @@ import {
   invalidateChatConversation,
   invalidateChatUser,
 } from "@/lib/cache";
+
+const log = logger.child("community:chat");
 
 /** Drop the conversation list of every participant, plus every cached
  *  message page of this conversation. Group membership is loaded so a
@@ -512,7 +515,7 @@ export async function sendChatMessage(
       }
     }
   } catch (e) {
-    console.error("[chat] push failed", e);
+    log.error("chat_push_failed", { conversationId: conv.id, senderId: me, error: e instanceof Error ? e : String(e) });
   }
 
   // Admin live feed (existing SSE infra).

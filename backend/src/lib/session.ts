@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import crypto from "crypto";
 import type { CookieOptions } from "express";
+import { logger } from "@/lib/logger";
 
 const COOKIE_NAME = "uar_session";
 
@@ -290,9 +291,14 @@ export function json(res: Response, data: unknown, status = 200): Response {
 }
 
 export function handleError(e: unknown, res: Response): Response {
-  if (e instanceof ApiError)
+  if (e instanceof ApiError) {
+    if (e.status >= 500)
+      logger.error("api_error", { status: e.status, error: e.message });
     return res.status(e.status).json({ error: e.message });
-  console.error("[api]", e);
+  }
+  logger.error("unhandled_route_error", {
+    error: e instanceof Error ? e : String(e),
+  });
   const msg = e instanceof Error ? e.message : "Internal server error";
   return res.status(500).json({ error: msg });
 }

@@ -15,6 +15,9 @@
 import crypto from "crypto";
 import type { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("pusher");
 
 const APP_KEY = process.env.PUSHER_APP_KEY || "chatter-key";
 const APP_SECRET = process.env.PUSHER_APP_SECRET || "chatter-secret";
@@ -91,8 +94,8 @@ export function startPusherServer(httpServer?: HttpServer) {
     ws.on("error", () => clients.delete(ws));
   });
 
-  wss.on("error", (e) => console.error("[pusher] server error", e));
-  console.log(`[pusher] WebSocket server listening on :${PORT} (app key: ${APP_KEY})`);
+  wss.on("error", (e) => log.error("server_error", { error: e instanceof Error ? e : String(e) }));
+  log.info("ws_server_listening", { port: PORT, app_key: APP_KEY });
   return wss;
 }
 

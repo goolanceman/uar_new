@@ -6,9 +6,12 @@
  * routes/payments.ts.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { sendPush, feedEvent } from "@/lib/community/push";
 import { syncCardStats } from "@/lib/charity/card";
 import { evaluateAchievements } from "@/lib/charity/achievements";
+
+const log = logger.child("settlement");
 
 /** DonationPoint::awardDonationPoints — ₹1 = 2 points, expire after 1 year. */
 export async function awardDonationPoints(userId: string, donationId: string, amount: number): Promise<void> {
@@ -55,6 +58,6 @@ export async function settleDonationSideEffects(donation: {
       userId: donation.donorId,
     });
   } catch (e) {
-    console.error("[charity] donation settlement side effects failed", e);
+    log.error("settlement_side_effects_failed", { error: e, donationId: donation.id, donorId: donation.donorId });
   }
 }

@@ -16,9 +16,12 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { MediaAsset, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { getStorage } from "@/lib/storage";
 import { feedEvent } from "@/lib/community/push";
 import { dequeueTranscode, enqueueTranscode, invalidateMedia, nextWaitingTranscode, setCachedMedia, transcodeQueueState } from "@/lib/cache";
+
+const log = logger.child("media");
 
 const MAX_VIDEO_DURATION_SEC = Number(process.env.MAX_VIDEO_DURATION_SEC || 180);
 const MAX_ATTEMPTS = 3;
@@ -71,7 +74,7 @@ function run(bin: string, args: string[]): Promise<RunResult> {
       if (e.code === "ENOENT") {
         if (!missingBinaryLogged) {
           missingBinaryLogged = true;
-          console.error(`[media] ${bin} is not available — install ffmpeg or set FFMPEG_PATH/FFPROBE_PATH`);
+          log.error("ffmpeg_binary_missing", { bin });
         }
         reject(new Error("FFMPEG_MISSING"));
         return;
@@ -336,7 +339,7 @@ async function failAsset(asset: MediaAsset, message: string): Promise<void> {
   // Back on the queue for another attempt. A final failure stays out.
   if (retry) await enqueueTranscode(asset.id);
   else await dequeueTranscode(asset.id);
-  if (!retry) console.error(`[media] asset ${asset.id} failed after ${asset.attempts} attempts: ${message}`);
+  if (!retry) log.error("transcode_failed_after_retries", { assetId: asset.id, attempts: asset.attempts, error: message });
 }
 
 // ─── the worker ───────────────────────────────────────────────────────────────
@@ -445,7 +448,7 @@ export async function processMediaAsset(id: string): Promise<MediaAsset | null> 
       await enqueueTranscode(asset.id);
       return null;
     }
-    console.error("[media] transcode failed", e);
+    log.error("transcode_failed", { assetId: asset.id, error: e instanceof Error ? e : String(e) });
     await failAsset(asset, shortError(e)).catch(() => {});
     return null;
   } finally {
@@ -482,7 +485,7 @@ export async function sweepAbandonedAssets(): Promise<number> {
     await invalidateMedia(asset.id);
     removed += 1;
   }
-  if (removed > 0) console.log(`[media] swept ${removed} abandoned media asset(s)`);
+  if (removed > 0) log.info("abandoned_assets_swept", { removed });
   return removed;
 }
 
@@ -502,7 +505,7 @@ export function startTranscoder(): void {
 
   const schedule = (delay: number) => {
     timer = setTimeout(() => {
-      tick().catch((e) => console.error("[media] transcoder tick failed", e));
+      tick().catch((e) => log.error("transcoder_tick_failed", { error: e instanceof Error ? e : String(e) }));
     }, delay);
     timer.unref();
   };
@@ -543,7 +546,7 @@ export function startTranscoder(): void {
           // processMediaAsset handles its own failures. This is the escape
           // hatch for one it didn't — without it the row stays processing
           // and the client never hears that it failed.
-          console.error("[media] transcode crashed", e);
+          log.error("transcode_crashed", { assetId: id, error: e instanceof Error ? e : String(e) });
           const asset = await db.mediaAsset.findUnique({ where: { id } }).catch(() => null);
           if (asset && asset.status === "processing") {
             await failAsset(asset, shortError(e)).catch(() => {});
@@ -563,14 +566,14 @@ export function startTranscoder(): void {
   // Seed the set from anything already waiting. It must not delay the
   // loop — the loop is what drains the set, and it falls back to the
   // database if Redis can't answer.
-  void reconcileQueue().catch((e) => console.error("[media] queue reconcile failed", e));
+  void reconcileQueue().catch((e) => log.error("queue_reconcile_failed", { error: e instanceof Error ? e : String(e) }));
   schedule(pollMs);
 
   // Abandoned-asset sweeper — every ~10 min, independent of ffmpeg.
   const sweepMs = Math.max(60_000, Number(process.env.MEDIA_SWEEP_INTERVAL_MS || 10 * 60 * 1000));
-  const sweep = () => sweepAbandonedAssets().catch((e) => console.error("[media] sweep failed", e));
+  const sweep = () => sweepAbandonedAssets().catch((e) => log.error("sweep_failed", { error: e instanceof Error ? e : String(e) }));
   sweep();
   setInterval(sweep, sweepMs).unref();
 
-  console.log(`[media] transcoder started (poll ${pollMs}ms, concurrency ${concurrency})`);
+  log.info("transcoder_started", { pollMs, concurrency });
 }

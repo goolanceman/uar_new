@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -15,6 +16,8 @@ import {
 } from "@/lib/session";
 import { loadSettings, sendSms } from "@/lib/notify";
 import { MISSION_FLOW, MISSION_PROGRESS } from "@/lib/missions";
+
+const log = logger.child("missions");
 
 export const router = Router();
 
@@ -64,9 +67,11 @@ function sendDispatchSms(m: {
         text: `UAR green corridor: ambulance dispatched for ${m.patientName}. Pickup ${m.pickup} → ${m.destination}. Track in the app.`,
       });
       if (out && !out.ok && !out.skipped)
-        console.error("[notify] dispatch SMS failed:", out.message);
+        log.error("dispatch_sms_failed", { error: out.message });
     } catch (e) {
-      console.error("[notify] dispatch SMS failed", e);
+      log.error("dispatch_sms_failed", {
+        error: e instanceof Error ? e : String(e),
+      });
     }
   })();
 }

@@ -15,8 +15,11 @@
  */
 import nodemailer from "nodemailer";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { isFlagOn, type SettingsMap } from "@/lib/settings-core";
 import { cached, cacheTtl, settingsKey } from "@/lib/cache";
+
+const log = logger.child("notify");
 
 export interface ChannelResult {
   ok: boolean;
@@ -479,7 +482,7 @@ async function fanOut(
     channels.whatsapp ? sendWhatsApp(map, channels.whatsapp).then((r) => (out.whatsapp = r)) : null,
   ]);
   for (const r of [out.email, out.sms, out.whatsapp]) {
-    if (r && !r.ok && !r.skipped) console.error("[notify] channel failure:", r.message);
+    if (r && !r.ok && !r.skipped) log.error("channel_failure", { error: r.message });
   }
   return out;
 }

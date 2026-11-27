@@ -5,8 +5,11 @@
 import { Router } from "express";
 import { retrieve, HELPLINES, SUGGESTED_QUESTIONS } from "@/lib/assistant-knowledge";
 import { buildLiveOpsContext } from "@/lib/assistant-ops";
+import { logger } from "@/lib/logger";
 import { validateSession, handleError, json } from "@/lib/session";
 import { checkRateLimit, clientIp } from "@/lib/rate-limit";
+
+const log = logger.child("assistant");
 
 export const router = Router();
 
@@ -84,7 +87,7 @@ router.post("/chat", async (req, res) => {
         liveContext = "\n\n" + sections.map((s) => `### ${s.title}\n${s.content}`).join("\n\n");
       }
     } catch (e) {
-      console.error("[assistant] live ops snapshot failed", e);
+      log.warn("live_ops_snapshot_failed", { error: e instanceof Error ? e : String(e) });
     }
 
     const systemPrompt =
@@ -110,7 +113,7 @@ router.post("/chat", async (req, res) => {
         (completion as { choices?: { message?: { content?: string } }[] })
           ?.choices?.[0]?.message?.content ?? "";
     } catch (e) {
-      console.error("[assistant] LLM unavailable, using KB fallback", e);
+      log.warn("llm_unavailable_kb_fallback", { error: e instanceof Error ? e : String(e) });
     }
 
     if (!reply) {
