@@ -330,11 +330,21 @@ router.post("/", async (req, res) => {
     let recurringParent: { id: string; campaignId: string | null; recurringFrequency: string | null } | null = null;
     if (recurringParentId) {
       const parent = await db.donation.findUnique({ where: { id: recurringParentId } });
-      if (!parent || parent.type !== "RECURRING" || parent.recurringStatus === "CANCELLED")
+      if (!parent || parent.type !== "RECURRING" || parent.recurringStatus === "CANCELLED") {
+        log.warn("donation_recurring_parent_invalid", {
+          recurringParentId,
+          actor: session?.userId ?? null,
+        });
         throw new ApiError("That recurring commitment was not found or is cancelled", 400);
+      }
       const owns = session && parent.donorId === session.userId;
-      if (!owns && session?.role !== "ADMIN")
+      if (!owns && session?.role !== "ADMIN") {
+        log.warn("donation_recurring_parent_forbidden", {
+          recurringParentId,
+          actor: session?.userId ?? null,
+        });
         throw new ApiError("You can only pay installments on your own recurring commitments", 403);
+      }
       recurringParent = {
         id: parent.id,
         campaignId: parent.campaignId,
@@ -348,12 +358,22 @@ router.post("/", async (req, res) => {
     let pledgeLink: { id: string } | null = null;
     if (pledgeId) {
       const pledge = await db.pledge.findUnique({ where: { id: pledgeId } });
-      if (!pledge) throw new ApiError("That pledge was not found", 400);
-      if (pledge.status === "CANCELLED")
+      if (!pledge) {
+        log.warn("donation_pledge_not_found", { pledgeId, actor: session?.userId ?? null });
+        throw new ApiError("That pledge was not found", 400);
+      }
+      if (pledge.status === "CANCELLED") {
+        log.warn("donation_pledge_cancelled", {
+          pledgeId,
+          actor: session?.userId ?? null,
+        });
         throw new ApiError("This pledge has been cancelled — start a new one instead", 400);
+      }
       const owns = session && pledge.donorId === session.userId;
-      if (!owns && session?.role !== "ADMIN")
+      if (!owns && session?.role !== "ADMIN") {
+        log.warn("donation_pledge_forbidden", { pledgeId, actor: session?.userId ?? null });
         throw new ApiError("You can only pay installments on your own pledges", 403);
+      }
       pledgeLink = { id: pledge.id };
     }
 
@@ -450,6 +470,15 @@ router.post("/", async (req, res) => {
         },
         include: { campaign: { select: { title: true } } },
       });
+    });
+
+    log.info("donation_created", {
+      donationId: donation.id,
+      amount,
+      paymentStatus,
+      campaignId: donation.campaignId,
+      receiptNumber: donation.receiptNumber,
+      actor: session?.userId ?? null,
     });
 
     if (campaignId && paymentStatus === "COMPLETED") {
@@ -569,10 +598,14 @@ router.patch("/recurring/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const commitment = await db.donation.findUnique({ where: { id } });
-    if (!commitment || commitment.type !== "RECURRING" || commitment.recurringParentId)
+    if (!commitment || commitment.type !== "RECURRING" || commitment.recurringParentId) {
+      log.warn("recurring_commitment_not_found", { donationId: id, actor: s.userId });
       throw new ApiError("Recurring commitment not found", 404);
-    if (commitment.donorId !== s.userId && s.role !== "ADMIN")
+    }
+    if (commitment.donorId !== s.userId && s.role !== "ADMIN") {
+      log.warn("recurring_commitment_forbidden", { donationId: id, actor: s.userId });
       throw new ApiError("You can only manage your own recurring commitments", 403);
+    }
 
     const currentStatus = commitment.recurringStatus ?? "ACTIVE";
     const data: Record<string, unknown> = {};
@@ -606,6 +639,12 @@ router.patch("/recurring/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const updated = await db.donation.update({ where: { id }, data });
+    log.info("recurring_commitment_updated", {
+      donationId: id,
+      fields: Object.keys(data),
+      ...(data.recurringStatus ? { newStatus: data.recurringStatus } : {}),
+      actor: s.userId,
+    });
     await logActivity(
       s.name,
       "RECURRING_UPDATE",
@@ -653,7 +692,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.donation.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Donation not found", 404);
+    if (!existing) {
+      log.warn("donation_update_not_found", { donationId: id, actor: session.userId });
+      throw new ApiError("Donation not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
 
@@ -754,6 +796,12 @@ router.patch("/:id", async (req, res) => {
       data.refundedAt = ra > 0 ? new Date() : null;
       if (ra > 0 && !body?.paymentStatus) {
         assertTransition(PAYMENT_TRANSITIONS, existing.paymentStatus, "REFUNDED", "donation paymentStatus", 400);
+        log.debug("donation_refund_auto_transition", {
+          donationId: id,
+          from: existing.paymentStatus,
+          refundAmount: ra,
+          actor: session.userId,
+        });
         data.paymentStatus = "REFUNDED";
       }
     }
@@ -764,6 +812,13 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const donation = await db.donation.update({ where: { id }, data });
+    log.info("donation_updated", {
+      donationId: id,
+      receiptNumber: donation.receiptNumber,
+      fields: Object.keys(data),
+      ...(data.paymentStatus ? { newStatus: donation.paymentStatus } : {}),
+      actor: session.userId,
+    });
 
     // Keep the Donor CRM record in sync when identity fields change
     if (data.donorEmail || data.donorName || data.donorPhone || data.pan) {
@@ -884,9 +939,18 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.donation.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Donation not found", 404);
+    if (!existing) {
+      log.warn("donation_delete_not_found", { donationId: id, actor: session.userId });
+      throw new ApiError("Donation not found", 404);
+    }
 
     await db.donation.delete({ where: { id } });
+    log.info("donation_deleted", {
+      donationId: id,
+      receiptNumber: existing.receiptNumber,
+      amount: existing.amount,
+      actor: session.userId,
+    });
     await recomputeCampaign(existing.campaignId);
 
     await logActivity(

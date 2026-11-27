@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("inventory-transactions");
 
 const VALID_TYPES = ["RECEIVED", "ISSUED", "TRANSFERRED", "CONSUMED", "RETURNED", "ADJUSTED"];
 // Signed quantity deltas applied to InventoryItem.quantity per type.
@@ -96,7 +99,10 @@ router.post("/", async (req, res) => {
       where: { id: itemId },
       select: { id: true, code: true, name: true, quantity: true },
     });
-    if (!item) throw new ApiError("Inventory item not found", 404);
+    if (!item) {
+      log.warn("inventory_txn_item_not_found", { itemId, actor: session.userId });
+      throw new ApiError("Inventory item not found", 404);
+    }
 
     const type = String(body?.type ?? "").trim().toUpperCase();
     if (!VALID_TYPES.includes(type))
@@ -117,7 +123,10 @@ router.post("/", async (req, res) => {
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("inventory_txn_camp_not_found", { itemId, campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
 
     let updated = item;
@@ -126,11 +135,20 @@ router.post("/", async (req, res) => {
         where: delta < 0 ? { id: itemId, quantity: { gte: Math.abs(delta) } } : { id: itemId },
         data: { quantity: { increment: delta } },
       });
-      if (result.count === 0)
+      if (result.count === 0) {
+        log.warn("inventory_txn_insufficient_stock", {
+          itemId,
+          itemCode: item.code,
+          type,
+          currentQuantity: item.quantity,
+          requested: Math.abs(delta),
+          actor: session.userId,
+        });
         throw new ApiError(
           `Insufficient stock for ${item.name} (current quantity ${item.quantity}, tried to remove ${Math.abs(delta)})`,
           409
         );
+      }
       updated = await db.inventoryItem.findUniqueOrThrow({
         where: { id: itemId },
         select: { id: true, code: true, name: true, quantity: true },
@@ -153,6 +171,16 @@ router.post("/", async (req, res) => {
       include: { item: { select: { id: true, code: true, name: true, unit: true } } },
     });
 
+    log.info("inventory_txn_created", {
+      txnId: txn.id,
+      itemId,
+      itemCode: item.code,
+      type,
+      quantity: delta,
+      newQuantity: updated.quantity,
+      ...(campId ? { campId } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "INVENTORY_TXN",

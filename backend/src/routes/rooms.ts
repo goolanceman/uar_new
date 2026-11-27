@@ -9,12 +9,15 @@
  */
 import { Router, type Request, type Response } from "express";
 import { requireAuth, ApiError, json, handleError } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import { multipart, type MulterFile } from "@/lib/multipart";
 import { saveUpload } from "@/lib/files";
 import * as rooms from "@/lib/community/rooms";
 
 export const router = Router();
+
+const log = logger.child("rooms");
 
 /** Path :id param — reject missing ids early. */
 function param(req: Request, name: string): string {
@@ -150,6 +153,12 @@ router.post("/", multipart, async (req, res) => {
       isPrivate: numParam(body.isPrivate) ?? 0,
       isJoinRequestEnable: numParam(body.isJoinRequestEnable) ?? 0,
     }, photoUrl);
+    log.info("room_created", {
+      roomId: room.id,
+      title: room.title,
+      isPrivate: room.isPrivate,
+      actor: session.userId,
+    });
     return json(res, room);
   } catch (e) {
     return handleError(e, res);
@@ -180,7 +189,14 @@ router.patch("/:id", multipart, async (req, res) => {
     if (body.interestIds !== undefined) patch.interestIds = rooms.csvValue(body.interestIds);
     if (body.isPrivate !== undefined) patch.isPrivate = numParam(body.isPrivate) ?? 0;
     if (body.isJoinRequestEnable !== undefined) patch.isJoinRequestEnable = numParam(body.isJoinRequestEnable) ?? 0;
-    const room = await rooms.editRoom(session, param(req, "id"), patch, photoUrl);
+    const roomId = param(req, "id");
+    const room = await rooms.editRoom(session, roomId, patch, photoUrl);
+    log.info("room_updated", {
+      roomId,
+      actor: session.userId,
+      fields: Object.entries(patch).filter(([, v]) => v !== undefined).map(([k]) => k),
+      ...(photoUrl ? { photoUpdated: true } : {}),
+    });
     return json(res, room);
   } catch (e) {
     return handleError(e, res);
@@ -193,6 +209,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const room = await rooms.deleteRoom(session, param(req, "id"));
+    log.info("room_deleted", { roomId: room.id, actor: session.userId });
     return json(res, room);
   } catch (e) {
     return handleError(e, res);
@@ -204,6 +221,7 @@ router.post("/:id/join", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.joinRoom(session, param(req, "id"));
+    log.info("room_joined", { roomId: member.roomId, actor: session.userId, memberType: member.type });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -215,6 +233,7 @@ router.post("/:id/leave", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.leaveRoom(session, param(req, "id"));
+    log.info("room_left", { roomId: member.roomId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -227,6 +246,7 @@ router.post("/:id/report", async (req, res) => {
     const session = await requireAuth(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const report = await rooms.reportRoom(session, param(req, "id"), String(body.reason ?? ""), String(body.desc ?? ""));
+    log.info("room_reported", { roomId: report.roomId, reportId: report.id, actor: session.userId });
     return json(res, report);
   } catch (e) {
     return handleError(e, res);
@@ -239,6 +259,7 @@ router.post("/:id/mute", async (req, res) => {
     const session = await requireAuth(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const member = await rooms.setMute(session, param(req, "id"), numParam(body.isMute));
+    log.info("room_mute_set", { roomId: member.roomId, actor: session.userId, isMute: member.isMute });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -251,6 +272,7 @@ router.post("/:id/invitations", async (req, res) => {
     const session = await requireAuth(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const member = await rooms.inviteUser(session, param(req, "id"), String(body.userId ?? ""));
+    log.info("room_invited", { roomId: member.roomId, invitedUserId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -262,6 +284,7 @@ router.post("/:id/invitations/accept", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.acceptInvitation(session, param(req, "id"));
+    log.info("room_invitation_accepted", { roomId: member.roomId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -273,6 +296,7 @@ router.post("/:id/invitations/reject", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.rejectInvitation(session, param(req, "id"));
+    log.info("room_invitation_rejected", { roomId: member.roomId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -308,6 +332,7 @@ router.post("/:id/requests/:userId/accept", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.acceptRequest(session, param(req, "id"), param(req, "userId"));
+    log.info("room_request_accepted", { roomId: member.roomId, memberId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -319,6 +344,7 @@ router.post("/:id/requests/:userId/reject", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.rejectRequest(session, param(req, "id"), param(req, "userId"));
+    log.info("room_request_rejected", { roomId: member.roomId, memberId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -342,6 +368,7 @@ router.delete("/:id/members/:userId", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.removeMember(session, param(req, "id"), param(req, "userId"));
+    log.info("room_member_removed", { roomId: member.roomId, memberId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -364,6 +391,7 @@ router.post("/:id/admins/:userId", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.makeAdmin(session, param(req, "id"), param(req, "userId"));
+    log.info("room_admin_promoted", { roomId: member.roomId, memberId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);
@@ -375,6 +403,7 @@ router.delete("/:id/admins/:userId", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const member = await rooms.removeAdmin(session, param(req, "id"), param(req, "userId"));
+    log.info("room_admin_demoted", { roomId: member.roomId, memberId: member.userId, actor: session.userId });
     return json(res, member);
   } catch (e) {
     return handleError(e, res);

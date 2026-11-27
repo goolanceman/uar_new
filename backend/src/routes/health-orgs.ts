@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -16,6 +17,8 @@ import { ORG_STATUSES, ORG_TRANSITIONS } from "@/lib/health-orgs";
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("health-orgs");
 
 const ORG_TYPES = [
   "HOSPITAL", "CLINIC", "LAB", "MEDICAL_COLLEGE", "DENTAL", "EYE_CARE",
@@ -151,6 +154,13 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("health_org_created", {
+      orgId: org.id,
+      type: org.type,
+      status: org.status,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "HEALTH_ORG_ADD",
@@ -195,11 +205,19 @@ router.patch("/:id", async (req, res) => {
     const body = { ...(req.body ?? {}) };
 
     const existing = await db.healthcareOrg.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Organisation not found", 404);
+    if (!existing) {
+      log.warn("health_org_update_not_found", { orgId: id, actor: session.userId });
+      throw new ApiError("Organisation not found", 404);
+    }
     // The owning partner edits its own profile; verification stays with admins.
     if (session.role === "HOSPITAL") {
-      if (existing.ownerUserId !== session.userId)
+      if (existing.ownerUserId !== session.userId) {
+        log.warn("health_org_update_forbidden", {
+          orgId: id,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
       delete body.status;
       delete body.notes;
     }
@@ -210,6 +228,13 @@ router.patch("/:id", async (req, res) => {
       const status = String(body.status).trim().toUpperCase();
       if (!ORG_STATUSES.includes(status))
         throw new ApiError("Invalid status", 400);
+      if (status !== existing.status && !ORG_TRANSITIONS[existing.status]?.includes(status))
+        log.warn("health_org_invalid_transition", {
+          orgId: id,
+          from: existing.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(ORG_TRANSITIONS, existing.status, status, "health org");
       data.status = status;
       // Verification events are stamped server-side — never trust the client.
@@ -241,6 +266,12 @@ router.patch("/:id", async (req, res) => {
     if (body.notes !== undefined) data.notes = body.notes ? String(body.notes).trim() : null;
 
     const org = await db.healthcareOrg.update({ where: { id }, data });
+    log.info("health_org_updated", {
+      orgId: id,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: org.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       body.status !== undefined ? "HEALTH_ORG_VERIFY" : "HEALTH_ORG_UPDATE",
@@ -263,17 +294,32 @@ router.delete("/:id", async (req, res) => {
       where: { id },
       include: { _count: { select: { campPartners: true } } },
     });
-    if (!existing) throw new ApiError("Organisation not found", 404);
-    if (existing._count.campPartners > 0)
+    if (!existing) {
+      log.warn("health_org_delete_not_found", { orgId: id, actor: session.userId });
+      throw new ApiError("Organisation not found", 404);
+    }
+    if (existing._count.campPartners > 0) {
+      log.warn("health_org_delete_blocked_partnerships", {
+        orgId: id,
+        campPartners: existing._count.campPartners,
+        actor: session.userId,
+      });
       throw new ApiError(
         "This organisation has camp partnerships and cannot be deleted",
         409
       );
+    }
 
     // Release optional references so SQLite FKs stay satisfied
     await db.healthProfessional.updateMany({ where: { orgId: id }, data: { orgId: null } });
     await db.medicalReferral.updateMany({ where: { receivingOrgId: id }, data: { receivingOrgId: null } });
     await db.healthcareOrg.delete({ where: { id } });
+
+    log.info("health_org_deleted", {
+      orgId: id,
+      status: existing.status,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

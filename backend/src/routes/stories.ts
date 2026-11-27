@@ -7,11 +7,14 @@
  */
 import { Router, type Request } from "express";
 import { requireAuth, ApiError, json, handleError, body } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import { multipart, type MulterFile } from "@/lib/multipart";
 import { createStory, deleteStory, getStory, listStories, updateStory, viewStory } from "@/lib/community/stories";
 
 export const router = Router();
+
+const log = logger.child("stories");
 
 /** :id path param — reject missing ids early. */
 function idParam(req: Request): string {
@@ -56,6 +59,12 @@ router.post("/", multipart, async (req, res) => {
       },
       { content: fieldFile(req, "content"), thumbnail: fieldFile(req, "thumbnail") }
     );
+    log.info("story_created", {
+      storyId: story.id,
+      actor: session.userId,
+      type: Number(b.type ?? 0) || 0,
+      hasThumbnail: fieldFile(req, "thumbnail") != null,
+    });
     return json(res, story, 201);
   } catch (e) {
     return handleError(e, res);
@@ -67,6 +76,7 @@ router.post("/:id/view", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const story = await viewStory(session.userId, idParam(req));
+    log.info("story_viewed", { storyId: story.id, actor: session.userId });
     return json(res, story);
   } catch (e) {
     return handleError(e, res);
@@ -89,6 +99,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const story = await deleteStory(session.userId, session.role, idParam(req));
+    log.info("story_deleted", { storyId: story.id, actor: session.userId });
     return json(res, { ok: true, story });
   } catch (e) {
     return handleError(e, res);
@@ -102,11 +113,18 @@ router.patch("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const story = await updateStory(session.userId, session.role, idParam(req), {
+    const storyId = idParam(req);
+    const patch = {
       type: b.type !== undefined ? Number(b.type) : undefined,
       duration: b.duration !== undefined ? Number(b.duration) : undefined,
       content: b.content !== undefined ? String(b.content) : undefined,
       thumbnail: b.thumbnail !== undefined ? String(b.thumbnail) : undefined,
+    };
+    const story = await updateStory(session.userId, session.role, storyId, patch);
+    log.info("story_updated", {
+      storyId,
+      actor: session.userId,
+      fields: Object.entries(patch).filter(([, v]) => v !== undefined).map(([k]) => k),
     });
     return json(res, { ok: true, story });
   } catch (e) {

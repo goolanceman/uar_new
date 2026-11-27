@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import {
 import { AMBULANCE_STATUSES } from "@/lib/ambulances";
 
 export const router = Router();
+
+const log = logger.child("ambulances");
 
 const TYPES = ["BLS", "ALS", "PTV", "NEONATAL"];
 const STATUSES = ["AVAILABLE", "ON_MISSION", "MAINTENANCE"];
@@ -73,7 +76,14 @@ router.post("/", async (req, res) => {
       throw new ApiError("driverPhone must be a valid Indian mobile number", 400);
 
     const clash = await db.ambulance.findUnique({ where: { code } });
-    if (clash) throw new ApiError("Ambulance code already exists", 409);
+    if (clash) {
+      log.warn("ambulance_code_conflict", {
+        code,
+        actor: session.userId,
+        existingId: clash.id,
+      });
+      throw new ApiError("Ambulance code already exists", 409);
+    }
 
     const ambulance = await db.ambulance.create({
       data: {
@@ -86,6 +96,14 @@ router.post("/", async (req, res) => {
         crew: body.crew ? String(body.crew).trim() : null,
         equipment: body.equipment ? String(body.equipment).trim() : null,
       },
+    });
+
+    log.info("ambulance_created", {
+      ambulanceId: ambulance.id,
+      code,
+      type,
+      status,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -109,7 +127,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.ambulance.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Ambulance not found", 404);
+    if (!existing) {
+      log.warn("ambulance_update_not_found", { ambulanceId: id, actor: session.userId });
+      throw new ApiError("Ambulance not found", 404);
+    }
 
     const data: Prisma.AmbulanceUpdateInput = {};
     if (body.code !== undefined) {
@@ -117,7 +138,14 @@ router.patch("/:id", async (req, res) => {
       if (!code) throw new ApiError("code cannot be empty", 400);
       if (code !== existing.code) {
         const clash = await db.ambulance.findUnique({ where: { code } });
-        if (clash) throw new ApiError("Ambulance code already exists", 409);
+        if (clash) {
+          log.warn("ambulance_code_conflict", {
+            code,
+            actor: session.userId,
+            existingId: clash.id,
+          });
+          throw new ApiError("Ambulance code already exists", 409);
+        }
       }
       data.code = code;
     }
@@ -144,6 +172,13 @@ router.patch("/:id", async (req, res) => {
       data.equipment = body.equipment ? String(body.equipment).trim() : null;
 
     const ambulance = await db.ambulance.update({ where: { id }, data });
+    log.info("ambulance_updated", {
+      ambulanceId: id,
+      code: ambulance.code,
+      fields: Object.keys(data),
+      ...(body.status !== undefined ? { newStatus: ambulance.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "AMBULANCE_UPDATE",
@@ -163,11 +198,21 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.ambulance.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Ambulance not found", 404);
-    if (existing.status === "ON_MISSION")
+    if (!existing) {
+      log.warn("ambulance_delete_not_found", { ambulanceId: id, actor: session.userId });
+      throw new ApiError("Ambulance not found", 404);
+    }
+    if (existing.status === "ON_MISSION") {
+      log.warn("ambulance_delete_blocked_on_mission", {
+        ambulanceId: id,
+        code: existing.code,
+        actor: session.userId,
+      });
       throw new ApiError("Ambulance is on a mission", 409);
+    }
 
     await db.ambulance.delete({ where: { id } });
+    log.info("ambulance_deleted", { ambulanceId: id, code: existing.code, actor: session.userId });
     await logActivity(
       session.name,
       "AMBULANCE_DELETE",

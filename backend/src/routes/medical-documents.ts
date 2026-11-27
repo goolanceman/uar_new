@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -14,6 +15,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("medical-documents");
 
 const VALID_KINDS = ["PRESCRIPTION", "LAB_REPORT", "DISCHARGE_SUMMARY", "REFERRAL", "OTHER"];
 // File-manager assets (/api/files/:id/file) or absolute http(s) URLs only —
@@ -87,7 +90,10 @@ router.post("/", async (req, res) => {
     let beneficiaryId = String(body?.beneficiaryId ?? "").trim();
     if (session.role === "BENEFICIARY") {
       const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
-      if (!own) throw new ApiError("No patient record is linked to your account yet", 403);
+      if (!own) {
+        log.warn("medical_document_no_patient_record", { actor: session.userId });
+        throw new ApiError("No patient record is linked to your account yet", 403);
+      }
       beneficiaryId = own.id;
     }
     if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
@@ -95,7 +101,13 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("medical_document_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const name = optText(body?.name);
     if (!name) throw new ApiError("name is required", 400);
@@ -112,7 +124,10 @@ router.post("/", async (req, res) => {
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("medical_document_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
 
     const document = await db.medicalDocument.create({
@@ -128,6 +143,14 @@ router.post("/", async (req, res) => {
         beneficiary: { select: { id: true, code: true, name: true } },
         camp: { select: { id: true, code: true, title: true } },
       },
+    });
+
+    log.info("medical_document_created", {
+      documentId: document.id,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      kind,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -188,9 +211,19 @@ router.delete("/:id", async (req, res) => {
       where: { id },
       include: { beneficiary: { select: { code: true } } },
     });
-    if (!existing) throw new ApiError("Document not found", 404);
+    if (!existing) {
+      log.warn("medical_document_delete_not_found", { documentId: id, actor: session.userId });
+      throw new ApiError("Document not found", 404);
+    }
 
     await db.medicalDocument.delete({ where: { id } });
+
+    log.info("medical_document_deleted", {
+      documentId: id,
+      kind: existing.kind,
+      beneficiaryId: existing.beneficiaryId,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

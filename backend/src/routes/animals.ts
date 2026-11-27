@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -19,6 +20,8 @@ import { parseUrlList } from "@/lib/files";
 import { ANIMAL_STATUSES } from "@/lib/animals";
 
 export const router = Router();
+
+const log = logger.child("animals");
 
 const SPECIES = ["DOG", "CAT", "COW", "BIRD", "OTHER"];
 const GENDERS = ["MALE", "FEMALE", "UNKNOWN"];
@@ -108,6 +111,14 @@ router.post("/", async (req, res) => {
       include: { pledges: true },
     });
 
+    log.info("animal_created", {
+      animalId: animal.id,
+      code: animal.code,
+      name: animal.name,
+      species: animal.species,
+      status: animal.status,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "ANIMAL_ADD",
@@ -141,7 +152,10 @@ router.post("/pledges", async (req, res) => {
     const animalId = body.animalId ? String(body.animalId) : null;
     if (animalId) {
       const animal = await db.animal.findUnique({ where: { id: animalId } });
-      if (!animal) throw new ApiError("Animal not found", 404);
+      if (!animal) {
+        log.warn("animal_pledge_animal_not_found", { animalId, actor: session?.userId });
+        throw new ApiError("Animal not found", 404);
+      }
     }
 
     const donorName =
@@ -160,6 +174,14 @@ router.post("/pledges", async (req, res) => {
       },
     });
 
+    log.info("animal_pledge_created", {
+      pledgeId: pledge.id,
+      kind,
+      amount,
+      frequency,
+      ...(animalId ? { animalId } : {}),
+      actor: session?.userId,
+    });
     await logActivity(
       session?.name ?? donorName,
       "ANIMAL_PLEDGE",
@@ -233,7 +255,10 @@ router.post("/reactions", async (req, res) => {
     if (!animalId) throw new ApiError("animalId is required", 400);
 
     const animal = await db.animal.findUnique({ where: { id: animalId } });
-    if (!animal) throw new ApiError("Animal not found", 404);
+    if (!animal) {
+      log.warn("animal_reaction_animal_not_found", { animalId, actor: session?.userId });
+      throw new ApiError("Animal not found", 404);
+    }
 
     const emoji = EMOJIS.includes(String(body.emoji)) ? String(body.emoji) : "❤️";
     const message = body.message ? String(body.message).trim().slice(0, 240) : null;
@@ -249,6 +274,12 @@ router.post("/reactions", async (req, res) => {
       },
     });
 
+    log.info("animal_reaction_created", {
+      reactionId: reaction.id,
+      animalId,
+      animalCode: animal.code,
+      actor: session?.userId,
+    });
     await logActivity(
       session?.name ?? userName,
       "ANIMAL_REACTION",
@@ -287,7 +318,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.animal.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Animal not found", 404);
+    if (!existing) {
+      log.warn("animal_update_not_found", { animalId: id, actor: session.userId });
+      throw new ApiError("Animal not found", 404);
+    }
 
     const data: Prisma.AnimalUpdateInput = {};
     if (body.name !== undefined) {
@@ -361,6 +395,14 @@ router.patch("/:id", async (req, res) => {
       data,
       include: { pledges: { orderBy: { createdAt: "desc" } } },
     });
+    log.info("animal_updated", {
+      animalId: id,
+      code: animal.code,
+      name: animal.name,
+      ...(body.status !== undefined ? { status: animal.status } : {}),
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "ANIMAL_UPDATE",
@@ -380,10 +422,19 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.animal.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Animal not found", 404);
+    if (!existing) {
+      log.warn("animal_delete_not_found", { animalId: id, actor: session.userId });
+      throw new ApiError("Animal not found", 404);
+    }
 
     await db.animalPledge.deleteMany({ where: { animalId: id } });
     await db.animal.delete({ where: { id } });
+    log.info("animal_deleted", {
+      animalId: id,
+      code: existing.code,
+      name: existing.name,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -17,6 +18,8 @@ import { TASK_STATUSES as STATUSES, TASK_TRANSITIONS } from "@/lib/volunteer-tas
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("volunteer-tasks");
 
 const TYPES = ["DISTRIBUTION", "KIT_SCAN", "INVENTORY", "EVENT", "RESCUE", "AMBULANCE"];
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH"];
@@ -111,7 +114,13 @@ router.post("/", async (req, res) => {
       where: { id: volunteerId },
       include: { user: { select: { name: true } } },
     });
-    if (!volunteer) throw new ApiError("Volunteer not found", 404);
+    if (!volunteer) {
+      log.warn("volunteer_task_create_volunteer_not_found", {
+        volunteerId,
+        actor: session.userId,
+      });
+      throw new ApiError("Volunteer not found", 404);
+    }
 
     const scheduledDate = body.scheduledDate
       ? new Date(String(body.scheduledDate))
@@ -149,6 +158,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("volunteer_task_created", {
+      taskId: task.id,
+      volunteerId,
+      type,
+      priority,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "TASK_ASSIGN",
@@ -171,14 +188,22 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const task = await db.volunteerTask.findUnique({ where: { id } });
-    if (!task) throw new ApiError("Task not found", 404);
+    if (!task) {
+      log.warn("volunteer_task_update_not_found", { taskId: id, actor: session.userId });
+      throw new ApiError("Task not found", 404);
+    }
 
     if (session.role === "VOLUNTEER") {
       const volunteer = await db.volunteer.findUnique({
         where: { userId: session.userId },
       });
-      if (!volunteer || volunteer.id !== task.volunteerId)
+      if (!volunteer || volunteer.id !== task.volunteerId) {
+        log.warn("volunteer_task_update_forbidden", {
+          taskId: id,
+          actor: session.userId,
+        });
         throw new ApiError("You can only update your own tasks", 403);
+      }
     }
 
     const data: Prisma.VolunteerTaskUpdateInput = {};
@@ -187,12 +212,25 @@ router.patch("/:id", async (req, res) => {
     if (body.status !== undefined) {
       const status = String(body.status).trim().toUpperCase();
       if (!STATUSES.includes(status)) throw new ApiError("Invalid status", 400);
+      if (status !== task.status && !(TASK_TRANSITIONS[task.status] ?? []).includes(status))
+        log.warn("volunteer_task_invalid_transition", {
+          taskId: id,
+          from: task.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(TASK_TRANSITIONS, task.status, status, "task");
       data.status = status;
       data.completedAt = status === "COMPLETED" ? new Date() : null;
     }
 
     const updated = await db.volunteerTask.update({ where: { id }, data });
+    log.info("volunteer_task_updated", {
+      taskId: id,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: updated.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "TASK_UPDATE",
@@ -212,9 +250,17 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const task = await db.volunteerTask.findUnique({ where: { id } });
-    if (!task) throw new ApiError("Task not found", 404);
+    if (!task) {
+      log.warn("volunteer_task_delete_not_found", { taskId: id, actor: session.userId });
+      throw new ApiError("Task not found", 404);
+    }
 
     await db.volunteerTask.delete({ where: { id } });
+    log.info("volunteer_task_deleted", {
+      taskId: id,
+      status: task.status,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "TASK_DELETE",

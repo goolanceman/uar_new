@@ -7,6 +7,9 @@
  * package.json `start` script), so it meaningfully raises the cost of
  * automated attacks without adding external infra (Redis, etc.).
  */
+import { logger } from "@/lib/logger";
+
+const log = logger.child("rate-limit");
 
 interface Bucket {
   count: number;
@@ -48,6 +51,11 @@ export function checkRateLimit(
   }
 
   if (existing.count >= limit) {
+    log.warn("rate_limit_exceeded", {
+      key,
+      limit,
+      retryAfterMs: existing.resetAt - now,
+    });
     return { allowed: false, retryAfterMs: existing.resetAt - now };
   }
 

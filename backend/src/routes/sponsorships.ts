@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireRole, requireAuth, json, handleError, ApiError, logActivity } from "@/lib/session";
 import {
   SPONSORSHIP_STATUSES,
@@ -13,6 +14,8 @@ import {
 import { monthlyEquivalent } from "@/lib/distribution-stock";
 
 export const router = Router();
+
+const log = logger.child("sponsorships");
 
 const STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"];
 
@@ -98,6 +101,7 @@ router.get("/match", async (req, res) => {
     const donorCategory = (settings["matching.donorCategory"] || "MONTHLY").trim();
 
     if (!enabled) {
+      log.debug("sponsorship_match_disabled");
       return json(res, { enabled: false, suggestions: [], unmatchedNeeds: 0, availableDonors: 0 });
     }
 
@@ -166,7 +170,13 @@ router.get("/match", async (req, res) => {
           break;
         }
       }
-      if (!picked) break;
+      if (!picked) {
+        log.debug("sponsorship_match_pool_exhausted", {
+          suggestions: suggestions.length,
+          unmatchedNeeds: needs.length,
+        });
+        break;
+      }
       load.set(picked.id, (load.get(picked.id) ?? 0) + 1);
 
       const monthlyQty = monthlyEquivalent(need.qtyPerCycle, need.cycle);
@@ -212,13 +222,19 @@ router.post("/", async (req, res) => {
     const beneficiaryId = String(body.beneficiaryId ?? "").trim();
     if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
     const beneficiary = await db.beneficiary.findUnique({ where: { id: beneficiaryId } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("sponsorship_beneficiary_not_found", { beneficiaryId, actor: session.userId });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const donorId = body.donorId ? String(body.donorId).trim() : null;
     let donorName = body.donorName ? String(body.donorName).trim() : "";
     if (donorId) {
       const donor = await db.donor.findUnique({ where: { id: donorId } });
-      if (!donor) throw new ApiError("Donor not found", 404);
+      if (!donor) {
+        log.warn("sponsorship_donor_not_found", { donorId, actor: session.userId });
+        throw new ApiError("Donor not found", 404);
+      }
       donorName = donor.name;
     }
     if (!donorName) throw new ApiError("donorId or donorName is required", 400);
@@ -226,9 +242,18 @@ router.post("/", async (req, res) => {
     const recurringNeedId = body.recurringNeedId ? String(body.recurringNeedId).trim() : null;
     if (recurringNeedId) {
       const need = await db.recurringNeed.findUnique({ where: { id: recurringNeedId } });
-      if (!need) throw new ApiError("Recurring need not found", 404);
-      if (need.beneficiaryId !== beneficiaryId)
+      if (!need) {
+        log.warn("sponsorship_need_not_found", { recurringNeedId, actor: session.userId });
+        throw new ApiError("Recurring need not found", 404);
+      }
+      if (need.beneficiaryId !== beneficiaryId) {
+        log.warn("sponsorship_need_beneficiary_mismatch", {
+          recurringNeedId,
+          beneficiaryId,
+          actor: session.userId,
+        });
         throw new ApiError("Recurring need does not belong to this beneficiary", 400);
+      }
     }
 
     const amountPerMonth = Number(body.amountPerMonth);
@@ -250,6 +275,15 @@ router.post("/", async (req, res) => {
         assignedByName: session.name,
       },
       include: INCLUDE,
+    });
+
+    log.info("sponsorship_created", {
+      sponsorshipId: row.id,
+      beneficiaryId,
+      donorId,
+      amountPerMonth,
+      months,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -274,14 +308,30 @@ router.patch("/:id", async (req, res) => {
     const session = await requireAuth(req);
     const { id } = req.params;
     const existing = await db.beneficiarySponsorship.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Sponsorship not found", 404);
+    if (!existing) {
+      log.warn("sponsorship_update_not_found", { sponsorshipId: id, actor: session.userId });
+      throw new ApiError("Sponsorship not found", 404);
+    }
 
     const isStaff = ["ADMIN", "VOLUNTEER"].includes(session.role);
     if (!isStaff) {
-      if (session.role !== "DONOR") throw new ApiError("You do not have permission for this action", 403);
-      const donor = await db.donor.findUnique({ where: { userId: session.userId } });
-      if (!donor || existing.donorId !== donor.id)
+      if (session.role !== "DONOR") {
+        log.warn("sponsorship_update_forbidden", {
+          sponsorshipId: id,
+          reason: "role",
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
+      const donor = await db.donor.findUnique({ where: { userId: session.userId } });
+      if (!donor || existing.donorId !== donor.id) {
+        log.warn("sponsorship_update_forbidden", {
+          sponsorshipId: id,
+          reason: "not_owner",
+          actor: session.userId,
+        });
+        throw new ApiError("You do not have permission for this action", 403);
+      }
     }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -290,12 +340,25 @@ router.patch("/:id", async (req, res) => {
     if (body.status !== undefined) {
       const status = String(body.status).trim().toUpperCase();
       if (!SP_STATUSES.includes(status)) throw new ApiError("Invalid status", 400);
-      if (!isStaff && !DONOR_ALLOWED_STATUSES.includes(status))
+      if (!isStaff && !DONOR_ALLOWED_STATUSES.includes(status)) {
+        log.warn("sponsorship_update_forbidden", {
+          sponsorshipId: id,
+          reason: "donor_status_not_allowed",
+          status,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
       data.status = status;
     }
-    if (!isStaff && (body.amountPerMonth !== undefined || body.months !== undefined))
+    if (!isStaff && (body.amountPerMonth !== undefined || body.months !== undefined)) {
+      log.warn("sponsorship_update_forbidden", {
+        sponsorshipId: id,
+        reason: "donor_field_change_not_allowed",
+        actor: session.userId,
+      });
       throw new ApiError("You do not have permission for this action", 403);
+    }
     if (body.amountPerMonth !== undefined) {
       const amt = Number(body.amountPerMonth);
       if (!Number.isFinite(amt) || amt <= 0) throw new ApiError("amountPerMonth must be positive", 400);
@@ -314,6 +377,12 @@ router.patch("/:id", async (req, res) => {
       },
     });
 
+    log.info("sponsorship_updated", {
+      sponsorshipId: id,
+      fields: Object.keys(data),
+      ...(data.status ? { newStatus: data.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(session.name, "UPDATE", "BeneficiarySponsorship", JSON.stringify(data), session.userId);
     return json(res, row);
   } catch (e) {
@@ -327,9 +396,13 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.beneficiarySponsorship.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Sponsorship not found", 404);
+    if (!existing) {
+      log.warn("sponsorship_delete_not_found", { sponsorshipId: id, actor: session.userId });
+      throw new ApiError("Sponsorship not found", 404);
+    }
 
     await db.beneficiarySponsorship.delete({ where: { id } });
+    log.info("sponsorship_deleted", { sponsorshipId: id, actor: session.userId });
     await logActivity(session.name, "DELETE", "BeneficiarySponsorship", id, session.userId);
     return json(res, { ok: true });
   } catch (e) {

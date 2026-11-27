@@ -71,6 +71,11 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("contact_query_created", {
+      queryId: query.id,
+      email: query.email,
+      status: query.status,
+    });
     await logActivity(name, "CONTACT", "CONTACT_QUERY", `${subject} · ${email}`);
 
     // Fire-and-forget public acknowledgement (senders no-op when disabled)
@@ -111,7 +116,19 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Status must be RESOLVED, CLOSED or PENDING", 400);
 
     const existing = await db.contactQuery.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Query not found", 404);
+    if (!existing) {
+      log.warn("contact_query_update_not_found", { queryId: id, actor: session.userId });
+      throw new ApiError("Query not found", 404);
+    }
+    const allowedNext = CONTACT_QUERY_TRANSITIONS[existing.status] ?? [];
+    if (existing.status !== status && !allowedNext.includes(status)) {
+      log.warn("contact_query_invalid_transition", {
+        queryId: id,
+        from: existing.status,
+        to: status,
+        actor: session.userId,
+      });
+    }
     assertTransition(CONTACT_QUERY_TRANSITIONS, existing.status, status, "contact query");
 
     const data: Record<string, unknown> = { status };
@@ -121,6 +138,11 @@ router.patch("/:id", async (req, res) => {
     }
 
     const query = await db.contactQuery.update({ where: { id }, data });
+    log.info("contact_query_updated", {
+      queryId: id,
+      status,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -143,9 +165,17 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.contactQuery.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Query not found", 404);
+    if (!existing) {
+      log.warn("contact_query_delete_not_found", { queryId: id, actor: session.userId });
+      throw new ApiError("Query not found", 404);
+    }
 
     await db.contactQuery.delete({ where: { id } });
+    log.info("contact_query_deleted", {
+      queryId: id,
+      email: existing.email,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

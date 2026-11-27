@@ -5,8 +5,11 @@
  * Port of InterestController::fetchInterests (src/routes/mobile/posts.ts).
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
+
+const log = logger.child("community:interests");
 
 /** GET /api/interests — interests + totalRoomOfInterest. */
 export async function listInterests(skip: number, take: number) {
@@ -77,7 +80,10 @@ async function stripInterestId(id: number): Promise<void> {
 
 export async function addInterest(title: string) {
   const exists = await db.communityInterest.findFirst({ where: { title }, select: { id: true } });
-  if (exists) throw new ApiError(`Interest "${title}" already exists`, 409);
+  if (exists) {
+    log.warn("interest_duplicate", { title });
+    throw new ApiError(`Interest "${title}" already exists`, 409);
+  }
   const row = await db.communityInterest.create({ data: { title } });
   await invalidateInterests();
   return row;
@@ -85,9 +91,15 @@ export async function addInterest(title: string) {
 
 export async function updateInterest(id: number, title: string) {
   const row = await db.communityInterest.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Interest not found", 404);
+  if (!row) {
+    log.warn("interest_update_not_found", { interestId: id });
+    throw new ApiError("Interest not found", 404);
+  }
   const dup = await db.communityInterest.findFirst({ where: { title, id: { not: id } }, select: { id: true } });
-  if (dup) throw new ApiError(`Interest "${title}" already exists`, 409);
+  if (dup) {
+    log.warn("interest_duplicate", { title });
+    throw new ApiError(`Interest "${title}" already exists`, 409);
+  }
   const updated = await db.communityInterest.update({ where: { id }, data: { title } });
   await invalidateInterests();
   return updated;
@@ -95,7 +107,10 @@ export async function updateInterest(id: number, title: string) {
 
 export async function deleteInterest(id: number) {
   const row = await db.communityInterest.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Interest not found", 404);
+  if (!row) {
+    log.warn("interest_delete_not_found", { interestId: id });
+    throw new ApiError("Interest not found", 404);
+  }
   await db.communityInterest.delete({ where: { id } });
   await stripInterestId(id);
   await invalidateInterests();

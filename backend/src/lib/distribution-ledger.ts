@@ -11,6 +11,7 @@
  * beneficiary display name and UAR-BEN code.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { parseTemplateItems } from "@/lib/food";
 
 export type UnifiedSource = "FOOD_PROGRAMME" | "MEDICAL_DISPENSE" | "PAD_DRIVE" | "LEGACY";
@@ -38,6 +39,8 @@ export interface UnifiedLedger {
 }
 
 const SOURCES: UnifiedSource[] = ["FOOD_PROGRAMME", "MEDICAL_DISPENSE", "PAD_DRIVE", "LEGACY"];
+
+const log = logger.child("distribution-ledger");
 
 /** Legacy Distribution types that may appear in the unified `type` filter. */
 const LEGACY_TYPES = [
@@ -103,7 +106,13 @@ export async function buildUnifiedLedger(sp: URLSearchParams): Promise<UnifiedLe
     sources = sources.includes(sourceParam) ? [sourceParam] : [];
   else if (sourceParam) sources = [];
 
-  if (!sources.length) return { items: [], total: 0 };
+  if (!sources.length) {
+    log.debug("ledger_no_sources_selected", {
+      types: rawTypes.length ? rawTypes : undefined,
+      source: sourceParam,
+    });
+    return { items: [], total: 0 };
+  }
 
   const legacyTypes =
     rawTypes.length && rawTypes.some((t) => !["FOOD", "MEDICINE"].includes(t))

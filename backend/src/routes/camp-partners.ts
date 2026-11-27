@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -16,6 +17,8 @@ import { PARTNER_RESPONSE_STATUSES, PARTNER_TRANSITIONS } from "@/lib/camp-partn
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("camp-partners");
 
 const PARTNER_ROLES = ["HOST", "SUPPORT", "SPONSOR"];
 
@@ -89,20 +92,41 @@ router.post("/", async (req, res) => {
     if (!orgId) throw new ApiError("orgId is required", 400);
 
     const camp = await db.medicalCamp.findUnique({ where: { id: campId } });
-    if (!camp) throw new ApiError("Camp not found", 404);
+    if (!camp) {
+      log.warn("camp_partner_camp_not_found", { campId, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
     const org = await db.healthcareOrg.findUnique({ where: { id: orgId } });
-    if (!org) throw new ApiError("Organisation not found", 404);
+    if (!org) {
+      log.warn("camp_partner_org_not_found", { orgId, campId, actor: session.userId });
+      throw new ApiError("Organisation not found", 404);
+    }
 
     const role = String(body.role ?? "SUPPORT").trim().toUpperCase();
     if (!PARTNER_ROLES.includes(role)) throw new ApiError("Invalid role", 400);
 
     const duplicate = await db.campPartner.findFirst({ where: { campId, orgId } });
-    if (duplicate)
+    if (duplicate) {
+      log.warn("camp_partner_duplicate", {
+        campId,
+        orgId,
+        partnerId: duplicate.id,
+        actor: session.userId,
+      });
       throw new ApiError("This organisation is already a partner of this camp", 409);
+    }
 
     const partner = await db.campPartner.create({
       data: { campId, orgId, role, status: "INVITED" },
       include: INCLUDE,
+    });
+
+    log.info("camp_partner_invited", {
+      partnerId: partner.id,
+      campId,
+      orgId,
+      role,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -130,10 +154,19 @@ router.patch("/:id", async (req, res) => {
       where: { id },
       include: { camp: true, org: true },
     });
-    if (!partner) throw new ApiError("Camp partner record not found", 404);
+    if (!partner) {
+      log.warn("camp_partner_update_not_found", { partnerId: id, actor: session.userId });
+      throw new ApiError("Camp partner record not found", 404);
+    }
 
-    if (session.role === "HOSPITAL" && partner.org.ownerUserId !== session.userId)
+    if (session.role === "HOSPITAL" && partner.org.ownerUserId !== session.userId) {
+      log.warn("camp_partner_update_forbidden", {
+        partnerId: id,
+        orgId: partner.orgId,
+        actor: session.userId,
+      });
       throw new ApiError("You do not have permission for this action", 403);
+    }
 
     const data: { status?: string; notes?: string | null; respondedAt?: Date; role?: string } = {};
 
@@ -141,6 +174,13 @@ router.patch("/:id", async (req, res) => {
       const status = String(body.status).trim().toUpperCase();
       if (!RESPONSE_STATUSES.includes(status))
         throw new ApiError("status must be ACCEPTED or DECLINED", 400);
+      if (partner.status !== status && !PARTNER_TRANSITIONS[partner.status]?.includes(status))
+        log.warn("camp_partner_invalid_transition", {
+          partnerId: id,
+          from: partner.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(PARTNER_TRANSITIONS, partner.status, status, "camp partner");
       data.status = status;
       data.respondedAt = new Date();
@@ -160,6 +200,13 @@ router.patch("/:id", async (req, res) => {
         camp: { select: { id: true, code: true, title: true, campDate: true, venue: true, city: true, status: true } },
         org: { select: { id: true, name: true, type: true, city: true, status: true } },
       },
+    });
+
+    log.info("camp_partner_updated", {
+      partnerId: id,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: updated.status } : {}),
+      actor: session.userId,
     });
 
     await logActivity(

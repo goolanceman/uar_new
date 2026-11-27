@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -25,6 +26,8 @@ import {
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("beneficiaries");
 
 const CATEGORIES = [
   "WIDOW",
@@ -204,6 +207,15 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("beneficiary_created", {
+      beneficiaryId: beneficiary.id,
+      code: beneficiary.code,
+      category,
+      urgencyLevel,
+      caseStatus: beneficiary.caseStatus,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "BENEFICIARY_ADD",
@@ -225,7 +237,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.beneficiary.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Beneficiary not found", 404);
+    if (!existing) {
+      log.warn("beneficiary_update_not_found", { beneficiaryId: id, actor: session.userId });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const data: Prisma.BeneficiaryUpdateInput = {};
     if (body.name !== undefined) data.name = String(body.name).trim();
@@ -261,6 +276,13 @@ router.patch("/:id", async (req, res) => {
       const caseStatus = String(body.caseStatus).trim().toUpperCase();
       if (!CASE_STATUSES_ALL.includes(caseStatus))
         throw new ApiError("Invalid case status", 400);
+      if (caseStatus !== (existing.caseStatus ?? "INTAKE") && !CASE_STATUS_TRANSITIONS[existing.caseStatus ?? "INTAKE"]?.includes(caseStatus))
+        log.warn("beneficiary_invalid_case_transition", {
+          beneficiaryId: id,
+          from: existing.caseStatus,
+          to: caseStatus,
+          actor: session.userId,
+        });
       assertTransition(
         CASE_STATUS_TRANSITIONS,
         existing.caseStatus ?? "INTAKE",
@@ -276,6 +298,13 @@ router.patch("/:id", async (req, res) => {
       const verificationStatus = String(body.verificationStatus).trim().toUpperCase();
       if (!VERIFICATION_STATUSES_ALL.includes(verificationStatus))
         throw new ApiError("Invalid verification status", 400);
+      if (verificationStatus !== (existing.verificationStatus ?? "PENDING") && !VERIFICATION_STATUS_TRANSITIONS[existing.verificationStatus ?? "PENDING"]?.includes(verificationStatus))
+        log.warn("beneficiary_invalid_verification_transition", {
+          beneficiaryId: id,
+          from: existing.verificationStatus,
+          to: verificationStatus,
+          actor: session.userId,
+        });
       assertTransition(
         VERIFICATION_STATUS_TRANSITIONS,
         existing.verificationStatus ?? "PENDING",
@@ -287,6 +316,12 @@ router.patch("/:id", async (req, res) => {
     }
 
     const beneficiary = await db.beneficiary.update({ where: { id }, data });
+    log.info("beneficiary_updated", {
+      beneficiaryId: id,
+      code: beneficiary.code,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "BENEFICIARY_UPDATE",
@@ -306,9 +341,17 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.beneficiary.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Beneficiary not found", 404);
+    if (!existing) {
+      log.warn("beneficiary_delete_not_found", { beneficiaryId: id, actor: session.userId });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     await db.beneficiary.delete({ where: { id } });
+    log.info("beneficiary_deleted", {
+      beneficiaryId: id,
+      caseStatus: existing.caseStatus,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "BENEFICIARY_DELETE",
@@ -331,9 +374,20 @@ const MAX_KYC_DOCS = 10;
 async function requireKycOwner(req: import("express").Request, beneficiaryId: string) {
   const session = await requireAuth(req);
   const beneficiary = await db.beneficiary.findUnique({ where: { id: beneficiaryId } });
-  if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
-  if (session.role !== "ADMIN" && beneficiary.userId !== session.userId)
+  if (!beneficiary) {
+    log.warn("beneficiary_kyc_beneficiary_not_found", {
+      beneficiaryId,
+      actor: session.userId,
+    });
+    throw new ApiError("Beneficiary not found", 404);
+  }
+  if (session.role !== "ADMIN" && beneficiary.userId !== session.userId) {
+    log.warn("beneficiary_kyc_forbidden", {
+      beneficiaryId,
+      actor: session.userId,
+    });
     throw new ApiError("You do not have permission for this action", 403);
+  }
   return { session, beneficiary };
 }
 
@@ -375,11 +429,23 @@ router.post("/:id/kyc", async (req, res) => {
     // trivially.
     if (session.role !== "ADMIN") {
       for (const f of found) {
-        if (f.uploadedById !== session.userId)
+        if (f.uploadedById !== session.userId) {
+          log.warn("beneficiary_kyc_foreign_files", {
+            beneficiaryId: id,
+            actor: session.userId,
+          });
           throw new ApiError("KYC documents must be files uploaded by you", 403);
+        }
       }
     }
 
+    if (beneficiary.kycStatus !== "SUBMITTED" && !KYC_TRANSITIONS[beneficiary.kycStatus]?.includes("SUBMITTED"))
+      log.warn("beneficiary_kyc_invalid_transition", {
+        beneficiaryId: id,
+        from: beneficiary.kycStatus,
+        to: "SUBMITTED",
+        actor: session.userId,
+      });
     assertTransition(KYC_TRANSITIONS, beneficiary.kycStatus, "SUBMITTED", "beneficiary kycStatus", 400);
 
     const updated = await db.beneficiary.update({
@@ -388,6 +454,12 @@ router.post("/:id/kyc", async (req, res) => {
         kycStatus: "SUBMITTED",
         kycDocuments: JSON.stringify(ids),
       },
+    });
+
+    log.info("beneficiary_kyc_submitted", {
+      beneficiaryId: id,
+      documentCount: ids.length,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -417,9 +489,18 @@ router.post("/:id/kyc/review", async (req, res) => {
       throw new ApiError("status must be VERIFIED or REJECTED", 400);
 
     const beneficiary = await db.beneficiary.findUnique({ where: { id } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
-    if (beneficiary.kycStatus !== "SUBMITTED")
+    if (!beneficiary) {
+      log.warn("beneficiary_kyc_review_not_found", { beneficiaryId: id, actor: session.userId });
+      throw new ApiError("Beneficiary not found", 404);
+    }
+    if (beneficiary.kycStatus !== "SUBMITTED") {
+      log.warn("beneficiary_kyc_review_blocked_status", {
+        beneficiaryId: id,
+        kycStatus: beneficiary.kycStatus,
+        actor: session.userId,
+      });
       throw new ApiError(`Only SUBMITTED KYC can be reviewed (current: ${beneficiary.kycStatus})`, 400);
+    }
 
     const updated = await db.beneficiary.update({
       where: { id },
@@ -429,6 +510,12 @@ router.post("/:id/kyc/review", async (req, res) => {
         kycReviewedAt: new Date(),
         kycReviewedBy: session.name,
       },
+    });
+
+    log.info("beneficiary_kyc_reviewed", {
+      beneficiaryId: id,
+      kycStatus: status,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -471,7 +558,13 @@ router.post("/:id/notes", async (req, res) => {
     if (!note) throw new ApiError("Note cannot be empty", 400);
 
     const beneficiary = await db.beneficiary.findUnique({ where: { id } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("beneficiary_note_beneficiary_not_found", {
+        beneficiaryId: id,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const row = await db.beneficiaryNote.create({
       data: {
@@ -479,6 +572,11 @@ router.post("/:id/notes", async (req, res) => {
         authorName: session.name,
         note,
       },
+    });
+    log.info("beneficiary_note_added", {
+      noteId: row.id,
+      beneficiaryId: id,
+      actor: session.userId,
     });
     return json(res, row, 201);
   } catch (e) {

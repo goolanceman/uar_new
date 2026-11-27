@@ -331,6 +331,7 @@ export async function getReel(myUserId: string, reelId: string) {
   if (!reel) throw new ApiError("Reel not found", 404);
   // Still-processing direct uploads stay visible to the owner only.
   if (reel.media && reel.media.status !== "ready" && reel.userId !== myUserId) {
+    log.warn("reel_processing_not_owner", { reelId, actor: myUserId });
     throw new ApiError("Reel not found", 404);
   }
   return serializeReel(reel, myUserId);
@@ -341,10 +342,16 @@ export async function getReel(myUserId: string, reelId: string) {
  *  notifications, likes, reports and the uploaded content/thumbnail files. */
 export async function deleteReel(actorId: string, actorRole: string | undefined, reelId: string) {
   const reel = await findReel(reelId);
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_delete_not_found", { reelId, actor: actorId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const moderator = await isModerator(actorId, actorRole);
-  if (reel.userId !== actorId && !moderator) throw new ApiError("You do not have permission to delete this reel", 403);
+  if (reel.userId !== actorId && !moderator) {
+    log.warn("reel_delete_not_owner", { reelId, actor: actorId, moderator });
+    throw new ApiError("You do not have permission to delete this reel", 403);
+  }
 
   const commentTypes = [TYPE_REEL_LIKE, TYPE_COMMENT, TYPE_ADD_REEL_COMMENT];
 
@@ -383,10 +390,16 @@ export interface UpdateReelInput {
  *  moderator may edit anyone's (legacy reels/update by the admin portal). */
 export async function updateReel(actorId: string, actorRole: string | undefined, reelId: string, input: UpdateReelInput) {
   const reel = await findReel(reelId);
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_update_not_found", { reelId, actor: actorId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const moderator = await isModerator(actorId, actorRole);
-  if (reel.userId !== actorId && !moderator) throw new ApiError("You do not have permission to edit this reel", 403);
+  if (reel.userId !== actorId && !moderator) {
+    log.warn("reel_update_not_owner", { reelId, actor: actorId, moderator });
+    throw new ApiError("You do not have permission to edit this reel", 403);
+  }
 
   const patch: Record<string, unknown> = {};
   if (input.description !== undefined) patch.description = input.description;
@@ -429,6 +442,7 @@ export async function listExploreReels(
 
   let reelIds: string[];
   let total: number;
+  log.debug("reels_explore_branch", { actor: myUserId, feed, limit });
   if (feed === "foryou") {
     // legacy inRandomOrder take(limit) — a fresh random slice per request
     reelIds = await randomReelIds(baseWhere, limit);
@@ -471,6 +485,7 @@ export async function listReelsByUser(myUserId: string, targetUserId: string, sk
   const blockUserIds = blockedIdsOf(user);
   const blockMyUserIds = blockedIdsOf(myUser);
   if (blockUserIds.includes(myUserId) || blockMyUserIds.includes(targetUserId)) {
+    log.warn("reel_profile_blocked", { actor: myUserId, userId: targetUserId });
     throw new ApiError("User blocked", 403);
   }
 
@@ -593,10 +608,16 @@ export async function listSavedReels(myUserId: string, skip: number, take: numbe
  *  updated reel with isLike + the recomputed likes count. */
 export async function toggleReelLike(userId: string, reelId: string) {
   const user = await db.user.findFirst({ where: { id: userId, isBlock: UNBLOCKED } });
-  if (!user) throw new ApiError("User not found", 404);
+  if (!user) {
+    log.warn("actor_not_found", { actor: userId });
+    throw new ApiError("User not found", 404);
+  }
 
   const reel = await findReel(reelId);
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_like_not_found", { reelId, actor: userId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const likeRecord = await db.communityLike.findFirst({ where: { userId, reelId } });
 
@@ -652,7 +673,10 @@ export async function toggleReelLike(userId: string, reelId: string) {
 /** POST /api/reels/:id/view (legacy increaseReelViewCount). */
 export async function addReelView(reelId: string) {
   const reel = await db.communityReel.findUnique({ where: { id: reelId } });
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_view_not_found", { reelId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const updated = await db.communityReel.update({
     where: { id: reel.id },
@@ -668,7 +692,10 @@ export async function reportReel(reporterId: string, reelId: string, reason: str
   if (!desc.trim()) throw new ApiError("The description field is required", 400);
 
   const reel = await db.communityReel.findUnique({ where: { id: reelId } });
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_report_not_found", { reelId, actor: reporterId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const report = await db.communityReport.create({
     data: { type: 3, reelId: reel.id, userId: reporterId, reason: reason.trim(), desc: desc.trim() },
@@ -723,10 +750,16 @@ export async function addReelComment(userId: string, reelId: string, description
   if (description.length > 500) throw new ApiError("The description may not be greater than 500 characters", 400);
 
   const user = await db.user.findFirst({ where: { id: userId, isBlock: UNBLOCKED } });
-  if (!user) throw new ApiError("User not found", 404);
+  if (!user) {
+    log.warn("actor_not_found", { actor: userId });
+    throw new ApiError("User not found", 404);
+  }
 
   const reel = await db.communityReel.findUnique({ where: { id: reelId } });
-  if (!reel) throw new ApiError("Reel not found", 404);
+  if (!reel) {
+    log.warn("reel_comment_not_found", { reelId, actor: userId });
+    throw new ApiError("Reel not found", 404);
+  }
 
   const comment = await db.communityReelComment.create({
     data: { userId: user.id, reelId: reel.id, description },
@@ -757,7 +790,10 @@ export async function addReelComment(userId: string, reelId: string, description
  *  OR a moderator (legacy deleteReelComment + deleteReelCommentByModerator). */
 export async function deleteReelComment(actorId: string, actorRole: string | undefined, commentId: string) {
   const comment = await db.communityReelComment.findUnique({ where: { id: commentId } });
-  if (!comment) throw new ApiError("Reel comment not found", 404);
+  if (!comment) {
+    log.warn("reel_comment_delete_not_found", { commentId, actor: actorId });
+    throw new ApiError("Reel comment not found", 404);
+  }
 
   const reel = await db.communityReel.findUnique({
     where: { id: comment.reelId },
@@ -765,7 +801,10 @@ export async function deleteReelComment(actorId: string, actorRole: string | und
   });
   const moderator = await isModerator(actorId, actorRole);
   const allowed = comment.userId === actorId || (reel?.userId ?? null) === actorId || moderator;
-  if (!allowed) throw new ApiError("You do not have permission to delete this comment", 403);
+  if (!allowed) {
+    log.warn("reel_comment_delete_not_owner", { commentId, actor: actorId });
+    throw new ApiError("You do not have permission to delete this comment", 403);
+  }
 
   if (reel) {
     await db.communityReel.update({

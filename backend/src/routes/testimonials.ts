@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -14,6 +15,8 @@ import {
 import { cached, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("testimonials");
 
 // GET /api/testimonials — public wall
 router.get("/", async (_req, res) => {
@@ -49,6 +52,12 @@ router.post("/", async (req, res) => {
     const testimonial = await db.testimonial.create({
       data: { name, role, message, rating },
     });
+    log.info("testimonial_created", {
+      testimonialId: testimonial.id,
+      name,
+      rating,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -73,7 +82,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.testimonial.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Testimonial not found", 404);
+    if (!existing) {
+      log.warn("testimonial_update_not_found", { testimonialId: id, actor: session.userId });
+      throw new ApiError("Testimonial not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.name !== undefined) data.name = String(body.name).trim();
@@ -89,6 +101,11 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const testimonial = await db.testimonial.update({ where: { id }, data });
+    log.info("testimonial_updated", {
+      testimonialId: id,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -112,9 +129,17 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.testimonial.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Testimonial not found", 404);
+    if (!existing) {
+      log.warn("testimonial_delete_not_found", { testimonialId: id, actor: session.userId });
+      throw new ApiError("Testimonial not found", 404);
+    }
 
     await db.testimonial.delete({ where: { id } });
+    log.info("testimonial_deleted", {
+      testimonialId: id,
+      name: existing.name,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

@@ -8,11 +8,14 @@
  */
 import { Router } from "express";
 import { ApiError, json, handleError } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import { listInterests, addInterest, updateInterest, deleteInterest } from "@/lib/community/interests";
 import { requireElevated } from "@/lib/community/admin";
 
 export const router = Router();
+
+const log = logger.child("interests");
 
 // GET /api/interests?page=&limit= — interests + totalRoomOfInterest.
 router.get("/", async (req, res) => {
@@ -28,10 +31,12 @@ router.get("/", async (req, res) => {
 // POST /api/interests {title} — admin.
 router.post("/", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await addInterest(title), 201);
+    const row = await addInterest(title);
+    log.info("interest_created", { interestId: row.id, title, actor: session.userId });
+    return json(res, row, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -40,10 +45,13 @@ router.post("/", async (req, res) => {
 // PATCH /api/interests/:id {title} — admin.
 router.patch("/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await updateInterest(Number((req.params as Record<string, string>).id), title));
+    const interestId = Number((req.params as Record<string, string>).id);
+    const updated = await updateInterest(interestId, title);
+    log.info("interest_updated", { interestId: updated.id, title, actor: session.userId });
+    return json(res, updated);
   } catch (e) {
     return handleError(e, res);
   }
@@ -54,8 +62,11 @@ router.patch("/:id", async (req, res) => {
 // the legacy deleteInterest lacked).
 router.delete("/:id", async (req, res) => {
   try {
-    await requireElevated(req);
-    return json(res, await deleteInterest(Number((req.params as Record<string, string>).id)));
+    const session = await requireElevated(req);
+    const interestId = Number((req.params as Record<string, string>).id);
+    const row = await deleteInterest(interestId);
+    log.info("interest_deleted", { interestId: row.id, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }

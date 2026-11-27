@@ -5,10 +5,13 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireRole, json, handleError, ApiError, logActivity } from "@/lib/session";
 import { RECURRING_NEED_STATUSES } from "@/lib/recurring-needs";
 
 export const router = Router();
+
+const log = logger.child("recurring-needs");
 
 const CYCLES = ["WEEKLY", "MONTHLY", "QUARTERLY"];
 const STATUSES = RECURRING_NEED_STATUSES;
@@ -63,9 +66,15 @@ router.post("/", async (req, res) => {
     if (!itemId) throw new ApiError("itemId is required", 400);
 
     const beneficiary = await db.beneficiary.findUnique({ where: { id: beneficiaryId } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("recurring_need_beneficiary_not_found", { beneficiaryId, actor: session.userId });
+      throw new ApiError("Beneficiary not found", 404);
+    }
     const item = await db.inventoryItem.findUnique({ where: { id: itemId } });
-    if (!item) throw new ApiError("Inventory item not found", 404);
+    if (!item) {
+      log.warn("recurring_need_item_not_found", { itemId, actor: session.userId });
+      throw new ApiError("Inventory item not found", 404);
+    }
 
     const cycle = String(body.cycle ?? "MONTHLY").trim().toUpperCase();
     if (!CYCLES.includes(cycle)) throw new ApiError("Invalid cycle", 400);
@@ -88,6 +97,15 @@ router.post("/", async (req, res) => {
       include: INCLUDE,
     });
 
+    log.info("recurring_need_created", {
+      recurringNeedId: row.id,
+      beneficiaryId,
+      itemId,
+      cycle,
+      qtyPerCycle,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "CREATE",
@@ -108,7 +126,10 @@ router.patch("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN", "VOLUNTEER");
     const { id } = req.params;
     const existing = await db.recurringNeed.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Recurring need not found", 404);
+    if (!existing) {
+      log.warn("recurring_need_update_not_found", { recurringNeedId: id, actor: session.userId });
+      throw new ApiError("Recurring need not found", 404);
+    }
 
     const body = req.body as Record<string, unknown>;
     const data: Record<string, unknown> = {};
@@ -144,6 +165,12 @@ router.patch("/:id", async (req, res) => {
       },
     });
 
+    log.info("recurring_need_updated", {
+      recurringNeedId: id,
+      fields: Object.keys(data),
+      ...(data.status ? { newStatus: data.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(session.name, "UPDATE", "RecurringNeed", JSON.stringify(data), session.userId);
     return json(res, row);
   } catch (e) {
@@ -157,9 +184,13 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.recurringNeed.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Recurring need not found", 404);
+    if (!existing) {
+      log.warn("recurring_need_delete_not_found", { recurringNeedId: id, actor: session.userId });
+      throw new ApiError("Recurring need not found", 404);
+    }
 
     await db.recurringNeed.delete({ where: { id } });
+    log.info("recurring_need_deleted", { recurringNeedId: id, actor: session.userId });
     await logActivity(session.name, "DELETE", "RecurringNeed", id, session.userId);
     return json(res, { ok: true });
   } catch (e) {

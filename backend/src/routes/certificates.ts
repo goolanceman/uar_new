@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import { CERT_TYPE_TITLES, isCertificateType, parseMeta, certificateHtml } from 
 import { orgProfile } from "@/lib/api-org";
 
 export const router = Router();
+
+const log = logger.child("certificates");
 
 async function nextCertificateCode(): Promise<string> {
   const year = new Date().getFullYear();
@@ -126,6 +129,12 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("certificate_issued", {
+      code,
+      type,
+      recipientEmail,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "CERTIFICATE_ISSUE",

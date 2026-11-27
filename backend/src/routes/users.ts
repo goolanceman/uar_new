@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   hashPassword,
@@ -16,6 +17,8 @@ import { USER_STATUSES } from "@/lib/user-status";
 import { deleteUserCascade } from "@/lib/community/users";
 
 export const router = Router();
+
+const log = logger.child("users");
 
 const ROLES = ["ADMIN", "VOLUNTEER", "DONOR", "BENEFICIARY"];
 const STATUSES: readonly string[] = USER_STATUSES;
@@ -109,8 +112,10 @@ router.post("/", async (req, res) => {
     const existing = await db.user.findFirst({
       where: { email: { equals: email } },
     });
-    if (existing)
+    if (existing) {
+      log.warn("user_email_conflict", { email, actor: session.userId });
       throw new ApiError("An account with this email already exists", 409);
+    }
 
     const user = await db.user.create({
       data: {
@@ -126,6 +131,13 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("user_created", {
+      userId: user.id,
+      email: user.email,
+      role,
+      status: user.status,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "USER_CREATE",
@@ -174,7 +186,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const target = await db.user.findUnique({ where: { id } });
-    if (!target) throw new ApiError("User not found", 404);
+    if (!target) {
+      log.warn("user_update_not_found", { userId: id, actor: session.userId });
+      throw new ApiError("User not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
 
@@ -189,8 +204,14 @@ router.patch("/:id", async (req, res) => {
       // Guard: never demote the last remaining ADMIN out of the console.
       if (target.role === "ADMIN" && role !== "ADMIN") {
         const adminCount = await db.user.count({ where: { role: "ADMIN" } });
-        if (adminCount <= 1)
+        if (adminCount <= 1) {
+          log.warn("user_last_admin_demotion_blocked", {
+            userId: id,
+            newRole: role,
+            actor: session.userId,
+          });
           throw new ApiError("You cannot change the role of the only administrator", 409);
+        }
       }
       data.role = role;
     }
@@ -203,7 +224,10 @@ router.patch("/:id", async (req, res) => {
       if (!/^\S+@\S+\.\S+$/.test(email))
         throw new ApiError("Please enter a valid email address", 400);
       const taken = await db.user.findFirst({ where: { email, id: { not: id } } });
-      if (taken) throw new ApiError("Another account already uses this email", 409);
+      if (taken) {
+        log.warn("user_email_conflict", { userId: id, email, actor: session.userId });
+        throw new ApiError("Another account already uses this email", 409);
+      }
       data.email = email;
     }
     if (body?.phone !== undefined) data.phone = body.phone ? String(body.phone).trim() : null;
@@ -235,9 +259,19 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     // Guard: an admin cannot lock themselves out of the console.
-    if (data.isActive === false && id === session.userId)
+    if (data.isActive === false && id === session.userId) {
+      log.warn("user_self_deactivation_blocked", { userId: id, actor: session.userId });
       throw new ApiError("You cannot deactivate your own account", 409);
+    }
     const user = await db.user.update({ where: { id }, data });
+    log.info("user_updated", {
+      userId: id,
+      email: user.email,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: String(data.status) } : {}),
+      ...(data.role !== undefined ? { newRole: String(data.role) } : {}),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -263,16 +297,23 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
 
-    if (id === session.userId)
+    if (id === session.userId) {
+      log.warn("user_self_delete_blocked", { userId: id, actor: session.userId });
       throw new ApiError("You cannot delete your own account", 409);
+    }
 
     const target = await db.user.findUnique({ where: { id } });
-    if (!target) throw new ApiError("User not found", 404);
+    if (!target) {
+      log.warn("user_delete_not_found", { userId: id, actor: session.userId });
+      throw new ApiError("User not found", 404);
+    }
 
     if (target.role === "ADMIN") {
       const adminCount = await db.user.count({ where: { role: "ADMIN" } });
-      if (adminCount <= 1)
+      if (adminCount <= 1) {
+        log.warn("user_last_admin_delete_blocked", { userId: id, actor: session.userId });
         throw new ApiError("You cannot delete the only administrator account", 409);
+      }
     }
 
     // Detach CRM children that point back at the user before the cascade.
@@ -283,6 +324,12 @@ router.delete("/:id", async (req, res) => {
     // Full community cascade (also deletes the user row and their
     // notifications + volunteer profile).
     await deleteUserCascade(id);
+    log.info("user_deleted", {
+      userId: id,
+      email: target.email,
+      role: target.role,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

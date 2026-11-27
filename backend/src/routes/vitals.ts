@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("vitals");
 
 // Screening DATA ranges — vital observations are data capture, never
 // diagnoses. Values outside these physiological plausibility windows are
@@ -89,17 +92,32 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("vitals_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("vitals_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
     const encounterId = optText(body?.encounterId);
     if (encounterId) {
       const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-      if (!enc) throw new ApiError("Encounter not found", 404);
+      if (!enc) {
+        log.warn("vitals_encounter_not_found", {
+          encounterId,
+          actor: session.userId,
+        });
+        throw new ApiError("Encounter not found", 404);
+      }
     }
 
     const data: Record<string, unknown> = { beneficiaryId, campId, encounterId };
@@ -134,6 +152,14 @@ router.post("/", async (req, res) => {
         [k: string]: unknown;
       },
       include: { beneficiary: { select: { id: true, code: true, name: true } } },
+    });
+
+    log.info("vitals_recorded", {
+      vitalId: vital.id,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      fields: Object.keys(RANGES).filter((f) => data[f] !== undefined),
+      actor: session.userId,
     });
 
     await logActivity(

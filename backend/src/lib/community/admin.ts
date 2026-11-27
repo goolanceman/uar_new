@@ -6,11 +6,14 @@
  */
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError, requireAuth, type Session } from "@/lib/session";
 import { communityAuthor, communityAuthorSelect, communityUser } from "@/lib/community/serializers";
 import { feedEvent, sendPush } from "@/lib/community/push";
 import { syncPostCommentCounts } from "@/lib/community/counters";
 import { getCachedMediaMany, invalidateSettings } from "@/lib/cache";
+
+const log = logger.child("community:admin");
 
 /**
  * Moderator/admin gate — the session role must be ADMIN/MODERATOR, with the
@@ -25,6 +28,7 @@ export async function requireElevated(req: Parameters<typeof requireAuth>[0]): P
   });
   if (!user) throw new ApiError("Please sign in to continue", 401);
   if (user.role !== "ADMIN" && user.role !== "MODERATOR" && user.isModerator !== 1) {
+    log.warn("moderator_access_required", { actor: session.userId });
     throw new ApiError("Moderator access required", 403);
   }
   return session;
@@ -170,7 +174,10 @@ export async function moderatePost(session: Session, postId: string, action: str
   }
 
   const post = await db.communityPost.findUnique({ where: { id: postId } });
-  if (!post) throw new ApiError("Post not found", 404);
+  if (!post) {
+    log.warn("moderate_post_not_found", { postId, actor: session.userId });
+    throw new ApiError("Post not found", 404);
+  }
 
   if (action === "delete") {
     await db.communityPost.delete({ where: { id: postId } });
@@ -242,7 +249,10 @@ export async function resolveReport(session: Session, reportId: string, action: 
   }
 
   const report = await db.communityReport.findUnique({ where: { id: reportId } });
-  if (!report) throw new ApiError("Report not found", 404);
+  if (!report) {
+    log.warn("report_not_found", { reportId, actor: session.userId });
+    throw new ApiError("Report not found", 404);
+  }
 
   if (action === "delete_post" && report.postId) {
     await db.communityPost.delete({ where: { id: report.postId } }).catch(() => undefined);
@@ -437,7 +447,10 @@ export function listDocumentTypes() {
 
 export async function addDocumentType(title: string) {
   const titles = await readDocKv();
-  if (titles.includes(title)) throw new ApiError(`Document type "${title}" already exists`, 409);
+  if (titles.includes(title)) {
+    log.warn("document_type_duplicate", { title });
+    throw new ApiError(`Document type "${title}" already exists`, 409);
+  }
   titles.push(title);
   await writeDocKv(titles);
   feedEvent("app.document_types.updated", { action: "add", title });
@@ -446,8 +459,14 @@ export async function addDocumentType(title: string) {
 
 export async function updateDocumentType(id: number, title: string) {
   const titles = await readDocKv();
-  if (id < 0 || id >= titles.length) throw new ApiError("Document type not found", 404);
-  if (titles.includes(title)) throw new ApiError(`Document type "${title}" already exists`, 409);
+  if (id < 0 || id >= titles.length) {
+    log.warn("document_type_not_found", { id });
+    throw new ApiError("Document type not found", 404);
+  }
+  if (titles.includes(title)) {
+    log.warn("document_type_duplicate", { title });
+    throw new ApiError(`Document type "${title}" already exists`, 409);
+  }
   titles[id] = title;
   await writeDocKv(titles);
   feedEvent("app.document_types.updated", { action: "update", id, title });
@@ -456,7 +475,10 @@ export async function updateDocumentType(id: number, title: string) {
 
 export async function deleteDocumentType(id: number) {
   const titles = await readDocKv();
-  if (id < 0 || id >= titles.length) throw new ApiError("Document type not found", 404);
+  if (id < 0 || id >= titles.length) {
+    log.warn("document_type_not_found", { id });
+    throw new ApiError("Document type not found", 404);
+  }
   const [removed] = titles.splice(id, 1);
   await writeDocKv(titles);
   feedEvent("app.document_types.updated", { action: "delete", id });
@@ -484,20 +506,32 @@ export async function listReportReasons(skip: number, take: number) {
 }
 
 export async function addReportReason(title: string) {
-  if (await titleTaken("reportReason", title)) throw new ApiError(`Report reason "${title}" already exists`, 409);
+  if (await titleTaken("reportReason", title)) {
+    log.warn("report_reason_duplicate", { title });
+    throw new ApiError(`Report reason "${title}" already exists`, 409);
+  }
   return db.reportReason.create({ data: { title } });
 }
 
 export async function updateReportReason(id: number, title: string) {
   const row = await db.reportReason.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Report reason not found", 404);
-  if (await titleTaken("reportReason", title, id)) throw new ApiError(`Report reason "${title}" already exists`, 409);
+  if (!row) {
+    log.warn("report_reason_not_found", { id });
+    throw new ApiError("Report reason not found", 404);
+  }
+  if (await titleTaken("reportReason", title, id)) {
+    log.warn("report_reason_duplicate", { title });
+    throw new ApiError(`Report reason "${title}" already exists`, 409);
+  }
   return db.reportReason.update({ where: { id }, data: { title } });
 }
 
 export async function deleteReportReason(id: number) {
   const row = await db.reportReason.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Report reason not found", 404);
+  if (!row) {
+    log.warn("report_reason_not_found", { id });
+    throw new ApiError("Report reason not found", 404);
+  }
   await db.reportReason.delete({ where: { id } });
   return row;
 }
@@ -533,14 +567,20 @@ export async function addUsernameRestrictions(title: string) {
 
 export async function updateUsernameRestriction(id: number, title: string) {
   const row = await db.usernameRestriction.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Username restriction not found", 404);
+  if (!row) {
+    log.warn("username_restriction_not_found", { id });
+    throw new ApiError("Username restriction not found", 404);
+  }
   if (await titleTaken("usernameRestriction", title, id)) throw new ApiError(`Username restriction "${title}" already exists`, 409);
   return db.usernameRestriction.update({ where: { id }, data: { title } });
 }
 
 export async function deleteUsernameRestriction(id: number) {
   const row = await db.usernameRestriction.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Username restriction not found", 404);
+  if (!row) {
+    log.warn("username_restriction_not_found", { id });
+    throw new ApiError("Username restriction not found", 404);
+  }
   await db.usernameRestriction.delete({ where: { id } });
   return row;
 }
@@ -615,9 +655,15 @@ export async function listVerifiedMembers(opts: { q?: string; skip: number; take
 
 export async function resolveVerification(session: Session, userId: string, approve: boolean) {
   const user = await db.user.findUnique({ where: { id: userId } });
-  if (!user) throw new ApiError("Profile not found", 404);
+  if (!user) {
+    log.warn("verification_user_not_found", { userId, actor: session.userId });
+    throw new ApiError("Profile not found", 404);
+  }
   const verification = await db.profileVerification.findFirst({ where: { userId } });
-  if (!verification) throw new ApiError("Record not found", 404);
+  if (!verification) {
+    log.warn("verification_record_not_found", { userId, actor: session.userId });
+    throw new ApiError("Record not found", 404);
+  }
 
   await db.user.update({ where: { id: userId }, data: { isVerified: approve ? 2 : 0 } });
   await db.profileVerification.delete({ where: { id: verification.id } });
@@ -665,13 +711,19 @@ export async function sendAdminNotification(session: Session, title: string, des
 
 export async function updateAdminNotification(id: number, title: string, description: string) {
   const row = await db.adminNotification.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Notification not found", 404);
+  if (!row) {
+    log.warn("admin_notification_not_found", { notificationId: id });
+    throw new ApiError("Notification not found", 404);
+  }
   return db.adminNotification.update({ where: { id }, data: { title, description } });
 }
 
 export async function repeatAdminNotification(session: Session, id: number, title?: string, description?: string) {
   const row = await db.adminNotification.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Notification not found", 404);
+  if (!row) {
+    log.warn("admin_notification_not_found", { notificationId: id, actor: session.userId });
+    throw new ApiError("Notification not found", 404);
+  }
   const t = title?.trim() || row.title;
   const d = description?.trim() || row.description;
   const recipients = await fanOutPush(t, d);
@@ -681,7 +733,10 @@ export async function repeatAdminNotification(session: Session, id: number, titl
 
 export async function deleteAdminNotification(id: number) {
   const row = await db.adminNotification.findUnique({ where: { id } });
-  if (!row) throw new ApiError("Notification not found", 404);
+  if (!row) {
+    log.warn("admin_notification_not_found", { notificationId: id });
+    throw new ApiError("Notification not found", 404);
+  }
   await db.adminNotification.delete({ where: { id } });
   return row;
 }

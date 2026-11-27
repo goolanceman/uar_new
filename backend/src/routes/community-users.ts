@@ -8,6 +8,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   ApiError,
@@ -33,6 +34,8 @@ import {
 } from "@/lib/community/users";
 
 export const router = Router();
+
+const log = logger.child("community-users");
 
 /** Target :id path param — reject missing ids early. */
 function targetId(req: Request): string {
@@ -107,6 +110,10 @@ router.post("/:id/follow", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const follow = await followUser(session.userId, targetId(req));
+    log.info("community_user_followed", {
+      targetId: (req.params as Record<string, string>).id,
+      actor: session.userId,
+    });
     return json(res, { ok: true, following: true, follow });
   } catch (e) {
     return handleError(e, res);
@@ -118,6 +125,10 @@ router.delete("/:id/follow", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const follow = await unfollowUser(session.userId, targetId(req));
+    log.info("community_user_unfollowed", {
+      targetId: (req.params as Record<string, string>).id,
+      actor: session.userId,
+    });
     return json(res, { ok: true, following: false, follow });
   } catch (e) {
     return handleError(e, res);
@@ -153,6 +164,11 @@ router.post("/:id/block", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const blockedUserIds = await blockUser(session.userId, targetId(req));
+    log.info("community_user_blocked", {
+      targetId: (req.params as Record<string, string>).id,
+      count: blockedUserIds.length,
+      actor: session.userId,
+    });
     return json(res, { ok: true, blockedUserIds });
   } catch (e) {
     return handleError(e, res);
@@ -164,6 +180,11 @@ router.delete("/:id/block", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const blockedUserIds = await unblockUser(session.userId, targetId(req));
+    log.info("community_user_unblocked", {
+      targetId: (req.params as Record<string, string>).id,
+      count: blockedUserIds.length,
+      actor: session.userId,
+    });
     return json(res, { ok: true, blockedUserIds });
   } catch (e) {
     return handleError(e, res);
@@ -181,6 +202,11 @@ router.post("/:id/report", async (req, res) => {
       String(body.reason ?? ""),
       String(body.desc ?? "")
     );
+    log.info("community_user_reported", {
+      targetId: (req.params as Record<string, string>).id,
+      reason: String(body.reason ?? ""),
+      actor: session.userId,
+    });
     return json(res, { ok: true, report });
   } catch (e) {
     return handleError(e, res);
@@ -194,17 +220,28 @@ router.post("/:id/moderator-block", async (req, res) => {
   try {
     const session = await requireAuth(req);
     if (!(await isActorModerator(session.userId, session.role))) {
+      log.warn("community_moderator_block_forbidden", { actor: session.userId });
       throw new ApiError("User is not a Moderator", 403);
     }
     const toUserId = targetId(req);
     if (toUserId === session.userId) throw new ApiError("Lol, You can not block yourself", 400);
 
     const toUser = await db.user.findUnique({ where: { id: toUserId } });
-    if (!toUser) throw new ApiError("User not found", 404);
+    if (!toUser) {
+      log.warn("community_moderator_block_not_found", {
+        targetId: toUserId,
+        actor: session.userId,
+      });
+      throw new ApiError("User not found", 404);
+    }
 
     const updated = await db.user.update({ where: { id: toUserId }, data: { isBlock: 1 } });
     await db.communityReport.deleteMany({ where: { userId: toUserId } }); // reports about the user
     await syncPostCommentCounts({ commenterId: toUserId });
+    log.info("community_user_moderator_blocked", {
+      targetId: toUserId,
+      actor: session.userId,
+    });
 
     return json(res, { ok: true, user: communityUser(updated) });
   } catch (e) {

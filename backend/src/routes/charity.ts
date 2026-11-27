@@ -40,6 +40,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError, requireAuth, validateSession, handleError, json } from "@/lib/session";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
@@ -88,6 +89,8 @@ import {
 
 export const router = Router();
 
+const log = logger.child("charity");
+
 type Params = Record<string, string>;
 
 function intParam(raw: string | undefined, label: string): number {
@@ -131,9 +134,13 @@ router.post("/card/verify", async (req, res) => {
     if (cardNumber.length !== 20) throw new ApiError("The card number must be 20 characters.", 400);
 
     const card = await db.charityCard.findUnique({ where: { cardNumber }, include: { user: true } });
-    if (!card) throw new ApiError("Invalid card number", 404);
+    if (!card) {
+      log.warn("card_verify_not_found", { cardNumber });
+      throw new ApiError("Invalid card number", 404);
+    }
 
     if (card.validUntil && card.validUntil.getTime() < Date.now()) {
+      log.debug("card_verify_expired", { cardNumber });
       return json(res, {
         cardNumber: card.cardNumber,
         validUntil: card.validUntil.toISOString().slice(0, 10),
@@ -166,7 +173,10 @@ router.post("/card/share", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const card = await db.charityCard.findUnique({ where: { userId: session.userId } });
-    if (!card) throw new ApiError("Card not found", 404);
+    if (!card) {
+      log.warn("card_share_not_found", { actor: session.userId });
+      throw new ApiError("Card not found", 404);
+    }
 
     const level = card.membershipLevel.charAt(0).toUpperCase() + card.membershipLevel.slice(1);
     const donated = `₹${card.totalDonated.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
@@ -257,6 +267,7 @@ router.post("/points/redeem", async (req, res) => {
       redemptionType,
       description: req.body?.description ? String(req.body.description) : null,
     });
+    log.info("points_redeemed", { actor: session.userId, points, redemptionType });
     return json(res, result);
   } catch (e) {
     return handleError(e, res);
@@ -337,7 +348,9 @@ router.post("/achievements/:id/claim", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const id = intParam((req.params as Params).id, "achievement id");
-    return json(res, await claimAchievement(session.userId, id));
+    const result = await claimAchievement(session.userId, id);
+    log.info("achievement_claimed", { actor: session.userId, achievementId: id });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -372,6 +385,11 @@ router.post("/goals", async (req, res) => {
       startDate: body.startDate != null ? String(body.startDate) : null,
       frequency: body.frequency != null ? String(body.frequency) : null,
       isPublic: body.isPublic === true || body.isPublic === "true" || body.isPublic === 1,
+    });
+    log.info("goal_created", {
+      goalId: goal.id,
+      actor: session.userId,
+      targetAmount: Number(body.targetAmount ?? body.target_amount ?? 0),
     });
     return json(res, goal, 201);
   } catch (e) {
@@ -417,6 +435,7 @@ router.patch("/goals/:id", async (req, res) => {
         : undefined,
       status: body.status !== undefined ? String(body.status) : undefined,
     });
+    log.info("goal_updated", { goalId: (req.params as Params).id, actor: session.userId });
     return json(res, goal);
   } catch (e) {
     return handleError(e, res);
@@ -427,7 +446,10 @@ router.patch("/goals/:id", async (req, res) => {
 router.delete("/goals/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await deleteGoal(session.userId, (req.params as Params).id));
+    const goalId = (req.params as Params).id;
+    const result = await deleteGoal(session.userId, goalId);
+    log.info("goal_deleted", { goalId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -437,7 +459,10 @@ router.delete("/goals/:id", async (req, res) => {
 router.post("/goals/:id/complete", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await completeGoal(session.userId, (req.params as Params).id));
+    const goalId = (req.params as Params).id;
+    const result = await completeGoal(session.userId, goalId);
+    log.info("goal_completed", { goalId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -481,7 +506,9 @@ router.post("/events/check-in", async (req, res) => {
     const eventId = String(body.eventId ?? body.event_id ?? "");
     if (!eventId) throw new ApiError("The event id field is required.", 400);
     const qrCode = body.qrCode != null ? String(body.qrCode) : body.qr_code != null ? String(body.qr_code) : null;
-    return json(res, await checkIn(session.userId, eventId, qrCode));
+    const result = await checkIn(session.userId, eventId, qrCode);
+    log.info("event_checked_in", { eventId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -501,8 +528,11 @@ router.get("/events/:id", async (req, res) => {
 router.post("/events/:id/register", async (req, res) => {
   try {
     const session = await requireAuth(req);
+    const eventId = (req.params as Params).id;
     const notes = req.body?.notes != null ? String(req.body.notes) : null;
-    return json(res, await registerForEvent(session.userId, (req.params as Params).id, notes), 201);
+    const result = await registerForEvent(session.userId, eventId, notes);
+    log.info("event_registered", { eventId, actor: session.userId });
+    return json(res, result, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -512,7 +542,10 @@ router.post("/events/:id/register", async (req, res) => {
 router.post("/events/:id/cancel", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await cancelRegistration(session.userId, (req.params as Params).id));
+    const eventId = (req.params as Params).id;
+    const result = await cancelRegistration(session.userId, eventId);
+    log.info("event_cancelled", { eventId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }

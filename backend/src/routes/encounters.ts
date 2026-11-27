@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("encounters");
 
 const ENCOUNTER_INCLUDE = {
   beneficiary: {
@@ -148,23 +151,34 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true, name: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("encounter_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const campId = String(body?.campId ?? "").trim() || null;
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("encounter_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
 
     const professional = await db.healthProfessional.findUnique({
       where: { userId: session.userId },
       select: { id: true, name: true, kind: true },
     });
-    if (!professional)
+    if (!professional) {
+      log.warn("encounter_no_professional_profile", { actor: session.userId });
       throw new ApiError(
         "No health-professional profile is linked to your account — ask an admin to create a DOCTOR profile for you",
         403
       );
+    }
 
     const encounter = await db.encounter.create({
       data: {
@@ -180,6 +194,15 @@ router.post("/", async (req, res) => {
         followUpDate: optDate(body?.followUpDate),
       },
       include: ENCOUNTER_INCLUDE,
+    });
+
+    log.info("encounter_created", {
+      encounterId: encounter.id,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      doctorId: professional.id,
+      status: encounter.status,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -255,7 +278,10 @@ router.patch("/:id", async (req, res) => {
       where: { id },
       include: { doctor: { select: { id: true, userId: true, name: true } } },
     });
-    if (!existing) throw new ApiError("Encounter not found", 404);
+    if (!existing) {
+      log.warn("encounter_update_not_found", { encounterId: id, actor: session.userId });
+      throw new ApiError("Encounter not found", 404);
+    }
 
     const isOwner = session.role === "DOCTOR" && existing.doctor.userId === session.userId;
     const isAdmin = session.role === "ADMIN";
@@ -276,19 +302,36 @@ router.patch("/:id", async (req, res) => {
     if (body?.followUpDate !== undefined) data.followUpDate = optDate(body.followUpDate);
 
     if (existing.status === "DRAFT") {
-      if (!isOwner && !isAdmin)
+      if (!isOwner && !isAdmin) {
+        log.warn("encounter_update_forbidden", {
+          encounterId: id,
+          status: existing.status,
+          actor: session.userId,
+        });
         throw new ApiError("Only the owning doctor can edit this draft encounter", 403);
+      }
       if (Object.keys(data).length === 0) throw new ApiError("Nothing to update", 400);
     } else {
       // SIGNED — amendment path only.
       const note = body?.amendment ?? body?.amendmentNote;
-      if (note === undefined || String(note).trim() === "")
+      if (note === undefined || String(note).trim() === "") {
+        log.warn("encounter_amendment_required", {
+          encounterId: id,
+          status: existing.status,
+          actor: session.userId,
+        });
         throw new ApiError(
           'Signed encounters are immutable — send { amendment: "why + what changed" } with the corrected fields to record an amendment',
           409
         );
-      if (!isOwner && !isAdmin)
+      }
+      if (!isOwner && !isAdmin) {
+        log.warn("encounter_amend_forbidden", {
+          encounterId: id,
+          actor: session.userId,
+        });
         throw new ApiError("Only the owning doctor (or an admin) can amend this encounter", 403);
+      }
 
       const history = parseAmendments(existing.amendments);
       history.push({
@@ -304,6 +347,16 @@ router.patch("/:id", async (req, res) => {
       data,
       include: ENCOUNTER_INCLUDE_DETAIL,
     });
+
+    log.info(
+      existing.status === "SIGNED" ? "encounter_amended" : "encounter_updated",
+      {
+        encounterId: id,
+        status: existing.status,
+        fields: Object.keys(data).filter((k) => k !== "amendments"),
+        actor: session.userId,
+      }
+    );
 
     await logActivity(
       session.name,
@@ -331,14 +384,27 @@ router.post("/:id/sign", async (req, res) => {
       where: { id },
       include: { doctor: { select: { userId: true, name: true } } },
     });
-    if (!existing) throw new ApiError("Encounter not found", 404);
+    if (!existing) {
+      log.warn("encounter_sign_not_found", { encounterId: id, actor: session.userId });
+      throw new ApiError("Encounter not found", 404);
+    }
 
     const isOwner = session.role === "DOCTOR" && existing.doctor.userId === session.userId;
-    if (!isOwner && session.role !== "ADMIN")
+    if (!isOwner && session.role !== "ADMIN") {
+      log.warn("encounter_sign_forbidden", {
+        encounterId: id,
+        actor: session.userId,
+      });
       throw new ApiError("Only the owning doctor can sign this encounter", 403);
+    }
 
-    if (existing.status === "SIGNED")
+    if (existing.status === "SIGNED") {
+      log.warn("encounter_sign_duplicate", {
+        encounterId: id,
+        actor: session.userId,
+      });
       throw new ApiError("Encounter is already signed", 409);
+    }
 
     if (!existing.diagnosis?.trim() && !existing.observations?.trim())
       throw new ApiError("Add a diagnosis or observations before signing", 400);
@@ -351,6 +417,13 @@ router.post("/:id/sign", async (req, res) => {
         signedByName: session.name,
       },
       include: ENCOUNTER_SIGN_INCLUDE,
+    });
+
+    log.info("encounter_signed", {
+      encounterId: encounter.id,
+      beneficiaryId: encounter.beneficiaryId,
+      doctorId: encounter.doctorId,
+      actor: session.userId,
     });
 
     await logActivity(

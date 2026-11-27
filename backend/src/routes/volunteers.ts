@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import {
 import { setUserStatus } from "@/lib/user-status";
 
 export const router = Router();
+
+const log = logger.child("volunteers");
 
 const TASK_TYPES = ["DISTRIBUTION", "KIT_SCAN", "INVENTORY", "EVENT", "RESCUE", "AMBULANCE"];
 const TASK_STATUSES = ["ASSIGNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
@@ -199,10 +202,18 @@ router.patch("/:id", async (req, res) => {
     const body = { ...(req.body ?? {}) };
 
     const existing = await db.volunteer.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Volunteer not found", 404);
+    if (!existing) {
+      log.warn("volunteer_update_not_found", { volunteerId: id, actor: session.userId });
+      throw new ApiError("Volunteer not found", 404);
+    }
     if (session.role === "VOLUNTEER") {
-      if (existing.userId !== session.userId)
+      if (existing.userId !== session.userId) {
+        log.warn("volunteer_update_forbidden", {
+          volunteerId: id,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
       delete body.status;
       delete body.assignedArea;
     }
@@ -229,6 +240,12 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const volunteer = await db.volunteer.update({ where: { id }, data });
+    log.info("volunteer_updated", {
+      volunteerId: id,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: data.status } : {}),
+      actor: session.userId,
+    });
 
     // Mirror account-level status on the linked user row through the shared
     // User-status owner (single source of truth for sign-in gates):

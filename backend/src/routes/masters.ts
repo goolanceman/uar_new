@@ -12,9 +12,12 @@ import {
   ApiError,
   logActivity,
 } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("masters");
 
 // GET /api/masters
 //   ?categories=1  → distinct category strings (orderBy category)
@@ -86,6 +89,15 @@ router.post("/", async (req, res) => {
       create: { category, value, label, sortOrder },
     });
 
+    log.info("master_upserted", {
+      masterId: row.id,
+      category,
+      value,
+      label,
+      sortOrder,
+      active: row.active,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "MASTER_UPSERT",
@@ -108,7 +120,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body as Record<string, unknown>;
 
     const existing = await db.master.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Master entry not found", 404);
+    if (!existing) {
+      log.warn("master_update_not_found", { masterId: id, actor: session.userId });
+      throw new ApiError("Master entry not found", 404);
+    }
 
     const data: Prisma.MasterUpdateInput = {};
     if (body.label !== undefined) data.label = String(body.label).trim();
@@ -122,16 +137,31 @@ router.patch("/:id", async (req, res) => {
         const clash = await db.master.findUnique({
           where: { category_value: { category: existing.category, value } },
         });
-        if (clash)
+        if (clash) {
+          log.warn("master_value_conflict", {
+            masterId: id,
+            category: existing.category,
+            value,
+            existingId: clash.id,
+            actor: session.userId,
+          });
           throw new ApiError(
             "A master entry with this value already exists in the category",
             409
           );
+        }
       }
       data.value = value;
     }
 
     const row = await db.master.update({ where: { id }, data });
+    log.info("master_updated", {
+      masterId: id,
+      category: row.category,
+      value: row.value,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "MASTER_UPDATE",
@@ -152,9 +182,18 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const row = await db.master.findUnique({ where: { id } });
-    if (!row) throw new ApiError("Master entry not found", 404);
+    if (!row) {
+      log.warn("master_delete_not_found", { masterId: id, actor: session.userId });
+      throw new ApiError("Master entry not found", 404);
+    }
 
     await db.master.delete({ where: { id } });
+    log.info("master_deleted", {
+      masterId: id,
+      category: row.category,
+      value: row.value,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "MASTER_DELETE",

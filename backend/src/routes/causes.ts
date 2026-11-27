@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -27,6 +28,8 @@ import {
 } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("causes");
 
 const CONDITIONS = ["BP", "DIABETES", "THYROID", "CARDIAC", "ASTHMA", "ARTHRITIS", "OTHER"];
 
@@ -173,6 +176,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("cause_created", {
+      causeId: cause.id,
+      code: cause.code,
+      condition,
+      monthlyCost,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "CAUSE_CREATE",
@@ -212,7 +223,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.cause.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Cause not found", 404);
+    if (!existing) {
+      log.warn("cause_update_not_found", { causeId: id, actor: session.userId });
+      throw new ApiError("Cause not found", 404);
+    }
 
     const data: Prisma.CauseUpdateInput = {};
     if (body.patientName !== undefined)
@@ -235,6 +249,13 @@ router.patch("/:id", async (req, res) => {
     }
 
     await db.cause.update({ where: { id }, data });
+    log.info("cause_updated", {
+      causeId: id,
+      code: existing.code,
+      fields: Object.keys(data),
+      ...(data.status ? { newStatus: data.status } : {}),
+      actor: session.userId,
+    });
 
     // If admin did not force a status, recompute it from the ACTIVE pledges.
     const cause = statusProvided
@@ -264,10 +285,18 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.cause.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Cause not found", 404);
+    if (!existing) {
+      log.warn("cause_delete_not_found", { causeId: id, actor: session.userId });
+      throw new ApiError("Cause not found", 404);
+    }
 
     await db.pledge.deleteMany({ where: { causeId: id } });
     await db.cause.delete({ where: { id } });
+    log.info("cause_deleted", {
+      causeId: id,
+      code: existing.code,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -298,7 +327,10 @@ router.post("/:id/pledges", async (req, res) => {
       throw new ApiError("months must be at least 1", 400);
 
     const cause = await db.cause.findUnique({ where: { id } });
-    if (!cause) throw new ApiError("Cause not found", 404);
+    if (!cause) {
+      log.warn("cause_pledge_not_found", { causeId: id, actor: session?.userId ?? null });
+      throw new ApiError("Cause not found", 404);
+    }
 
     const donorName =
       String(body.donorName ?? "").trim() || session?.name || "Anonymous Donor";
@@ -326,6 +358,13 @@ router.post("/:id/pledges", async (req, res) => {
     });
 
     const updatedCause = await recomputeCause(id);
+    log.info("cause_pledge_created", {
+      pledgeId: pledge.id,
+      causeCode: cause.code,
+      amountPerMonth,
+      months,
+      actor: session?.userId ?? null,
+    });
     await logActivity(
       session?.name ?? donorName,
       "PLEDGE",

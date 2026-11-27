@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import { nextLabCode } from "@/lib/health-codes";
 import { LAB_ORDER_NEXT } from "@/lib/lab-orders";
 
 export const router = Router();
+
+const log = logger.child("lab-orders");
 
 function pageParams(url: URL, defLimit = 50) {
   const page = Math.max(1, Math.trunc(Number(url.searchParams.get("page")) || 1));
@@ -101,7 +104,13 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("lab_order_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const testName = optText(body?.testName);
     if (!testName) throw new ApiError("testName is required", 400);
@@ -109,12 +118,21 @@ router.post("/", async (req, res) => {
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("lab_order_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
     const encounterId = optText(body?.encounterId);
     if (encounterId) {
       const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-      if (!enc) throw new ApiError("Encounter not found", 404);
+      if (!enc) {
+        log.warn("lab_order_encounter_not_found", {
+          encounterId,
+          actor: session.userId,
+        });
+        throw new ApiError("Encounter not found", 404);
+      }
     }
 
     const code = await nextLabCode();
@@ -129,6 +147,15 @@ router.post("/", async (req, res) => {
         orderedByName: session.name,
       },
       include: ORDER_INCLUDE,
+    });
+
+    log.info("lab_order_created", {
+      orderId: order.id,
+      code: order.code,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      ...(encounterId ? { encounterId } : {}),
+      actor: session.userId,
     });
 
     await logActivity(
@@ -171,7 +198,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.diagnosticOrder.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Lab order not found", 404);
+    if (!existing) {
+      log.warn("lab_order_update_not_found", { orderId: id, actor: session.userId });
+      throw new ApiError("Lab order not found", 404);
+    }
 
     const isAdmin = session.role === "ADMIN";
     const isLabTech = session.role === "LAB_TECH";
@@ -185,8 +215,13 @@ router.patch("/:id", async (req, res) => {
       const resultFileUrl = optText(body?.resultFileUrl);
       if (resultFileUrl && !FILE_URL_RE.test(resultFileUrl))
         throw new ApiError("resultFileUrl must be a /api/files/:id/file URL or an https URL", 400);
-      if (!isLabTech && !isAdmin)
+      if (!isLabTech && !isAdmin) {
+        log.warn("lab_order_result_file_forbidden", {
+          orderId: id,
+          actor: session.userId,
+        });
         throw new ApiError("Only lab staff (or an admin) can attach result files", 403);
+      }
       if (resultFileUrl !== null) data.resultFileUrl = resultFileUrl;
     }
 
@@ -194,23 +229,53 @@ router.patch("/:id", async (req, res) => {
     if (body?.status !== undefined && String(body.status) !== existing.status) {
       const target = String(body.status);
       const expected = LAB_ORDER_NEXT[existing.status];
-      if (!expected)
+      if (!expected) {
+        log.warn("lab_order_transition_terminal", {
+          orderId: id,
+          code: existing.code,
+          status: existing.status,
+          actor: session.userId,
+        });
         throw new ApiError(
           `Lab order ${existing.code} is already ${existing.status} — no further transitions`,
           409
         );
-      if (target !== expected)
+      }
+      if (target !== expected) {
+        log.warn("lab_order_invalid_transition", {
+          orderId: id,
+          code: existing.code,
+          from: existing.status,
+          to: target,
+          expected,
+          actor: session.userId,
+        });
         throw new ApiError(
           `Invalid transition ${existing.status} → ${target}. Expected ${existing.status} → ${expected}`,
           409
         );
+      }
       if (target === "DOCTOR_REVIEWED") {
-        if (!isDoctor && !isAdmin)
+        if (!isDoctor && !isAdmin) {
+          log.warn("lab_order_review_forbidden", {
+            orderId: id,
+            code: existing.code,
+            to: target,
+            actor: session.userId,
+          });
           throw new ApiError("Only a doctor (or an admin) can mark a result DOCTOR_REVIEWED", 403);
+        }
         data.reviewedAt = new Date();
       } else {
-        if (!isLabTech && !isAdmin)
+        if (!isLabTech && !isAdmin) {
+          log.warn("lab_order_transition_forbidden", {
+            orderId: id,
+            code: existing.code,
+            to: target,
+            actor: session.userId,
+          });
           throw new ApiError(`Only lab staff (or an admin) can move an order to ${target}`, 403);
+        }
         if (target === "SAMPLE_COLLECTED") data.collectedAt = new Date();
         if (target === "VERIFIED") {
           data.verifiedAt = new Date();
@@ -228,8 +293,14 @@ router.patch("/:id", async (req, res) => {
 
     // ── critical flag (DOCTOR | ADMIN) ─────────────────────────────────────
     if (body?.critical !== undefined) {
-      if (!isDoctor && !isAdmin)
+      if (!isDoctor && !isAdmin) {
+        log.warn("lab_order_critical_forbidden", {
+          orderId: id,
+          code: existing.code,
+          actor: session.userId,
+        });
         throw new ApiError("Only a doctor (or an admin) can flag a result critical", 403);
+      }
       data.critical = Boolean(body.critical);
     }
 
@@ -242,6 +313,16 @@ router.patch("/:id", async (req, res) => {
       );
 
     const order = await db.diagnosticOrder.update({ where: { id }, data, include: ORDER_INCLUDE });
+
+    log.info("lab_order_updated", {
+      orderId: id,
+      code: existing.code,
+      ...(data.status !== undefined
+        ? { from: existing.status, to: String(data.status) }
+        : { fields: Object.keys(data) }),
+      ...(data.critical !== undefined ? { critical: data.critical } : {}),
+      actor: session.userId,
+    });
 
     const changed = data.status !== undefined;
     await logActivity(

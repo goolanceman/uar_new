@@ -7,10 +7,13 @@
  */
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { communityAuthor, communityUser } from "@/lib/community/serializers";
 import { saveCommunityUpload, isActorModerator } from "@/lib/community/posts";
 import { feedEvent } from "@/lib/community/push";
+
+const log = logger.child("community:stories");
 
 const STORY_INCLUDE = { user: true } satisfies Prisma.CommunityStoryInclude;
 
@@ -97,7 +100,10 @@ export async function createStory(
 /** POST /api/stories/:id/view — append the viewer id to the CSV (viewStory). */
 export async function viewStory(meId: string, storyId: string) {
   const story = await db.communityStory.findUnique({ where: { id: storyId } });
-  if (!story) throw new ApiError("Story not found", 404);
+  if (!story) {
+    log.warn("story_view_not_found", { storyId, actor: meId });
+    throw new ApiError("Story not found", 404);
+  }
 
   const viewed = (story.viewByUserIds ?? "").split(",").map((s) => s.trim());
   if (viewed.includes(meId)) return serializeStory(story);
@@ -113,8 +119,12 @@ export async function viewStory(meId: string, storyId: string) {
 export async function deleteStory(meId: string, role: string | undefined, storyId: string) {
   const moderator = await isActorModerator(meId, role);
   const story = await db.communityStory.findUnique({ where: { id: storyId } });
-  if (!story) throw new ApiError("Story not found", 404);
+  if (!story) {
+    log.warn("story_delete_not_found", { storyId, actor: meId });
+    throw new ApiError("Story not found", 404);
+  }
   if (story.userId !== meId && !moderator) {
+    log.warn("story_delete_not_owner", { storyId, actor: meId, moderator });
     throw new ApiError("You do not have permission for this action", 403);
   }
 
@@ -135,8 +145,12 @@ export interface UpdateStoryInput {
 export async function updateStory(meId: string, role: string | undefined, storyId: string, input: UpdateStoryInput) {
   const moderator = await isActorModerator(meId, role);
   const story = await db.communityStory.findUnique({ where: { id: storyId } });
-  if (!story) throw new ApiError("Story not found", 404);
+  if (!story) {
+    log.warn("story_update_not_found", { storyId, actor: meId });
+    throw new ApiError("Story not found", 404);
+  }
   if (story.userId !== meId && !moderator) {
+    log.warn("story_update_not_owner", { storyId, actor: meId, moderator });
     throw new ApiError("You do not have permission for this action", 403);
   }
 

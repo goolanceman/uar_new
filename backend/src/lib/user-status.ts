@@ -1,5 +1,8 @@
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError, logActivity } from "@/lib/session";
+
+const log = logger.child("user-status");
 
 /**
  * User account status — single owner of all User.status writes.
@@ -33,10 +36,14 @@ export async function setUserStatus(
     where: { id: userId },
     select: { id: true, name: true, status: true },
   });
-  if (!user) throw new ApiError("User not found", 404);
+  if (!user) {
+    log.warn("user_status_not_found", { userId, to: target });
+    throw new ApiError("User not found", 404);
+  }
 
   if (user.status === target) {
     // Same status — still honour an explicit isActive correction if provided.
+    log.debug("user_status_unchanged", { userId, status: target });
     if (opts.isActive !== undefined)
       await db.user.update({ where: { id: userId }, data: { isActive: opts.isActive } });
     return { id: userId, status: target, changed: false };
@@ -45,6 +52,12 @@ export async function setUserStatus(
   const data: { status: string; isActive?: boolean } = { status: target };
   if (opts.isActive !== undefined) data.isActive = opts.isActive;
   await db.user.update({ where: { id: userId }, data });
+  log.info("user_status_changed", {
+    userId,
+    from: user.status,
+    to: target,
+    actor: opts.actorId ?? userId,
+  });
 
   await logActivity(
     opts.actorName ?? "system",

@@ -6,6 +6,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -20,6 +21,8 @@ import { BRAND_MARK_DATA_URI } from "@/lib/brand-mark";
 import { formatDateLong, formatDateTime } from "@/lib/format";
 
 export const router = Router();
+
+const log = logger.child("prescriptions");
 
 const VALID_STATUSES = ["DRAFT", "SIGNED", "PARTIALLY_DISPENSED", "FULLY_DISPENSED", "CANCELLED"];
 
@@ -183,17 +186,32 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true, name: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("prescription_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const encounterId = optText(body?.encounterId);
     if (encounterId) {
       const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-      if (!enc) throw new ApiError("Encounter not found", 404);
+      if (!enc) {
+        log.warn("prescription_encounter_not_found", {
+          encounterId,
+          actor: session.userId,
+        });
+        throw new ApiError("Encounter not found", 404);
+      }
     }
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("prescription_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
 
     const items = validateItems(body?.items);
@@ -202,11 +220,13 @@ router.post("/", async (req, res) => {
       where: { userId: session.userId },
       select: { id: true, name: true },
     });
-    if (!professional)
+    if (!professional) {
+      log.warn("prescription_no_professional_profile", { actor: session.userId });
       throw new ApiError(
         "No health-professional profile is linked to your account — ask an admin to create a DOCTOR profile for you",
         403
       );
+    }
 
     const code = await nextRxCode();
     const prescription = await db.prescription.create({
@@ -222,6 +242,15 @@ router.post("/", async (req, res) => {
         items: { create: items },
       },
       include: RX_INCLUDE,
+    });
+
+    log.info("prescription_created", {
+      prescriptionId: prescription.id,
+      code: prescription.code,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      itemCount: items.length,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -276,12 +305,31 @@ router.patch("/:id", async (req, res) => {
 
     // ── cancel ────────────────────────────────────────────────────────────
     if (body?.status === "CANCELLED") {
-      if (existing.status === "FULLY_DISPENSED")
+      if (existing.status === "FULLY_DISPENSED") {
+        log.warn("prescription_cancel_blocked_dispensed", {
+          prescriptionId: id,
+          code: existing.code,
+          status: existing.status,
+          actor: session.userId,
+        });
         throw new ApiError("Fully dispensed prescriptions cannot be cancelled", 409);
-      if (existing.status === "CANCELLED")
+      }
+      if (existing.status === "CANCELLED") {
+        log.warn("prescription_cancel_duplicate", {
+          prescriptionId: id,
+          code: existing.code,
+          actor: session.userId,
+        });
         throw new ApiError("Prescription is already cancelled", 409);
-      if (!isOwner && !isAdmin)
+      }
+      if (!isOwner && !isAdmin) {
+        log.warn("prescription_cancel_forbidden", {
+          prescriptionId: id,
+          code: existing.code,
+          actor: session.userId,
+        });
         throw new ApiError("Only the prescribing doctor (or an admin) can cancel this prescription", 403);
+      }
       const cancelReason = optText(body?.cancelReason);
       if (!cancelReason) throw new ApiError("cancelReason is required to cancel a prescription", 400);
 
@@ -289,6 +337,12 @@ router.patch("/:id", async (req, res) => {
         where: { id },
         data: { status: "CANCELLED", cancelReason },
         include: RX_INCLUDE,
+      });
+      log.info("prescription_cancelled", {
+        prescriptionId: id,
+        code: existing.code,
+        previousStatus: existing.status,
+        actor: session.userId,
       });
       await logActivity(
         session.name,
@@ -301,10 +355,23 @@ router.patch("/:id", async (req, res) => {
     }
 
     // ── edit (DRAFT only) ─────────────────────────────────────────────────
-    if (existing.status !== "DRAFT")
+    if (existing.status !== "DRAFT") {
+      log.warn("prescription_edit_blocked_signed", {
+        prescriptionId: id,
+        code: existing.code,
+        status: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError("Signed prescriptions are immutable — create a new prescription or cancel this one", 409);
-    if (!isOwner && !isAdmin)
+    }
+    if (!isOwner && !isAdmin) {
+      log.warn("prescription_edit_forbidden", {
+        prescriptionId: id,
+        code: existing.code,
+        actor: session.userId,
+      });
       throw new ApiError("Only the prescribing doctor can edit this draft prescription", 403);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.diagnosis !== undefined) data.diagnosis = optText(body.diagnosis);
@@ -313,7 +380,14 @@ router.patch("/:id", async (req, res) => {
       const encounterId = optText(body.encounterId);
       if (encounterId) {
         const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-        if (!enc) throw new ApiError("Encounter not found", 404);
+        if (!enc) {
+          log.warn("prescription_encounter_not_found", {
+            encounterId,
+            prescriptionId: id,
+            actor: session.userId,
+          });
+          throw new ApiError("Encounter not found", 404);
+        }
       }
       data.encounterId = encounterId;
     }
@@ -322,6 +396,12 @@ router.patch("/:id", async (req, res) => {
     if (Object.keys(data).length === 0) throw new ApiError("Nothing to update", 400);
 
     const rx = await db.prescription.update({ where: { id }, data, include: RX_INCLUDE });
+    log.info("prescription_updated", {
+      prescriptionId: id,
+      code: existing.code,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "RX_UPDATE",
@@ -367,13 +447,23 @@ router.post("/:id/dispense", async (req, res) => {
         beneficiary: { select: { code: true, name: true } },
       },
     });
-    if (!existing) throw new ApiError("Prescription not found", 404);
+    if (!existing) {
+      log.warn("prescription_dispense_not_found", { prescriptionId: id, actor: session.userId });
+      throw new ApiError("Prescription not found", 404);
+    }
 
-    if (existing.status !== "SIGNED" && existing.status !== "PARTIALLY_DISPENSED")
+    if (existing.status !== "SIGNED" && existing.status !== "PARTIALLY_DISPENSED") {
+      log.warn("prescription_dispense_blocked_status", {
+        prescriptionId: id,
+        code: existing.code,
+        status: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError(
         `Prescription must be SIGNED before dispensing (current status: ${existing.status})`,
         409
       );
+    }
 
     // ── validate lines against the prescription + already-dispensed totals ──
     const itemById = new Map(existing.items.map((it) => [it.id, it]));
@@ -409,7 +499,14 @@ router.post("/:id/dispense", async (req, res) => {
           where: { id: inventoryItemId },
           select: { id: true, name: true },
         });
-        if (!inv) throw new ApiError(`Inventory item not found for dispenses[${i}]`, 404);
+        if (!inv) {
+          log.warn("prescription_dispense_inventory_not_found", {
+            prescriptionId: id,
+            inventoryItemId,
+            actor: session.userId,
+          });
+          throw new ApiError(`Inventory item not found for dispenses[${i}]`, 404);
+        }
       }
 
       lines.push({
@@ -434,6 +531,12 @@ router.post("/:id/dispense", async (req, res) => {
             const inv = await tx.inventoryItem.findUnique({
               where: { id: line.inventoryItemId },
               select: { name: true },
+            });
+            log.warn("prescription_dispense_insufficient_stock", {
+              prescriptionId: existing.id,
+              code: existing.code,
+              inventoryItemId: line.inventoryItemId,
+              actor: session.userId,
             });
             throw new ApiError(`Insufficient stock for ${inv?.name ?? "inventory item"}`, 409);
           }
@@ -496,6 +599,14 @@ router.post("/:id/dispense", async (req, res) => {
       });
     });
 
+    log.info("prescription_dispensed", {
+      prescriptionId: existing.id,
+      code: existing.code,
+      lines: lines.length,
+      newStatus: updated.status,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "RX_DISPENSE",
@@ -524,14 +635,30 @@ router.post("/:id/sign", async (req, res) => {
         items: { select: { id: true } },
       },
     });
-    if (!existing) throw new ApiError("Prescription not found", 404);
+    if (!existing) {
+      log.warn("prescription_sign_not_found", { prescriptionId: id, actor: session.userId });
+      throw new ApiError("Prescription not found", 404);
+    }
 
     const isOwner = session.role === "DOCTOR" && existing.doctor.userId === session.userId;
-    if (!isOwner && session.role !== "ADMIN")
+    if (!isOwner && session.role !== "ADMIN") {
+      log.warn("prescription_sign_forbidden", {
+        prescriptionId: id,
+        code: existing.code,
+        actor: session.userId,
+      });
       throw new ApiError("Only the prescribing doctor can sign this prescription", 403);
+    }
 
-    if (existing.status !== "DRAFT")
+    if (existing.status !== "DRAFT") {
+      log.warn("prescription_sign_blocked_status", {
+        prescriptionId: id,
+        code: existing.code,
+        status: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Only DRAFT prescriptions can be signed (current status: ${existing.status})`, 409);
+    }
 
     if (existing.items.length === 0)
       throw new ApiError("Add at least one medicine before signing", 400);
@@ -544,6 +671,13 @@ router.post("/:id/sign", async (req, res) => {
         signedByName: session.name,
       },
       include: RX_INCLUDE,
+    });
+
+    log.info("prescription_signed", {
+      prescriptionId: id,
+      code: existing.code,
+      itemCount: existing.items.length,
+      actor: session.userId,
     });
 
     await logActivity(

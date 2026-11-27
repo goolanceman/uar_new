@@ -16,6 +16,7 @@
 import crypto from "crypto";
 import { Router, type Request } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError, json, handleError, logActivity } from "@/lib/session";
 import { gatewayConfig, loadSettings, type GatewayConfig } from "@/lib/notify";
 import { getCurrency } from "@/lib/settings-core";
@@ -25,6 +26,8 @@ import { settleDonationCommitments } from "@/lib/recurring";
 import { invalidateCampaigns, invalidateStats } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("payments");
 
 const HTTP_TIMEOUT_MS = 15_000;
 
@@ -93,24 +96,63 @@ router.post("/", async (req, res) => {
     if (!receiptNumber) throw new ApiError("A donation receipt number is required", 400);
 
     const donation = await db.donation.findUnique({ where: { receiptNumber } });
-    if (!donation) throw new ApiError("No donation found for this receipt number", 404);
-    if (donation.paymentStatus === "COMPLETED")
+    if (!donation) {
+      log.warn("payment_order_not_found", { receiptNumber });
+      throw new ApiError("No donation found for this receipt number", 404);
+    }
+    if (donation.paymentStatus === "COMPLETED") {
+      log.warn("payment_order_already_paid", {
+        donationId: donation.id,
+        receiptNumber,
+        paymentStatus: donation.paymentStatus,
+      });
       throw new ApiError("This donation has already been paid — no further payment is due.", 400);
-    if (donation.paymentStatus !== "PENDING")
+    }
+    if (donation.paymentStatus !== "PENDING") {
+      log.warn("payment_order_blocked", {
+        donationId: donation.id,
+        receiptNumber,
+        paymentStatus: donation.paymentStatus,
+        method: donation.paymentMethod,
+      });
       throw new ApiError(`This donation cannot be paid online right now (status: ${donation.paymentStatus}).`, 400);
-    if (!GATEWAY_METHODS.has(donation.paymentMethod))
+    }
+    if (!GATEWAY_METHODS.has(donation.paymentMethod)) {
+      log.warn("payment_order_blocked", {
+        donationId: donation.id,
+        receiptNumber,
+        method: donation.paymentMethod,
+      });
       throw new ApiError("This donation is not set up for online gateway payment.", 400);
+    }
 
     const cfg = gatewayConfig(await loadSettings());
-    if (!cfg.enabled)
+    if (!cfg.enabled) {
+      log.warn("payment_order_blocked", {
+        donationId: donation.id,
+        receiptNumber,
+        reason: "gateway_disabled",
+      });
       throw new ApiError("Online payments are currently disabled. Please use UPI or pay offline.", 400);
-    if (cfg.provider === "PAYU")
+    }
+    if (cfg.provider === "PAYU") {
+      log.warn("payment_order_blocked", {
+        donationId: donation.id,
+        receiptNumber,
+        reason: "provider_not_configured",
+      });
       throw new ApiError("PayU online checkout is not configured — use Razorpay, Stripe or Cashfree.", 400);
+    }
     requireCredentials(cfg);
 
     const amount = smallestUnit(donation.amount, donation.currency);
 
     if (cfg.provider === "RAZORPAY") {
+      log.debug("payment_order_razorpay_attempt", {
+        donationId: donation.id,
+        receiptNumber: donation.receiptNumber,
+        amount,
+      });
       const order = (await providerFetch("Razorpay", "https://api.razorpay.com/v1/orders", {
         method: "POST",
         headers: {
@@ -129,6 +171,12 @@ router.post("/", async (req, res) => {
         where: { id: donation.id },
         data: { gatewayOrderId: order.id, paymentProvider: "RAZORPAY" },
       });
+      log.info("payment_order_created", {
+        donationId: donation.id,
+        receiptNumber: donation.receiptNumber,
+        provider: "RAZORPAY",
+        orderId: order.id,
+      });
       await logActivity(
         donation.donorName,
         "PAYMENT_ORDER_CREATED",
@@ -146,6 +194,11 @@ router.post("/", async (req, res) => {
     }
 
     if (cfg.provider === "STRIPE") {
+      log.debug("payment_order_stripe_attempt", {
+        donationId: donation.id,
+        receiptNumber: donation.receiptNumber,
+        amount,
+      });
       // The SPA is hash-routed (#/donate), so the session id must land in
       // location.search BEFORE the fragment for the donate page to pick it
       // up on return (Stripe appends query params before the #).
@@ -176,6 +229,12 @@ router.post("/", async (req, res) => {
         where: { id: donation.id },
         data: { gatewayOrderId: session.id, paymentProvider: "STRIPE" },
       });
+      log.info("payment_order_created", {
+        donationId: donation.id,
+        receiptNumber: donation.receiptNumber,
+        provider: "STRIPE",
+        orderId: session.id,
+      });
       await logActivity(
         donation.donorName,
         "PAYMENT_ORDER_CREATED",
@@ -187,6 +246,12 @@ router.post("/", async (req, res) => {
 
     // CASHFREE — order_amount stays in major units (Cashfree is not subunit-based)
     const base = cfg.testMode ? "https://sandbox.cashfree.com" : "https://api.cashfree.com";
+    log.debug("payment_order_cashfree_attempt", {
+      donationId: donation.id,
+      receiptNumber: donation.receiptNumber,
+      amount,
+      testMode: cfg.testMode,
+    });
     const order = (await providerFetch("Cashfree", `${base}/pg/orders`, {
       method: "POST",
       headers: {
@@ -211,6 +276,12 @@ router.post("/", async (req, res) => {
     await db.donation.update({
       where: { id: donation.id },
       data: { gatewayOrderId: order.order_id, paymentProvider: "CASHFREE" },
+    });
+    log.info("payment_order_created", {
+      donationId: donation.id,
+      receiptNumber: donation.receiptNumber,
+      provider: "CASHFREE",
+      orderId: order.order_id,
     });
     await logActivity(
       donation.donorName,
@@ -338,6 +409,12 @@ async function settleCompleted(
       "DONATION",
       `${donation.receiptNumber} · ${patch.paymentProvider} payment ${patch.transactionId ?? ""}`
     );
+    log.info("payment_settled", {
+      donationId: donation.id,
+      receiptNumber: donation.receiptNumber,
+      amount: donation.amount,
+      provider: patch.paymentProvider,
+    });
   }
   const fresh = await db.donation.findUniqueOrThrow({ where: { id: donation.id } });
   if (settledNow) {
@@ -383,26 +460,42 @@ router.post("/verify", async (req, res) => {
   try {
     const body = req.body ?? {};
     const cfg = gatewayConfig(await loadSettings());
-    if (!cfg.enabled)
+    if (!cfg.enabled) {
+      log.warn("payment_verify_blocked", { reason: "gateway_disabled" });
       throw new ApiError("Online payments are currently disabled. Please use UPI or pay offline.", 400);
+    }
 
     /* ── Razorpay: { razorpay_order_id, razorpay_payment_id, razorpay_signature } ── */
     if (body?.razorpay_order_id && body?.razorpay_payment_id && body?.razorpay_signature) {
-      if (cfg.provider !== "RAZORPAY")
+      if (cfg.provider !== "RAZORPAY") {
+        log.warn("payment_verify_provider_mismatch", { requested: "RAZORPAY", configured: cfg.provider });
         throw new ApiError("Razorpay verification is unavailable — the configured gateway is another provider.", 400);
-      if (!cfg.keySecret)
+      }
+      if (!cfg.keySecret) {
+        log.warn("payment_verify_not_configured", { provider: "RAZORPAY" });
         throw new ApiError("Razorpay key secret is not configured — payment verification is impossible.", 400);
+      }
 
       const orderId = String(body.razorpay_order_id);
       const paymentId = String(body.razorpay_payment_id);
       const signature = String(body.razorpay_signature);
 
       const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
-      if (!donation) throw new ApiError("No donation was found for this payment reference.", 400);
+      if (!donation) {
+        log.warn("payment_verify_not_found", { provider: "RAZORPAY", orderId });
+        throw new ApiError("No donation was found for this payment reference.", 400);
+      }
       if (donation.paymentStatus === "COMPLETED")
         return json(res, { ok: true, already: true, donation: donationView(donation) });
-      if (donation.paymentStatus !== "PENDING")
+      if (donation.paymentStatus !== "PENDING") {
+        log.warn("payment_verify_invalid_status", {
+          donationId: donation.id,
+          paymentStatus: donation.paymentStatus,
+        });
         throw new ApiError(`This payment cannot be verified (status: ${donation.paymentStatus}).`, 400);
+      }
+
+      log.debug("payment_verify_razorpay_attempt", { donationId: donation.id, orderId });
 
       const expected = crypto
         .createHmac("sha256", cfg.keySecret)
@@ -414,6 +507,7 @@ router.post("/verify", async (req, res) => {
         // A client-supplied invalid signature is not evidence that the provider
         // failed the payment. Keep the donation PENDING so the rightful payer
         // can retry verification; only provider-confirmed failure may settle it.
+        log.warn("payment_verify_signature_failed", { donationId: donation.id, orderId });
         throw new ApiError("Payment signature verification failed", 400);
       }
 
@@ -426,18 +520,32 @@ router.post("/verify", async (req, res) => {
 
     /* ── Stripe: { sessionId } — poll the Checkout Session server-side ── */
     if (body?.sessionId) {
-      if (cfg.provider !== "STRIPE")
+      if (cfg.provider !== "STRIPE") {
+        log.warn("payment_verify_provider_mismatch", { requested: "STRIPE", configured: cfg.provider });
         throw new ApiError("Stripe verification is unavailable — the configured gateway is another provider.", 400);
-      if (!cfg.keySecret)
+      }
+      if (!cfg.keySecret) {
+        log.warn("payment_verify_not_configured", { provider: "STRIPE" });
         throw new ApiError("Stripe secret key is not configured — payment verification is impossible.", 400);
+      }
 
       const sessionId = String(body.sessionId);
       const donation = await db.donation.findFirst({ where: { gatewayOrderId: sessionId } });
-      if (!donation) throw new ApiError("No donation was found for this payment reference.", 400);
+      if (!donation) {
+        log.warn("payment_verify_not_found", { provider: "STRIPE", sessionId });
+        throw new ApiError("No donation was found for this payment reference.", 400);
+      }
       if (donation.paymentStatus === "COMPLETED")
         return json(res, { ok: true, already: true, donation: donationView(donation) });
-      if (donation.paymentStatus !== "PENDING")
+      if (donation.paymentStatus !== "PENDING") {
+        log.warn("payment_verify_invalid_status", {
+          donationId: donation.id,
+          paymentStatus: donation.paymentStatus,
+        });
         throw new ApiError(`This payment cannot be verified (status: ${donation.paymentStatus}).`, 400);
+      }
+
+      log.debug("payment_verify_stripe_attempt", { donationId: donation.id, sessionId });
 
       let stripeRes: Response;
       try {
@@ -453,13 +561,25 @@ router.post("/verify", async (req, res) => {
         payment_status?: string;
         payment_intent?: string | null;
       } | null;
-      if (!stripeRes.ok || !session)
+      if (!stripeRes.ok || !session) {
+        log.warn("payment_verify_lookup_failed", {
+          provider: "STRIPE",
+          sessionId,
+          status: stripeRes.status,
+        });
         throw new ApiError(
           `Stripe session lookup failed (HTTP ${stripeRes.status}).`,
           stripeRes.status === 404 ? 400 : 502
         );
-      if (session.payment_status !== "paid")
+      }
+      if (session.payment_status !== "paid") {
+        log.warn("payment_verify_not_paid", {
+          provider: "STRIPE",
+          donationId: donation.id,
+          sessionId,
+        });
         throw new ApiError("Stripe reports this payment is not completed yet — please wait a moment and try again.", 400);
+      }
 
       const { settled, settledNow } = await settleCompleted(donation, {
         transactionId: session.payment_intent ?? session.id ?? sessionId,
@@ -470,18 +590,32 @@ router.post("/verify", async (req, res) => {
 
     /* ── Cashfree: { orderId } — poll the order's payments server-side ── */
     if (body?.orderId) {
-      if (cfg.provider !== "CASHFREE")
+      if (cfg.provider !== "CASHFREE") {
+        log.warn("payment_verify_provider_mismatch", { requested: "CASHFREE", configured: cfg.provider });
         throw new ApiError("Cashfree verification is unavailable — the configured gateway is another provider.", 400);
-      if (!cfg.cashfreeAppId || !cfg.keySecret)
+      }
+      if (!cfg.cashfreeAppId || !cfg.keySecret) {
+        log.warn("payment_verify_not_configured", { provider: "CASHFREE" });
         throw new ApiError("Cashfree app credentials are not configured — payment verification is impossible.", 400);
+      }
 
       const orderId = String(body.orderId);
       const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
-      if (!donation) throw new ApiError("No donation was found for this payment reference.", 400);
+      if (!donation) {
+        log.warn("payment_verify_not_found", { provider: "CASHFREE", orderId });
+        throw new ApiError("No donation was found for this payment reference.", 400);
+      }
       if (donation.paymentStatus === "COMPLETED")
         return json(res, { ok: true, already: true, donation: donationView(donation) });
-      if (donation.paymentStatus !== "PENDING")
+      if (donation.paymentStatus !== "PENDING") {
+        log.warn("payment_verify_invalid_status", {
+          donationId: donation.id,
+          paymentStatus: donation.paymentStatus,
+        });
         throw new ApiError(`This payment cannot be verified (status: ${donation.paymentStatus}).`, 400);
+      }
+
+      log.debug("payment_verify_cashfree_attempt", { donationId: donation.id, orderId });
 
       const base = cfg.testMode ? "https://sandbox.cashfree.com" : "https://api.cashfree.com";
       let cfRes: Response;
@@ -501,11 +635,23 @@ router.post("/verify", async (req, res) => {
         cf_payment_id?: number | string;
         payment_status?: string;
       }> | null;
-      if (!cfRes.ok || !Array.isArray(payments))
+      if (!cfRes.ok || !Array.isArray(payments)) {
+        log.warn("payment_verify_lookup_failed", {
+          provider: "CASHFREE",
+          orderId,
+          status: cfRes.status,
+        });
         throw new ApiError(`Cashfree payment lookup failed (HTTP ${cfRes.status}).`, cfRes.status === 404 ? 400 : 502);
+      }
       const paid = payments.find((p) => p.payment_status === "SUCCESS");
-      if (!paid)
+      if (!paid) {
+        log.warn("payment_verify_not_paid", {
+          provider: "CASHFREE",
+          donationId: donation.id,
+          orderId,
+        });
         throw new ApiError("Cashfree reports this payment is not completed yet — please wait a moment and try again.", 400);
+      }
 
       const { settled, settledNow } = await settleCompleted(donation, {
         transactionId: paid.cf_payment_id != null ? String(paid.cf_payment_id) : orderId,
@@ -514,6 +660,7 @@ router.post("/verify", async (req, res) => {
       return settleResponse(res, settled, settledNow);
     }
 
+    log.warn("payment_verify_missing_fields");
     throw new ApiError("Missing payment confirmation fields — nothing to verify.", 400);
   } catch (e) {
     return handleError(e, res);
@@ -531,7 +678,10 @@ router.post("/webhook", async (req, res) => {
   try {
     const signature = req.header("X-Razorpay-Signature") ?? "";
     const secret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
-    if (!secret) return res.status(400).json({ error: "Webhook secret not configured" });
+    if (!secret) {
+      log.warn("payment_webhook_secret_missing");
+      return res.status(400).json({ error: "Webhook secret not configured" });
+    }
 
     // express.json() is configured with a `verify` callback in index.ts that
     // stashes the raw bytes — verify over those (fallback: the re-serialized
@@ -545,6 +695,7 @@ router.post("/webhook", async (req, res) => {
       expectedBuf.length !== signatureBuf.length ||
       !crypto.timingSafeEqual(expectedBuf, signatureBuf)
     ) {
+      log.warn("payment_webhook_signature_invalid");
       return res.status(400).json({ error: "Invalid webhook signature" });
     }
 
@@ -556,6 +707,8 @@ router.post("/webhook", async (req, res) => {
     const entity = payload.payload?.payment?.entity;
     const paymentId = entity?.id ?? null;
     const orderId = entity?.order_id;
+
+    log.debug("payment_webhook_received", { event, orderId: orderId ?? null });
 
     if ((event === "payment.authorized" || event === "payment.captured") && orderId) {
       const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
@@ -571,7 +724,10 @@ router.post("/webhook", async (req, res) => {
       const donation = await db.donation.findFirst({ where: { gatewayOrderId: orderId } });
       if (donation && donation.paymentStatus === "PENDING") {
         await db.donation.update({ where: { id: donation.id }, data: { paymentStatus: "FAILED" } });
+        log.info("payment_webhook_payment_failed", { donationId: donation.id, orderId });
       }
+    } else if (event !== "payment.authorized" && event !== "payment.captured") {
+      log.debug("payment_webhook_ignored", { event });
     }
 
     return res.json({ ok: true });

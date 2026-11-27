@@ -59,11 +59,18 @@ router.post("/login", async (req, res) => {
       where: { email: { equals: email } },
     });
 
-    if (!user || !verifyPassword(password, user.password))
+    if (!user || !verifyPassword(password, user.password)) {
+      log.warn(user ? "failed_login_bad_password" : "failed_login_unknown_email", {
+        email,
+        ip,
+      });
       throw new ApiError("Invalid email or password", 401);
+    }
 
-    if (user.status === "SUSPENDED")
+    if (user.status === "SUSPENDED") {
+      log.warn("login_blocked_suspended", { userId: user.id, email: user.email });
       throw new ApiError("Account suspended", 403);
+    }
 
     // Optional device registration on login (mobile sends it; web does not).
     const deviceToken = String(b?.deviceToken ?? "").trim();
@@ -92,6 +99,12 @@ router.post("/login", async (req, res) => {
     }
 
     const { password: _pw, ...userSafe } = user;
+    log.info("login_success", {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      actor: session.userId,
+    });
     await logActivity(user.name, "LOGIN", "USER", user.role, user.id);
     return json(res, { user: userSafe, token: issueToken(session) });
   } catch (e) {
@@ -125,8 +138,10 @@ router.post("/register", async (req, res) => {
     const existing = await db.user.findFirst({
       where: { email: { equals: email } },
     });
-    if (existing)
+    if (existing) {
+      log.warn("registration_email_conflict", { email });
       throw new ApiError("An account with this email already exists", 409);
+    }
 
     // A user-chosen password (mobile signup sends one; the web signup relies
     // on the generated temp credentials) is honoured when it passes the same
@@ -163,6 +178,13 @@ router.post("/register", async (req, res) => {
     };
     setSession(res, session);
 
+    log.info("registration_completed", {
+      userId: user.id,
+      email: user.email,
+      role,
+      status: user.status,
+      actor: session.userId,
+    });
     await logActivity(name, "REGISTER", "USER", role, user.id);
 
     const { password: _pw, ...userSafe } = user;
@@ -196,6 +218,7 @@ router.get("/demo-accounts", async (_req, res) => {
       select: { email: true },
     });
     const present = new Set(rows.map((r) => r.email));
+    log.info("demo_accounts_served", { count: present.size });
     return json(res, {
       testingMode: true,
       accounts: DEMO_ACCOUNTS.filter((d) => present.has(d.email)).map((d) => ({
@@ -242,6 +265,11 @@ router.post("/logout", async (req, res) => {
       await db.user.update({
         where: { id: session.userId },
         data: { tokenValidAfter: new Date() },
+      });
+      log.info("logout", {
+        userId: session.userId,
+        role: session.role,
+        actor: session.userId,
       });
       await logActivity(session.name, "LOGOUT", "USER", session.role, session.userId);
     }
@@ -401,6 +429,11 @@ router.post("/reset-password", async (req, res) => {
       data: { usedAt: new Date() },
     });
 
+    log.info("password_reset_completed", {
+      userId: user.id,
+      email: user.email,
+      actor: user.id,
+    });
     await logActivity(user.name, "PASSWORD_RESET", "USER", user.role, user.id);
     return json(res, { ok: true, message: "Password updated — you can sign in with your new password." });
   } catch (e) {
@@ -465,6 +498,7 @@ router.post("/verify-email", async (req, res) => {
       where: { id: user.id },
       data: { emailVerifiedAt: new Date() },
     });
+    log.info("email_verified", { userId: user.id, email: user.email });
     await db.passwordReset.updateMany({ where: { email, usedAt: null }, data: { usedAt: new Date() } });
 
     const { password: _pw, ...userSafe } = updated;
@@ -499,7 +533,11 @@ router.post("/social", async (req, res) => {
 
     const existing = await db.user.findFirst({ where: { email: { equals: email } } });
     if (existing) {
-      if (existing.status === "SUSPENDED") throw new ApiError("Account suspended", 403);
+      if (existing.status === "SUSPENDED") {
+        log.warn("social_login_blocked_suspended", { userId: existing.id, email });
+        throw new ApiError("Account suspended", 403);
+      }
+      log.info("social_login_success", { userId: existing.id, email, loginType });
       const updated = await db.user.update({ where: { id: existing.id }, data: deviceData });
       const { password: _pw, ...userSafe } = updated;
       const session = { userId: updated.id, role: updated.role, name: updated.name, email: updated.email };
@@ -531,6 +569,7 @@ router.post("/social", async (req, res) => {
 
     const session = { userId: user.id, role: user.role, name: user.name, email: user.email };
     const { password: _pw, ...userSafe } = user;
+    log.info("social_registration_completed", { userId: user.id, email, loginType });
     await logActivity(user.name, "REGISTER", "USER", user.role, user.id);
     return json(res, { user: userSafe, token: issueToken(session), created: true });
   } catch (e) {
@@ -557,13 +596,21 @@ router.delete("/account", async (req, res) => {
     const session = await requireAuth(req);
     const b = await Promise.resolve(req.body ?? {});
     const user = await db.user.findUnique({ where: { id: session.userId } });
-    if (!user) throw new ApiError("Account not found", 404);
+    if (!user) {
+      log.warn("account_delete_not_found", { userId: session.userId, actor: session.userId });
+      throw new ApiError("Account not found", 404);
+    }
 
     const given = String(b?.password ?? "");
     if (given !== "" && !verifyPassword(given, user.password))
       throw new ApiError("Invalid password", 400);
 
     await deleteUserCascade(user.id);
+    log.info("account_deleted", {
+      userId: user.id,
+      email: user.email,
+      actor: session.userId,
+    });
     clearSession(res);
     return json(res, { ok: true });
   } catch (e) {
@@ -606,6 +653,12 @@ router.patch("/profile", async (req, res) => {
     const updated = await db.user.update({
       where: { id: session.userId },
       data,
+    });
+    log.info("profile_updated", {
+      userId: session.userId,
+      fields: Object.keys(data),
+      ...(data.password ? { passwordChanged: true } : {}),
+      actor: session.userId,
     });
 
     const { password: _pw, ...userSafe } = updated;

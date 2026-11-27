@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("camp-expenses");
 
 function pageParams(url: URL, defLimit = 50) {
   const page = Math.max(1, Math.trunc(Number(url.searchParams.get("page")) || 1));
@@ -74,7 +77,10 @@ router.post("/", async (req, res) => {
       where: { id: campId },
       select: { id: true, code: true, title: true },
     });
-    if (!camp) throw new ApiError("Camp not found", 404);
+    if (!camp) {
+      log.warn("camp_expense_camp_not_found", { campId, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
 
     const head = optText(body?.head);
     if (!head) throw new ApiError("head is required", 400);
@@ -92,6 +98,14 @@ router.post("/", async (req, res) => {
         spentByName: session.name,
       },
       include: { camp: { select: { id: true, code: true, title: true } } },
+    });
+
+    log.info("camp_expense_created", {
+      expenseId: expense.id,
+      campId,
+      head,
+      amount,
+      actor: session.userId,
     });
 
     await logActivity(

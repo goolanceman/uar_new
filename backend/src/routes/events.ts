@@ -21,6 +21,7 @@ router.get("/stream", async (_req, res) => {
   try {
     const map = await loadSettings();
     if (!isFlagOn(map["features.liveDonationFeed"])) {
+      log.warn("event_stream_disabled");
       return res.status(503).json({ error: "Live donation feed is disabled" });
     }
     subscribeEvents(res);

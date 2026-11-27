@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -19,6 +20,8 @@ import {
 } from "@/lib/camp-attendance";
 
 export const router = Router();
+
+const log = logger.child("camp-attendance");
 
 const CHECKIN_METHODS = ["QR", "ID", "PHONE", "MANUAL"];
 
@@ -129,17 +132,43 @@ router.post("/", async (req, res) => {
       where: { id: registrationId },
       include: { camp: true, attendance: true },
     });
-    if (!registration) throw new ApiError("Registration not found", 404);
+    if (!registration) {
+      log.warn("camp_checkin_registration_not_found", {
+        registrationId,
+        actor: session.userId,
+      });
+      throw new ApiError("Registration not found", 404);
+    }
 
-    if (!["LIVE", "SCHEDULED"].includes(registration.camp.status))
+    if (!["LIVE", "SCHEDULED"].includes(registration.camp.status)) {
+      log.warn("camp_checkin_blocked_camp_status", {
+        registrationId,
+        campId: registration.campId,
+        campStatus: registration.camp.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Camp is ${registration.camp.status} — check-in requires LIVE or SCHEDULED`, 409);
+    }
 
-    if (["CANCELLED", "REJECTED"].includes(registration.status))
+    if (["CANCELLED", "REJECTED"].includes(registration.status)) {
+      log.warn("camp_checkin_blocked_registration_status", {
+        registrationId,
+        registrationStatus: registration.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Registration is ${registration.status} — check-in not allowed`, 409);
+    }
 
     const existing = registration.attendance;
-    if (existing && ACTIVE_STATUSES.includes(existing.status))
+    if (existing && ACTIVE_STATUSES.includes(existing.status)) {
+      log.warn("camp_checkin_duplicate", {
+        registrationId,
+        attendanceId: existing.id,
+        attendanceStatus: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError("Already checked in", 409);
+    }
 
     // Next token = max(queueToken) per camp + 1 (re-used registrations keep their token)
     const maxAgg = await db.campAttendance.aggregate({
@@ -168,6 +197,15 @@ router.post("/", async (req, res) => {
             ...data,
           },
         });
+
+    log.info("camp_checkin_recorded", {
+      attendanceId: attendance.id,
+      registrationId: registration.id,
+      campId: registration.campId,
+      queueToken,
+      method,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -198,16 +236,26 @@ router.patch("/", async (req, res) => {
       where: { id },
       include: { registration: { select: { code: true } } },
     });
-    if (!attendance) throw new ApiError("Attendance record not found", 404);
+    if (!attendance) {
+      log.warn("camp_attendance_update_not_found", { attendanceId: id, actor: session.userId });
+      throw new ApiError("Attendance record not found", 404);
+    }
 
     const status = String(body.status ?? "").trim().toUpperCase();
     if (!PATCH_STATUSES.includes(status))
       throw new ApiError("Invalid status", 400);
-    if (!TRANSITIONS[attendance.status]?.includes(status))
+    if (!TRANSITIONS[attendance.status]?.includes(status)) {
+      log.warn("camp_attendance_invalid_transition", {
+        attendanceId: id,
+        from: attendance.status,
+        to: status,
+        actor: session.userId,
+      });
       throw new ApiError(
         `Cannot move attendance from ${attendance.status} to ${status}`,
         409
       );
+    }
 
     const data: {
       status: string;
@@ -231,12 +279,26 @@ router.patch("/", async (req, res) => {
         const doctor = await db.healthProfessional.findUnique({
           where: { id: String(body.doctorId).trim() },
         });
-        if (!doctor) throw new ApiError("Doctor not found", 404);
+        if (!doctor) {
+          log.warn("camp_attendance_doctor_not_found", {
+            attendanceId: id,
+            doctorId: String(body.doctorId).trim(),
+            actor: session.userId,
+          });
+          throw new ApiError("Doctor not found", 404);
+        }
         data.doctorId = doctor.id;
       }
     }
 
     const updated = await db.campAttendance.update({ where: { id }, data });
+
+    log.info("camp_attendance_updated", {
+      attendanceId: id,
+      newStatus: updated.status,
+      campId: attendance.campId,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

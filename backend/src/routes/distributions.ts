@@ -13,6 +13,7 @@ import {
   ApiError,
   logActivity,
 } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import {
   addCycle,
   consumeItemsStock,
@@ -24,6 +25,8 @@ import {
 import { buildUnifiedLedger } from "@/lib/distribution-ledger";
 
 export const router = Router();
+
+const log = logger.child("distributions");
 
 const TYPES = [
   "FOOD",
@@ -302,7 +305,10 @@ router.post("/", async (req, res) => {
       const assigned = await db.volunteer.findUnique({
         where: { id: String(body.volunteerId) },
       });
-      if (!assigned) throw new ApiError("Volunteer not found", 400);
+      if (!assigned) {
+        log.warn("distribution_volunteer_not_found", { volunteerId: body.volunteerId, actor: session.userId });
+        throw new ApiError("Volunteer not found", 400);
+      }
       volunteerId = assigned.id;
     } else {
       const volunteer = await db.volunteer.findUnique({
@@ -323,7 +329,10 @@ router.post("/", async (req, res) => {
     let recurringNeed: { id: string; beneficiaryId: string; cycle: string } | null = null;
     if (recurringNeedId) {
       const need = await db.recurringNeed.findUnique({ where: { id: recurringNeedId } });
-      if (!need) throw new ApiError("Recurring need not found", 400);
+      if (!need) {
+        log.warn("distribution_recurring_need_not_found", { recurringNeedId, actor: session.userId });
+        throw new ApiError("Recurring need not found", 400);
+      }
       recurringNeed = need;
     }
 
@@ -365,6 +374,15 @@ router.post("/", async (req, res) => {
       return created;
     });
 
+    log.info("distribution_created", {
+      distributionId: row.id,
+      type,
+      quantity,
+      location,
+      ...(kitBatchId ? { kitBatchId, kitQuantity } : {}),
+      ...(recurringNeedId ? { recurringNeedId } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "DISTRIBUTION",
@@ -387,14 +405,23 @@ async function assertCanMutate(
     where: { id },
     select: { id: true, volunteerId: true, type: true, quantity: true },
   });
-  if (!existing) throw new ApiError("Distribution not found", 404);
+  if (!existing) {
+    log.warn("distribution_not_found", { distributionId: id, actor: session.userId });
+    throw new ApiError("Distribution not found", 404);
+  }
   if (session.role !== "ADMIN") {
     const own = await db.volunteer.findUnique({
       where: { userId: session.userId },
       select: { id: true },
     });
-    if (!own || existing.volunteerId !== own.id)
+    if (!own || existing.volunteerId !== own.id) {
+      log.warn("distribution_not_owner", {
+        distributionId: id,
+        type: existing.type,
+        actor: session.userId,
+      });
       throw new ApiError("You can only manage distributions you recorded", 403);
+    }
   }
   return existing;
 }
@@ -468,7 +495,10 @@ router.patch("/:id", async (req, res) => {
         const v = await db.volunteer.findUnique({
           where: { id: String(body.volunteerId) },
         });
-        if (!v) throw new ApiError("Volunteer not found", 400);
+        if (!v) {
+          log.warn("distribution_volunteer_not_found", { volunteerId: body.volunteerId, distributionId: id, actor: session.userId });
+          throw new ApiError("Volunteer not found", 400);
+        }
         data.volunteerId = v.id;
       }
     }
@@ -534,6 +564,13 @@ router.patch("/:id", async (req, res) => {
       return updated;
     });
 
+    log.info("distribution_updated", {
+      distributionId: id,
+      type: row.type,
+      quantity: row.quantity,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "DISTRIBUTION_UPDATE",
@@ -560,6 +597,12 @@ router.delete("/:id", async (req, res) => {
       await tx.distribution.delete({ where: { id } });
     });
 
+    log.info("distribution_deleted", {
+      distributionId: id,
+      type: existing.type,
+      quantity: existing.quantity,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "DISTRIBUTION_DELETE",

@@ -192,6 +192,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("mission_created", {
+      missionId: mission.id,
+      requestRef,
+      emergencyType,
+      priority,
+      etaMin,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "MISSION_CREATE",
@@ -218,7 +226,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const mission = await db.mission.findUnique({ where: { id } });
-    if (!mission) throw new ApiError("Mission not found", 404);
+    if (!mission) {
+      log.warn("mission_not_found", { missionId: id, actor: session.userId });
+      throw new ApiError("Mission not found", 404);
+    }
 
     // ── status-stepper flow ────────────────────────────────────────────────
     const rawStatus =
@@ -232,8 +243,16 @@ router.patch("/:id", async (req, res) => {
           `status must be one of ${FLOW.join(", ")} or CANCELLED`,
           400
         );
-      if (["COMPLETED", "CANCELLED"].includes(mission.status))
+      if (["COMPLETED", "CANCELLED"].includes(mission.status)) {
+        log.warn("mission_already_closed", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          status: mission.status,
+          requested: rawStatus,
+          actor: session.userId,
+        });
         throw new ApiError("Mission already closed", 409);
+      }
 
       if (rawStatus === mission.status)
         return json(res, { mission: { ...mission } });
@@ -250,6 +269,12 @@ router.patch("/:id", async (req, res) => {
             data: { status: "AVAILABLE" },
           });
         }
+        log.info("mission_cancelled", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          via: "status",
+          actor: session.userId,
+        });
         await logActivity(
           session.name,
           "MISSION_CANCEL",
@@ -263,16 +288,30 @@ router.patch("/:id", async (req, res) => {
       // forward-only along the flow
       const from = FLOW.indexOf(mission.status);
       const to = FLOW.indexOf(rawStatus);
-      if (to !== from + 1)
+      if (to !== from + 1) {
+        log.warn("mission_invalid_transition", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          from: mission.status,
+          to: rawStatus,
+          actor: session.userId,
+        });
         throw new ApiError(
           `Cannot move mission from ${mission.status} to ${rawStatus}`,
           409
         );
-      if (rawStatus === "DISPATCHED")
+      }
+      if (rawStatus === "DISPATCHED") {
+        log.warn("mission_dispatch_requires_action", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          actor: session.userId,
+        });
         throw new ApiError(
           "Dispatch the mission with action:dispatch so the ambulance and corridor are activated together",
           409
         );
+      }
 
       let progress = PROGRESS[rawStatus] ?? 0;
       if (body.progress !== undefined) {
@@ -296,6 +335,14 @@ router.patch("/:id", async (req, res) => {
         });
       }
       if (rawStatus === "DISPATCHED" && mission.contact) sendDispatchSms(mission);
+      log.info("mission_status_advanced", {
+        missionId: id,
+        requestRef: mission.requestRef,
+        from: mission.status,
+        to: rawStatus,
+        progress,
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "MISSION_STATUS",
@@ -310,17 +357,41 @@ router.patch("/:id", async (req, res) => {
     const action = String(body.action ?? "").trim().toLowerCase();
 
     if (action === "dispatch") {
-      if (mission.status !== "REQUESTED")
+      if (mission.status !== "REQUESTED") {
+        log.warn("mission_dispatch_not_requested", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          status: mission.status,
+          actor: session.userId,
+        });
         throw new ApiError("Mission is not awaiting dispatch", 409);
+      }
       const ambulanceId = String(body.ambulanceId ?? "").trim();
       if (!ambulanceId)
         throw new ApiError("ambulanceId is required to dispatch", 400);
       const ambulance = await db.ambulance.findUnique({
         where: { id: ambulanceId },
       });
-      if (!ambulance) throw new ApiError("Ambulance not found", 404);
-      if (ambulance.status !== "AVAILABLE")
+      if (!ambulance) {
+        log.warn("mission_dispatch_ambulance_not_found", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          ambulanceId,
+          actor: session.userId,
+        });
+        throw new ApiError("Ambulance not found", 404);
+      }
+      if (ambulance.status !== "AVAILABLE") {
+        log.warn("mission_dispatch_ambulance_unavailable", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          ambulanceId,
+          ambulanceCode: ambulance.code,
+          status: ambulance.status,
+          actor: session.userId,
+        });
         throw new ApiError("Ambulance is not available", 409);
+      }
 
       // generate corridor events for congested segments of the planned route
       let route: RouteSegment[] = [];
@@ -331,6 +402,11 @@ router.patch("/:id", async (req, res) => {
       }
       // Legacy/seeded missions may lack a route — synthesise one so the corridor still arms.
       if (!Array.isArray(route) || route.length === 0) {
+        log.debug("mission_route_synthesised", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          actor: session.userId,
+        });
         const pool = [
           "Hebbal Flyover", "Outer Ring Road", "Silk Board Junction",
           "KR Puram Junction", "Tin Factory", "Marathahalli Bridge",
@@ -423,6 +499,17 @@ router.patch("/:id", async (req, res) => {
       });
 
       if (mission.contact) sendDispatchSms(mission);
+      log.info("mission_dispatched", {
+        missionId: id,
+        requestRef: mission.requestRef,
+        ambulanceId,
+        ambulanceCode: ambulance.code,
+        vehiclesAlerted,
+        timeSavedSec,
+        etaMin,
+        corridorEvents: eventsData.length,
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "MISSION_DISPATCH",
@@ -434,14 +521,28 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (action === "advance") {
-      if (["REQUESTED", "COMPLETED", "CANCELLED"].includes(mission.status))
+      if (["REQUESTED", "COMPLETED", "CANCELLED"].includes(mission.status)) {
+        log.warn("mission_advance_blocked", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          status: mission.status,
+          actor: session.userId,
+        });
         throw new ApiError("Mission cannot be advanced", 409);
+      }
       const progress = Math.min(100, mission.progress + 25);
       const status = progress >= 100 ? "ARRIVED" : "EN_ROUTE";
       const updated = await db.mission.update({
         where: { id },
         data: { progress, status },
         include: { ambulance: true },
+      });
+      log.info("mission_advanced", {
+        missionId: id,
+        requestRef: mission.requestRef,
+        status,
+        progress,
+        actor: session.userId,
       });
       await logActivity(
         session.name,
@@ -454,8 +555,15 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (action === "complete") {
-      if (["REQUESTED", "CANCELLED", "COMPLETED"].includes(mission.status))
+      if (["REQUESTED", "CANCELLED", "COMPLETED"].includes(mission.status)) {
+        log.warn("mission_complete_blocked", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          status: mission.status,
+          actor: session.userId,
+        });
         throw new ApiError("Mission cannot be completed from its current state", 409);
+      }
       const updated = await db.mission.update({
         where: { id },
         data: { status: "COMPLETED", progress: 100, corridorActive: false },
@@ -467,6 +575,11 @@ router.patch("/:id", async (req, res) => {
           data: { status: "AVAILABLE" },
         });
       }
+      log.info("mission_completed", {
+        missionId: id,
+        requestRef: mission.requestRef,
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "MISSION_COMPLETE",
@@ -478,8 +591,15 @@ router.patch("/:id", async (req, res) => {
     }
 
     if (action === "cancel") {
-      if (["COMPLETED", "CANCELLED"].includes(mission.status))
+      if (["COMPLETED", "CANCELLED"].includes(mission.status)) {
+        log.warn("mission_cancel_blocked", {
+          missionId: id,
+          requestRef: mission.requestRef,
+          status: mission.status,
+          actor: session.userId,
+        });
         throw new ApiError("Mission already closed", 409);
+      }
       const updated = await db.mission.update({
         where: { id },
         data: { status: "CANCELLED", corridorActive: false },
@@ -491,6 +611,12 @@ router.patch("/:id", async (req, res) => {
           data: { status: "AVAILABLE" },
         });
       }
+      log.info("mission_cancelled", {
+        missionId: id,
+        requestRef: mission.requestRef,
+        via: "action",
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "MISSION_CANCEL",

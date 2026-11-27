@@ -7,12 +7,15 @@ import { promises as fs, createReadStream } from "node:fs";
 import { Router } from "express";
 import { Prisma, type FileAsset } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireAuth, requireRole, validateSession, json, handleError, ApiError, logActivity } from "@/lib/session";
 import { saveUpload, sanitizeFolder, deleteStored, validFolder, resolveStoredPath } from "@/lib/files";
 import { multipart, readForm } from "@/lib/multipart";
 import { getCachedFile, setCachedFile, invalidateFile, type CachedFileAsset } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("files");
 
 const MAX_FILES_PER_REQUEST = 20;
 // Non-admin (self-service) uploads are capped lower than the admin limit.
@@ -122,6 +125,11 @@ router.post("/", multipart, async (req, res) => {
       );
     }
 
+    log.info("files_uploaded", {
+      count: uploaded.length,
+      folder,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FILE_UPLOAD",
@@ -164,7 +172,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.fileAsset.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("File not found", 404);
+    if (!existing) {
+      log.warn("file_update_not_found", { fileId: id, actor: session.userId });
+      throw new ApiError("File not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.title !== undefined) {
@@ -183,6 +194,12 @@ router.patch("/:id", async (req, res) => {
     if (Object.keys(data).length === 0) throw new ApiError("Nothing to update", 400);
 
     const file = await db.fileAsset.update({ where: { id }, data });
+    log.info("file_updated", {
+      fileId: id,
+      name: file.name,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -204,9 +221,18 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.fileAsset.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("File not found", 404);
+    if (!existing) {
+      log.warn("file_delete_not_found", { fileId: id, actor: session.userId });
+      throw new ApiError("File not found", 404);
+    }
 
     await db.fileAsset.delete({ where: { id } });
+    log.info("file_deleted", {
+      fileId: id,
+      name: existing.name,
+      folder: existing.folder,
+      actor: session.userId,
+    });
     await invalidateFile(id);
     // A missing disk file must not fail the request (deleteStored ignores ENOENT).
     await deleteStored(existing.storedName).catch(() => {});
@@ -250,10 +276,18 @@ router.get("/:id/file", async (req, res) => {
 
     if (!isPublicReadMime(asset.mime)) {
       const session = await validateSession(req);
-      if (!session)
+      if (!session) {
+        log.warn("file_download_unauthenticated", { fileId: id, mime: asset.mime });
         throw new ApiError("Please sign in to access this document", 401);
-      if (session.role !== "ADMIN" && asset.uploadedById !== session.userId)
+      }
+      if (session.role !== "ADMIN" && asset.uploadedById !== session.userId) {
+        log.warn("file_download_forbidden", {
+          fileId: id,
+          mime: asset.mime,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission to access this document", 403);
+      }
     }
 
     const filePath = resolveStoredPath(asset.storedName);

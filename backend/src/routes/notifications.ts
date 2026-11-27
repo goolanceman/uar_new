@@ -8,6 +8,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   ApiError,
   handleError,
@@ -20,6 +21,8 @@ import { communityNotificationFeed } from "@/lib/community/notifications";
 import { sendPush } from "@/lib/community/push";
 
 export const router = Router();
+
+const log = logger.child("notifications");
 
 // GET /api/notifications?limit=20 — latest notifications for the signed-in
 // user, always merged with global announcements (userId = null). Without a
@@ -92,19 +95,40 @@ router.patch("/", async (req, res) => {
         where: { userId: session.userId, isRead: false },
         data: { isRead: true },
       });
+      log.info("notifications_marked_read", {
+        userId: session.userId,
+        count: result.count,
+      });
       return json(res, { ok: true, updated: result.count });
     }
 
     if (!body.id) throw new ApiError("Provide { id, isRead } or { all: true }", 400);
 
     const row = await db.notification.findUnique({ where: { id: String(body.id) } });
-    if (!row) throw new ApiError("Notification not found", 404);
-    if (row.userId && row.userId !== session.userId)
+    if (!row) {
+      log.warn("notification_update_not_found", {
+        notificationId: String(body.id),
+        actor: session.userId,
+      });
+      throw new ApiError("Notification not found", 404);
+    }
+    if (row.userId && row.userId !== session.userId) {
+      log.warn("notification_update_forbidden", {
+        notificationId: row.id,
+        ownerId: row.userId,
+        actor: session.userId,
+      });
       throw new ApiError("You cannot modify this notification", 403);
+    }
 
     const updated = await db.notification.update({
       where: { id: row.id },
       data: { isRead: body.isRead !== false },
+    });
+    log.info("notification_updated", {
+      notificationId: row.id,
+      isRead: body.isRead !== false,
+      actor: session.userId,
     });
 
     return json(res, updated);
@@ -168,7 +192,10 @@ router.post("/push", async (req, res) => {
     // (fcm/apns/legacy device columns).
     let userId = body.userId ? String(body.userId) : body.user_id ? String(body.user_id) : null;
     let recipient = userId ? await db.user.findUnique({ where: { id: userId } }) : null;
-    if (userId && !recipient) throw new ApiError("User not found", 404);
+    if (userId && !recipient) {
+      log.warn("push_recipient_not_found", { userId, actor: session.userId });
+      throw new ApiError("User not found", 404);
+    }
     if (!recipient) {
       const token = body.token ? String(body.token) : null;
       if (token) {
@@ -186,25 +213,43 @@ router.post("/push", async (req, res) => {
     const isModerator = session.role === "ADMIN" || session.role === "MODERATOR" || actor?.isModerator === 1;
     if (!isModerator) {
       const conversationId = data?.conversationId ?? data?.conversation_id;
-      if (data?.type !== "chat_message" || !conversationId)
+      if (data?.type !== "chat_message" || !conversationId) {
+        log.warn("push_forbidden_non_chat", { type, actor: session.userId });
         throw new ApiError("Only chat notifications to your own conversations are allowed", 403);
+      }
 
       const conversation = await db.conversation.findUnique({
         where: { id: String(conversationId) },
         select: { user1Id: true, user2Id: true, deletedAt: true },
       });
-      if (!conversation || conversation.deletedAt)
+      if (!conversation || conversation.deletedAt) {
+        log.warn("push_conversation_not_found", {
+          conversationId: String(conversationId),
+          actor: session.userId,
+        });
         throw new ApiError("Conversation not found", 404);
+      }
       const otherId =
         conversation.user1Id === session.userId
           ? conversation.user2Id
           : conversation.user2Id === session.userId
             ? conversation.user1Id
             : null;
-      if (!otherId)
+      if (!otherId) {
+        log.warn("push_forbidden_not_participant", {
+          conversationId: String(conversationId),
+          actor: session.userId,
+        });
         throw new ApiError("Only chat notifications to your own conversations are allowed", 403);
-      if (recipient.id !== otherId)
+      }
+      if (recipient.id !== otherId) {
+        log.warn("push_forbidden_not_other_participant", {
+          conversationId: String(conversationId),
+          recipientId: recipient.id,
+          actor: session.userId,
+        });
         throw new ApiError("You can only notify the other participant of this conversation", 403);
+      }
     }
 
     const row = await sendPush({
@@ -213,6 +258,13 @@ router.post("/push", async (req, res) => {
       body: message,
       type,
       data,
+    });
+    log.info("push_notification_sent", {
+      notificationId: row.id,
+      recipientId: recipient.id,
+      type,
+      sentVia: row.sentVia,
+      actor: session.userId,
     });
     return json(res, { ok: true, notificationId: row.id, sentVia: row.sentVia });
   } catch (e) {

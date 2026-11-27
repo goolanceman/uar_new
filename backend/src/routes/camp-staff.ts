@@ -7,6 +7,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -19,6 +20,8 @@ import { assertTransition } from "@/lib/workflow";
 import { CAMP_STAFF_STATUSES, CAMP_STAFF_TRANSITIONS } from "@/lib/camp-staff";
 
 export const router = Router();
+
+const log = logger.child("camp-staff");
 
 const STAFF_ROLES = ["DOCTOR", "NURSE", "PHARMACIST", "LAB_TECH", "COORDINATOR", "VOLUNTEER"];
 // Camp-staff roles that must map to a VERIFIED professional of the same kind
@@ -79,19 +82,47 @@ router.post("/", async (req, res) => {
     const campId = String(body.campId ?? "").trim();
     if (!campId) throw new ApiError("campId is required", 400);
     const camp = await db.medicalCamp.findUnique({ where: { id: campId } });
-    if (!camp) throw new ApiError("Camp not found", 404);
+    if (!camp) {
+      log.warn("camp_staff_camp_not_found", { campId, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
 
     // A hospital partner rosters only its own staff on camps it has accepted.
     if (session.role === "HOSPITAL") {
       const org = await db.healthcareOrg.findUnique({ where: { ownerUserId: session.userId }, select: { id: true } });
-      if (!org) throw new ApiError("No healthcare organisation is linked to your account", 403);
+      if (!org) {
+        log.warn("camp_staff_no_linked_org", { campId, actor: session.userId });
+        throw new ApiError("No healthcare organisation is linked to your account", 403);
+      }
       const partner = await db.campPartner.findFirst({ where: { campId, orgId: org.id, status: "ACCEPTED" }, select: { id: true } });
-      if (!partner) throw new ApiError("Accept the camp invitation before assigning staff", 403);
-      if (body.volunteerId) throw new ApiError("Partners can assign only their own staff", 403);
+      if (!partner) {
+        log.warn("camp_staff_partner_not_accepted", {
+          campId,
+          orgId: org.id,
+          actor: session.userId,
+        });
+        throw new ApiError("Accept the camp invitation before assigning staff", 403);
+      }
+      if (body.volunteerId) {
+        log.warn("camp_staff_partner_volunteer_forbidden", {
+          campId,
+          orgId: org.id,
+          actor: session.userId,
+        });
+        throw new ApiError("Partners can assign only their own staff", 403);
+      }
       const own = body.professionalId
         ? await db.healthProfessional.findFirst({ where: { id: String(body.professionalId), orgId: org.id }, select: { id: true } })
         : null;
-      if (!own) throw new ApiError("Partners can assign only their own staff", 403);
+      if (!own) {
+        log.warn("camp_staff_partner_not_own_staff", {
+          campId,
+          orgId: org.id,
+          ...(body.professionalId ? { professionalId: String(body.professionalId) } : {}),
+          actor: session.userId,
+        });
+        throw new ApiError("Partners can assign only their own staff", 403);
+      }
     }
 
     const role = String(body.role ?? "DOCTOR").trim().toUpperCase();
@@ -107,20 +138,50 @@ router.post("/", async (req, res) => {
       const professional = await db.healthProfessional.findUnique({
         where: { id: professionalId },
       });
-      if (!professional) throw new ApiError("Professional not found", 404);
+      if (!professional) {
+        log.warn("camp_staff_professional_not_found", {
+          campId,
+          professionalId,
+          actor: session.userId,
+        });
+        throw new ApiError("Professional not found", 404);
+      }
       if (CLINICAL_ROLES.includes(role)) {
-        if (professional.kind !== role)
+        if (professional.kind !== role) {
+          log.warn("camp_staff_kind_mismatch", {
+            campId,
+            professionalId,
+            role,
+            professionalKind: professional.kind,
+            actor: session.userId,
+          });
           throw new ApiError(`This staff member is a ${professional.kind}, not a ${role}`, 400);
-        if (professional.verificationStatus !== "VERIFIED")
+        }
+        if (professional.verificationStatus !== "VERIFIED") {
+          log.warn("camp_staff_unverified", {
+            campId,
+            professionalId,
+            role,
+            verificationStatus: professional.verificationStatus,
+            actor: session.userId,
+          });
           throw new ApiError(
             "Only verified professionals can be assigned to clinical roles",
             400
           );
+        }
       }
     }
     if (volunteerId) {
       const volunteer = await db.volunteer.findUnique({ where: { id: volunteerId } });
-      if (!volunteer) throw new ApiError("Volunteer not found", 404);
+      if (!volunteer) {
+        log.warn("camp_staff_volunteer_not_found", {
+          campId,
+          volunteerId,
+          actor: session.userId,
+        });
+        throw new ApiError("Volunteer not found", 404);
+      }
     }
 
     const staff = await db.campStaff.create({
@@ -137,6 +198,15 @@ router.post("/", async (req, res) => {
           select: { id: true, name: true, kind: true, speciality: true, verificationStatus: true },
         },
       },
+    });
+
+    log.info("camp_staff_assigned", {
+      staffId: staff.id,
+      campId,
+      role,
+      ...(professionalId ? { professionalId } : {}),
+      ...(volunteerId ? { volunteerId } : {}),
+      actor: session.userId,
     });
 
     await logActivity(
@@ -163,9 +233,19 @@ router.delete("/", async (req, res) => {
       where: { id },
       include: { professional: { select: { name: true } } },
     });
-    if (!staff) throw new ApiError("Camp staff record not found", 404);
+    if (!staff) {
+      log.warn("camp_staff_delete_not_found", { staffId: id, actor: session.userId });
+      throw new ApiError("Camp staff record not found", 404);
+    }
 
     await db.campStaff.delete({ where: { id } });
+
+    log.info("camp_staff_removed", {
+      staffId: id,
+      campId: staff.campId,
+      role: staff.role,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -197,21 +277,43 @@ router.patch("/:id", async (req, res) => {
         camp: { select: { title: true } },
       },
     });
-    if (!existing) throw new ApiError("Camp staff record not found", 404);
+    if (!existing) {
+      log.warn("camp_staff_update_not_found", { staffId: id, actor: session.userId });
+      throw new ApiError("Camp staff record not found", 404);
+    }
+    if (existing.status !== status && !CAMP_STAFF_TRANSITIONS[existing.status]?.includes(status))
+      log.warn("camp_staff_invalid_transition", {
+        staffId: id,
+        from: existing.status,
+        to: status,
+        actor: session.userId,
+      });
     assertTransition(CAMP_STAFF_TRANSITIONS, existing.status, status, "camp staff assignment");
 
     const changed = await db.campStaff.updateMany({
       where: { id, status: existing.status },
       data: { status },
     });
-    if (changed.count !== 1)
+    if (changed.count !== 1) {
+      log.warn("camp_staff_update_conflict", {
+        staffId: id,
+        expectedStatus: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError("Camp staff assignment changed while this action was being processed", 409);
+    }
 
     const updated = await db.campStaff.findUniqueOrThrow({
       where: { id },
       include: {
         professional: { select: { id: true, name: true, kind: true, speciality: true } },
       },
+    });
+    log.info("camp_staff_status_changed", {
+      staffId: id,
+      from: existing.status,
+      to: status,
+      actor: session.userId,
     });
     await logActivity(
       session.name,

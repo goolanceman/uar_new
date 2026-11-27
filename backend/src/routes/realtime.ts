@@ -103,6 +103,7 @@ export async function broadcastingAuthHandler(req: Request, res: Response) {
     const session = await validateSession(req);
     if (!session) return res.status(401).json({ error: "Invalid or expired token" });
     if (!(await authorizeChannelAccess(session.userId, channelName))) {
+      log.warn("channel_access_denied", { channel: channelName, actor: session.userId });
       return res.status(403).json({ error: "Channel access denied" });
     }
     return res.json({ auth: channelAuth(socketId, channelName) });
@@ -140,7 +141,10 @@ router.post("/agora-token", async (req, res) => {
         where: { audioSpaceId: space.id, userId: session.userId },
         select: { id: true },
       });
-      if (!participant) throw new ApiError("You are not a participant of this audio space", 403);
+      if (!participant) {
+        log.warn("agora_space_participant_required", { channel: channelName, actor: session.userId });
+        throw new ApiError("You are not a participant of this audio space", 403);
+      }
     }
 
     const appId = process.env.AGORA_APP_ID;

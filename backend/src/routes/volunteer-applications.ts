@@ -292,6 +292,9 @@ router.post("/", async (req, res) => {
             isActive: false,
           },
         });
+        log.debug("volunteer_application_existing_user_linked", {
+          userId: existing.id,
+        });
         userId = existing.id;
       } else {
         const password = tempPassword();
@@ -308,6 +311,7 @@ router.post("/", async (req, res) => {
           },
         });
         userId = created.id;
+        log.debug("volunteer_application_account_created", { userId: created.id });
         tempCreds = { email, password, fullName };
       }
     }
@@ -344,6 +348,14 @@ router.post("/", async (req, res) => {
         addressLine1,
         addressLine2,
       },
+    });
+
+    log.info("volunteer_application_submitted", {
+      applicationId: application.id,
+      userId: userId ?? undefined,
+      city,
+      status: application.status,
+      ...(session ? { actor: session.userId } : {}),
     });
 
     await logActivity(
@@ -422,16 +434,30 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const application = await db.volunteerApplication.findUnique({ where: { id } });
-    if (!application) throw new ApiError("Application not found", 404);
+    if (!application) {
+      log.warn("volunteer_application_update_not_found", { applicationId: id, actor: session.userId });
+      throw new ApiError("Application not found", 404);
+    }
 
     if (session.role !== "ADMIN") {
-      if (application.userId !== session.userId)
+      if (application.userId !== session.userId) {
+        log.warn("volunteer_application_update_forbidden", {
+          applicationId: id,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
-      if (application.status !== "INFO_REQUESTED")
+      }
+      if (application.status !== "INFO_REQUESTED") {
+        log.warn("volunteer_application_resubmit_blocked_state", {
+          applicationId: id,
+          status: application.status,
+          actor: session.userId,
+        });
         throw new ApiError(
           "Your application can be updated only after additional information is requested",
           403
         );
+      }
 
       // Merge the body over the stored record: fields the client omits (e.g.
       // the web portal form doesn't collect the legacy optionals) keep their
@@ -491,6 +517,12 @@ router.patch("/:id", async (req, res) => {
 
       const resubmitted = await db.volunteerApplication.update({ where: { id }, data: ownerData });
 
+      log.info("volunteer_application_resubmitted", {
+        applicationId: id,
+        status: resubmitted.status,
+        actor: session.userId,
+      });
+
       await logActivity(
         merged.fullName,
         "VOLUNTEER_APPLICATION_RESUBMIT",
@@ -508,6 +540,13 @@ router.patch("/:id", async (req, res) => {
         400
       );
 
+    if (application.status !== status && !TRANSITIONS[application.status]?.includes(status))
+      log.warn("volunteer_application_invalid_transition", {
+        applicationId: id,
+        from: application.status,
+        to: status,
+        actor: session.userId,
+      });
     assertTransition(TRANSITIONS, application.status, status, "volunteer application", 400);
 
     // Asking for more information without saying what is missing is pointless.
@@ -563,6 +602,12 @@ router.patch("/:id", async (req, res) => {
           },
         });
         const existingVolunteer = await db.volunteer.findUnique({ where: { userId: application.userId } });
+        if (existingVolunteer)
+          log.debug("volunteer_application_reapproval_existing_volunteer", {
+            applicationId: id,
+            volunteerId: existingVolunteer.id,
+            actor: session.userId,
+          });
         await db.volunteer.upsert({
           where: { userId: application.userId },
           create: {
@@ -595,6 +640,13 @@ router.patch("/:id", async (req, res) => {
     const updated = await db.volunteerApplication.update({
       where: { id },
       data,
+    });
+
+    log.info("volunteer_application_reviewed", {
+      applicationId: id,
+      from: application.status,
+      to: status,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -682,9 +734,18 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const application = await db.volunteerApplication.findUnique({ where: { id } });
-    if (!application) throw new ApiError("Application not found", 404);
+    if (!application) {
+      log.warn("volunteer_application_delete_not_found", { applicationId: id, actor: session.userId });
+      throw new ApiError("Application not found", 404);
+    }
 
     await db.volunteerApplication.delete({ where: { id } });
+
+    log.info("volunteer_application_deleted", {
+      applicationId: id,
+      status: application.status,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

@@ -8,6 +8,7 @@
  */
 import { Router, type Request } from "express";
 import { requireAuth, ApiError, json, handleError, body } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import { multipart } from "@/lib/multipart";
 import {
@@ -33,6 +34,8 @@ import {
 } from "@/lib/community/posts";
 
 export const router = Router();
+
+const log = logger.child("posts");
 
 /** :id path param — reject missing ids early. */
 function idParam(req: Request, name = "id"): string {
@@ -173,6 +176,7 @@ router.delete("/comments/:commentId", async (req, res) => {
   try {
     const session = await actor(req);
     const comment = await deleteComment(session.userId, session.role, idParam(req, "commentId"));
+    log.info("comment_deleted", { commentId: comment.id, actor: session.userId });
     return json(res, { ok: true, comment });
   } catch (e) {
     return handleError(e, res);
@@ -183,7 +187,9 @@ router.delete("/comments/:commentId", async (req, res) => {
 router.post("/comments/:commentId/like", async (req, res) => {
   try {
     const session = await actor(req);
-    const result = await toggleCommentLike(session.userId, idParam(req, "commentId"));
+    const commentId = idParam(req, "commentId");
+    const result = await toggleCommentLike(session.userId, commentId);
+    log.info("comment_like_toggled", { commentId, actor: session.userId, liked: result.liked });
     return json(res, result);
   } catch (e) {
     return handleError(e, res);
@@ -208,6 +214,14 @@ router.post("/", multipart, async (req, res) => {
       audioWaves: b.audioWaves != null && b.audioWaves !== "" ? String(b.audioWaves) : null,
       mediaIds: mediaIdsField(b.mediaIds),
     });
+    if (post) {
+      log.info("post_created", {
+        postId: post.id,
+        actor: session.userId,
+        contentType: numField(b.contentType) ?? null,
+        isEmergency: b.isEmergency === true || b.isEmergency === 1 || b.isEmergency === "1" || b.isEmergency === "true",
+      });
+    }
     return json(res, post, 201);
   } catch (e) {
     return handleError(e, res);
@@ -230,6 +244,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await actor(req);
     const post = await deletePost(session.userId, session.role, idParam(req));
+    log.info("post_deleted", { postId: post.id, actor: session.userId });
     return json(res, { ok: true, post });
   } catch (e) {
     return handleError(e, res);
@@ -242,12 +257,18 @@ router.patch("/:id", async (req, res) => {
   try {
     const session = await actor(req);
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const post = await updatePost(session.userId, session.role, idParam(req), {
+    const postId = idParam(req);
+    const post = await updatePost(session.userId, session.role, postId, {
       desc: b.desc !== undefined ? String(b.desc) : b.description !== undefined ? String(b.description) : undefined,
       tags: b.tags !== undefined ? String(b.tags) : undefined,
       interestIds:
         b.interestIds !== undefined ? String(b.interestIds) : b.interest_ids !== undefined ? String(b.interest_ids) : undefined,
       isRestricted: b.isRestricted !== undefined ? (Number(b.isRestricted) ? 1 : 0) : undefined,
+    });
+    log.info("post_updated", {
+      postId,
+      actor: session.userId,
+      ...(b.isRestricted !== undefined ? { isRestricted: Number(b.isRestricted) ? 1 : 0 } : {}),
     });
     return json(res, { ok: true, post });
   } catch (e) {
@@ -260,7 +281,9 @@ router.post("/:id/report", async (req, res) => {
   try {
     const session = await actor(req);
     const b = body<{ reason?: string; desc?: string }>(req);
-    const report = await reportPost(session.userId, idParam(req), String(b.reason ?? ""), String(b.desc ?? ""));
+    const postId = idParam(req);
+    const report = await reportPost(session.userId, postId, String(b.reason ?? ""), String(b.desc ?? ""));
+    log.info("post_reported", { postId, actor: session.userId, reason: String(b.reason ?? "") });
     return json(res, { ok: true, report });
   } catch (e) {
     return handleError(e, res);
@@ -272,7 +295,9 @@ router.post("/:id/like", async (req, res) => {
   try {
     const session = await actor(req);
     const b = body<{ reaction?: string }>(req);
-    const { like, post, message } = await likePost(session.userId, idParam(req), b.reaction ?? null);
+    const postId = idParam(req);
+    const { like, post, message } = await likePost(session.userId, postId, b.reaction ?? null);
+    log.info("post_liked", { postId, actor: session.userId, reaction: b.reaction ?? null, message });
     return json(res, { ok: true, message, like, ...(post ? { post } : {}) });
   } catch (e) {
     return handleError(e, res);
@@ -283,7 +308,9 @@ router.post("/:id/like", async (req, res) => {
 router.delete("/:id/like", async (req, res) => {
   try {
     const session = await actor(req);
-    const like = await unlikePost(session.userId, idParam(req));
+    const postId = idParam(req);
+    const like = await unlikePost(session.userId, postId);
+    log.info("post_unliked", { postId, actor: session.userId });
     return json(res, { ok: true, like });
   } catch (e) {
     return handleError(e, res);
@@ -319,7 +346,9 @@ router.post("/:id/comments", async (req, res) => {
   try {
     const session = await actor(req);
     const b = body<{ desc?: string }>(req);
-    const comment = await addComment(session.userId, idParam(req), String(b.desc ?? ""));
+    const postId = idParam(req);
+    const comment = await addComment(session.userId, postId, String(b.desc ?? ""));
+    log.info("comment_added", { postId, commentId: comment.id, actor: session.userId });
     return json(res, comment, 201);
   } catch (e) {
     return handleError(e, res);

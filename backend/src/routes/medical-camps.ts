@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   ApiError,
   handleError,
@@ -17,6 +18,8 @@ import {
 import { nextCampCode } from "@/lib/health-codes";
 
 export const router = Router();
+
+const log = logger.child("medical-camps");
 
 const CAMP_STATUSES = ["DRAFT", "SCHEDULED", "LIVE", "COMPLETED", "CANCELLED"];
 
@@ -183,7 +186,13 @@ router.post("/", async (req, res) => {
 
     if (body.campaignId) {
       const campaign = await db.campaign.findUnique({ where: { id: String(body.campaignId) } });
-      if (!campaign) throw new ApiError("Campaign not found", 404);
+      if (!campaign) {
+        log.warn("medical_camp_campaign_not_found", {
+          campaignId: String(body.campaignId),
+          actor: session.userId,
+        });
+        throw new ApiError("Campaign not found", 404);
+      }
     }
 
     const code = await nextCampCode();
@@ -209,6 +218,14 @@ router.post("/", async (req, res) => {
         notes: body.notes ? String(body.notes).trim() : null,
         createdByName: session.name,
       },
+    });
+
+    log.info("medical_camp_created", {
+      campId: camp.id,
+      code: camp.code,
+      city: camp.city,
+      status: camp.status,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -269,7 +286,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.medicalCamp.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Camp not found", 404);
+    if (!existing) {
+      log.warn("medical_camp_update_not_found", { campId: id, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
 
     const data: Prisma.MedicalCampUpdateInput = {};
 
@@ -279,11 +299,18 @@ router.patch("/:id", async (req, res) => {
         throw new ApiError("Invalid status", 400);
       if (status !== existing.status) {
         const allowed = TRANSITIONS[existing.status] ?? [];
-        if (!allowed.includes(status))
+        if (!allowed.includes(status)) {
+          log.warn("medical_camp_invalid_transition", {
+            campId: id,
+            from: existing.status,
+            to: status,
+            actor: session.userId,
+          });
           throw new ApiError(
             `Cannot move camp from ${existing.status} to ${status}`,
             409
           );
+        }
         data.status = status;
       }
     }
@@ -323,6 +350,13 @@ router.patch("/:id", async (req, res) => {
     if (body.notes !== undefined) data.notes = body.notes ? String(body.notes).trim() : null;
 
     const camp = await db.medicalCamp.update({ where: { id }, data });
+    log.info("medical_camp_updated", {
+      campId: id,
+      code: camp.code,
+      fields: Object.keys(data),
+      ...(body.status !== undefined ? { newStatus: camp.status } : {}),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "CAMP_UPDATE",
@@ -345,13 +379,34 @@ router.delete("/:id", async (req, res) => {
       where: { id },
       include: { _count: { select: { registrations: true } } },
     });
-    if (!existing) throw new ApiError("Camp not found", 404);
-    if (existing.status !== "DRAFT")
+    if (!existing) {
+      log.warn("medical_camp_delete_not_found", { campId: id, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
+    if (existing.status !== "DRAFT") {
+      log.warn("medical_camp_delete_blocked_status", {
+        campId: id,
+        status: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError("Only camps in DRAFT status can be deleted", 409);
-    if (existing._count.registrations > 0)
+    }
+    if (existing._count.registrations > 0) {
+      log.warn("medical_camp_delete_blocked_registrations", {
+        campId: id,
+        registrations: existing._count.registrations,
+        actor: session.userId,
+      });
       throw new ApiError("This camp has registrations and cannot be deleted", 409);
+    }
 
     await db.medicalCamp.delete({ where: { id } }); // partners + staff cascade
+
+    log.info("medical_camp_deleted", {
+      campId: id,
+      code: existing.code,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

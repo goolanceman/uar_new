@@ -158,12 +158,18 @@ router.post("/", async (req, res) => {
         where: { id: beneficiaryId },
         select: { code: true, name: true, age: true, gender: true },
       });
-      if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+      if (!beneficiary) {
+        log.warn("consult_beneficiary_not_found", { beneficiaryId, actor: session.userId });
+        throw new ApiError("Beneficiary not found", 404);
+      }
 
       const encounterId = optText(body?.encounterId);
       if (encounterId) {
         const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-        if (!enc) throw new ApiError("Encounter not found", 404);
+        if (!enc) {
+          log.warn("consult_encounter_not_found", { encounterId, actor: session.userId });
+          throw new ApiError("Encounter not found", 404);
+        }
       }
 
       const chiefComplaint = optText(body?.chiefComplaint) ?? "(not provided)";
@@ -199,6 +205,13 @@ router.post("/", async (req, res) => {
       if (encounterId)
         await db.encounter.update({ where: { id: encounterId }, data: { aiDraftUsed: true } });
 
+      log.info("consult_draft_recorded", {
+        interactionId: interaction.id,
+        beneficiaryId,
+        encounterId: encounterId ?? null,
+        actor: session.userId,
+      });
+
       await logActivity(session.name, "AI_CONSULT_DRAFT", "AI_INTERACTION", `Consult draft for ${beneficiary.code}`, session.userId);
 
       return json(res, {
@@ -220,7 +233,10 @@ router.post("/", async (req, res) => {
         where: { id: beneficiaryId },
         select: { id: true, code: true },
       });
-      if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+      if (!beneficiary) {
+        log.warn("timeline_beneficiary_not_found", { beneficiaryId, actor: session.userId });
+        throw new ApiError("Beneficiary not found", 404);
+      }
 
       const [encounters, vitals, screenings, rx, labsPending, referralsOpen, followUpsPending] =
         await Promise.all([
@@ -257,6 +273,12 @@ router.post("/", async (req, res) => {
           status: "PENDING",
           userId: session.userId,
         },
+      });
+
+      log.info("timeline_summary_recorded", {
+        interactionId: interaction.id,
+        beneficiaryId,
+        actor: session.userId,
       });
 
       await logActivity(session.name, "AI_TIMELINE_SUMMARY", "AI_INTERACTION", `Operational summary for ${beneficiary.code}`, session.userId);
@@ -350,6 +372,12 @@ router.post("/", async (req, res) => {
         },
       });
 
+      log.info("camp_plan_recorded", {
+        interactionId: interaction.id,
+        city: city ?? null,
+        actor: session.userId,
+      });
+
       await logActivity(session.name, "AI_CAMP_PLAN", "AI_INTERACTION", `Camp plan${city ? ` for ${city}` : ""}`, session.userId);
 
       return json(res, {
@@ -371,19 +399,24 @@ router.post("/", async (req, res) => {
       if (!documentId) throw new ApiError("documentId is required", 400);
 
       const doc = await db.medicalDocument.findUnique({ where: { id: documentId } });
-      if (!doc) throw new ApiError("Document not found", 404);
+      if (!doc) {
+        log.warn("doc_extract_document_not_found", { documentId, actor: session.userId });
+        throw new ApiError("Document not found", 404);
+      }
 
       // Origin for resolving relative /api/files/:id/file URLs comes from the
       // incoming request (Express req.url is path-only, unlike NextRequest).
       const origin = new URL(req.url, `${req.protocol}://${req.headers.host ?? "localhost"}`).origin;
       const text = await resolveDocumentText(doc, origin);
-      if (text === null)
+      if (text === null) {
+        log.debug("doc_extract_needs_manual_entry", { documentId, actor: session.userId });
         return json(res, {
           action: "DOC_EXTRACT",
           documentId,
           needsManualEntry: true,
           reason: "Image/PDF documents cannot be text-extracted in-browser — upload extracted text or enter manually.",
         });
+      }
 
       let raw: string;
       try {
@@ -412,7 +445,8 @@ router.post("/", async (req, res) => {
           suggestions = null;
         }
       }
-      if (suggestions === null)
+      if (suggestions === null) {
+        log.debug("doc_extract_unparseable", { documentId, actor: session.userId });
         return json(res, {
           action: "DOC_EXTRACT",
           documentId,
@@ -420,6 +454,7 @@ router.post("/", async (req, res) => {
           reason: "The AI response could not be parsed as structured suggestions.",
           rawExcerpt: raw.slice(0, 400),
         });
+      }
 
       const interaction = await db.aIInteraction.create({
         data: {
@@ -432,6 +467,13 @@ router.post("/", async (req, res) => {
           status: "PENDING",
           userId: session.userId,
         },
+      });
+
+      log.info("doc_extract_recorded", {
+        interactionId: interaction.id,
+        documentId: doc.id,
+        confidence,
+        actor: session.userId,
       });
 
       await logActivity(session.name, "AI_DOC_EXTRACT", "AI_INTERACTION", `Extraction suggestions for "${doc.name}"`, session.userId);
@@ -472,13 +514,23 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError(`status must be one of: ${VALID_STATUSES.join(", ")}`, 400);
 
     const existing = await db.aIInteraction.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("AI interaction not found", 404);
+    if (!existing) {
+      log.warn("ai_interaction_not_found", { interactionId: id, actor: session.userId });
+      throw new ApiError("AI interaction not found", 404);
+    }
 
     assertTransition(TRANSITIONS, existing.status, status, "AI interaction");
 
     const interaction = await db.aIInteraction.update({
       where: { id },
       data: { status, reviewedByName: session.name },
+    });
+
+    log.info("ai_interaction_reviewed", {
+      interactionId: id,
+      previousStatus: existing.status,
+      status,
+      actor: session.userId,
     });
 
     await logActivity(

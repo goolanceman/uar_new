@@ -141,8 +141,14 @@ export async function findConversation(id: string) {
 /** Load a conversation and enforce the caller's membership. */
 export async function requireConversationAccess(id: string, userId: string) {
   const conv = await findConversation(id);
-  if (!conv) throw new ApiError("Conversation not found", 404);
-  if (!(await hasConversationAccess(conv, userId))) throw new ApiError("Access denied", 403);
+  if (!conv) {
+    log.warn("conversation_not_found", { conversationId: id, actor: userId });
+    throw new ApiError("Conversation not found", 404);
+  }
+  if (!(await hasConversationAccess(conv, userId))) {
+    log.warn("conversation_access_denied", { conversationId: id, actor: userId });
+    throw new ApiError("Access denied", 403);
+  }
   return conv;
 }
 
@@ -289,7 +295,10 @@ export async function createOrGetConversation(me: string, otherUserId: string) {
   if (otherUserId === me) throw new ApiError("Cannot create conversation with yourself", 400);
 
   const other = await db.user.findUnique({ where: { id: otherUserId }, select: { id: true } });
-  if (!other) throw new ApiError("User not found", 404);
+  if (!other) {
+    log.warn("chat_user_not_found", { actor: me, userId: otherUserId });
+    throw new ApiError("User not found", 404);
+  }
 
   const existing = await db.conversation.findFirst({
     where: {
@@ -420,7 +429,10 @@ export async function sendChatMessage(
       where: { id: opts.replyToMessageId },
       select: { id: true },
     });
-    if (!exists) throw new ApiError("The replyToMessageId is invalid", 400);
+    if (!exists) {
+      log.warn("chat_reply_target_not_found", { actor: me, replyToMessageId: opts.replyToMessageId });
+      throw new ApiError("The replyToMessageId is invalid", 400);
+    }
   }
 
   const conv = await requireConversationAccess(conversationId, me);
@@ -431,6 +443,7 @@ export async function sendChatMessage(
   if (opts.mediaFile) {
     mediaUrl = await store(opts.mediaFile);
     if (opts.thumbnailFile) thumbnailUrl = await store(opts.thumbnailFile);
+    log.debug("chat_media_stored", { conversationId: conv.id, actor: me });
   } else {
     mediaUrl = opts.mediaUrl ?? null;
     thumbnailUrl = opts.thumbnailUrl ?? null;
@@ -546,7 +559,10 @@ export async function muteConversation(me: string, conversationId: string) {
 /** DELETE /chat/conversations/:id/mute — ChatController::unmuteConversation. */
 export async function unmuteConversation(me: string, conversationId: string) {
   const conv = await findConversation(conversationId);
-  if (!conv) throw new ApiError("Conversation not found", 404);
+  if (!conv) {
+    log.warn("conversation_not_found", { conversationId, actor: me });
+    throw new ApiError("Conversation not found", 404);
+  }
 
   // Legacy unmute had no membership check — mirror it.
   const mutedBy = jsonMap(conv.mutedBy);
@@ -574,10 +590,14 @@ export async function clearConversation(me: string, conversationId: string) {
  */
 export async function deleteConversation(me: string, conversationId: string) {
   const conv = await findConversation(conversationId);
-  if (!conv) throw new ApiError("Conversation not found", 404);
+  if (!conv) {
+    log.warn("conversation_not_found", { conversationId, actor: me });
+    throw new ApiError("Conversation not found", 404);
+  }
 
   if (conv.type === 1) {
     if (conv.user1Id !== me && conv.user2Id !== me) {
+      log.warn("conversation_delete_not_member", { conversationId: conv.id, actor: me });
       throw new ApiError("You are not part of this conversation", 403);
     }
     const clearedAt = jsonMap(conv.clearedAt);
@@ -588,7 +608,10 @@ export async function deleteConversation(me: string, conversationId: string) {
     const participant = await db.conversationParticipant.findFirst({
       where: { conversationId: conv.id, userId: me },
     });
-    if (!participant) throw new ApiError("You are not part of this conversation", 403);
+    if (!participant) {
+      log.warn("conversation_delete_not_member", { conversationId: conv.id, actor: me });
+      throw new ApiError("You are not part of this conversation", 403);
+    }
     await db.conversationParticipant.update({
       where: { id: participant.id },
       data: { isActive: false, leftAt: new Date() },

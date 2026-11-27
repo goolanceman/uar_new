@@ -8,6 +8,9 @@
  * exactly like the PHP did when the env was missing).
  */
 import crypto from "crypto";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("realtime:agora");
 
 const PRIVILEGES = {
   kJoinChannel: 1,
@@ -102,6 +105,12 @@ export function buildRtcToken(
     msgBuf,
   ]);
 
+  log.debug("rtc_token_built", {
+    channel: channelName,
+    uid,
+    role,
+    expireTs,
+  });
   return "006" + appId + content.toString("base64");
 }
 

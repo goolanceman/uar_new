@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("screenings");
 
 const VALID_TYPES = [
   "EYE", "DENTAL", "BP", "GLUCOSE", "HEARING", "SKIN", "NUTRITION", "GENERAL", "OTHER",
@@ -86,7 +89,13 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("screening_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const result = optText(body?.result);
     if (!result) throw new ApiError("result is required", 400);
@@ -98,12 +107,21 @@ router.post("/", async (req, res) => {
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("screening_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
     const encounterId = optText(body?.encounterId);
     if (encounterId) {
       const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-      if (!enc) throw new ApiError("Encounter not found", 404);
+      if (!enc) {
+        log.warn("screening_encounter_not_found", {
+          encounterId,
+          actor: session.userId,
+        });
+        throw new ApiError("Encounter not found", 404);
+      }
     }
 
     const screening = await db.screeningRecord.create({
@@ -117,6 +135,15 @@ router.post("/", async (req, res) => {
         recordedByName: session.name,
       },
       include: { beneficiary: { select: { id: true, code: true, name: true } } },
+    });
+
+    log.info("screening_recorded", {
+      screeningId: screening.id,
+      beneficiaryId,
+      ...(campId ? { campId } : {}),
+      type,
+      abnormal: screening.abnormal,
+      actor: session.userId,
     });
 
     await logActivity(

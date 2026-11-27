@@ -72,9 +72,19 @@ router.post("/allocations", async (req, res) => {
     if (!eventId || !lines.length) throw new ApiError("eventId and at least one line are required", 400);
 
     const event = await db.foodEvent.findUnique({ where: { id: eventId } });
-    if (!event) throw new ApiError("Food event not found", 404);
-    if (["COMPLETED", "RECONCILED", "CLOSED", "CANCELLED"].includes(event.status))
+    if (!event) {
+      log.warn("food_event_not_found", { eventId, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
+    if (["COMPLETED", "RECONCILED", "CLOSED", "CANCELLED"].includes(event.status)) {
+      log.warn("food_allocation_event_blocked", {
+        eventId,
+        eventCode: event.code,
+        status: event.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Stock cannot be reserved for a ${event.status.toLowerCase()} event`, 409);
+    }
 
     const reserved: Array<{ itemId: string; batchId: string; quantity: number }> = [];
     await db.$transaction(async (tx) => {
@@ -90,6 +100,13 @@ router.post("/allocations", async (req, res) => {
       }
     });
 
+    log.info("food_stock_reserved", {
+      eventId,
+      eventCode: event.code,
+      reservations: reserved.length,
+      lines: lines.length,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_STOCK_RESERVE",
@@ -115,7 +132,10 @@ router.patch("/allocations/:id", async (req, res) => {
       where: { id },
       include: { event: { select: { code: true } } },
     });
-    if (!allocation) throw new ApiError("Allocation not found", 404);
+    if (!allocation) {
+      log.warn("food_allocation_not_found", { allocationId: id, actor: session.userId });
+      throw new ApiError("Allocation not found", 404);
+    }
 
     await db.$transaction(async (tx) => {
       if (action === "issue") await issueAllocation(tx, id, session.name);
@@ -124,6 +144,14 @@ router.patch("/allocations/:id", async (req, res) => {
       await refreshBatchStatuses(tx, [allocation.itemId]);
     });
 
+    log.info(action === "issue" ? "food_allocation_issued" : "food_allocation_cancelled", {
+      allocationId: id,
+      eventId: allocation.eventId,
+      eventCode: allocation.event.code,
+      itemId: allocation.itemId,
+      quantity: allocation.quantity,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       action === "issue" ? "FOOD_STOCK_ISSUE" : "FOOD_STOCK_RELEASE",
@@ -209,11 +237,18 @@ router.post("/applications", async (req, res) => {
       },
       select: { refCode: true, createdAt: true },
     });
-    if (duplicate && source !== "EMERGENCY")
+    if (duplicate && source !== "EMERGENCY") {
+      log.warn("food_application_duplicate_blocked", {
+        duplicateRef: duplicate.refCode,
+        urgency,
+        source,
+        actor: session?.userId,
+      });
       throw new ApiError(
         `An application from this number is already being reviewed (reference ${duplicate.refCode ?? "—"}). Our team will contact you — for urgent needs choose "Emergency" and mention the crisis.`,
         409
       );
+    }
 
     // Link the caller's beneficiary record when one exists.
     const linked = session
@@ -241,6 +276,14 @@ router.post("/applications", async (req, res) => {
         consent: true,
         source,
       },
+    });
+
+    log.info("food_application_submitted", {
+      applicationId: row.id,
+      refCode: row.refCode,
+      urgency,
+      source,
+      actor: session?.userId,
     });
 
     // Admin worklist notification (no PII beyond first name in the bell).
@@ -314,10 +357,14 @@ router.patch("/applications/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const row = await db.beneficiaryRequest.findUnique({ where: { id } });
-    if (!row || row.category !== "FOOD_ASSISTANCE")
+    if (!row || row.category !== "FOOD_ASSISTANCE") {
+      log.warn("food_application_not_found", { applicationId: id, actor: session.userId });
       throw new ApiError("Food application not found", 404);
-    if (["APPROVED", "REJECTED"].includes(row.status) && !body?.reopen)
+    }
+    if (["APPROVED", "REJECTED"].includes(row.status) && !body?.reopen) {
+      log.warn("food_application_already_decided", { applicationId: id, status: row.status, actor: session.userId });
       throw new ApiError(`Application is already ${row.status.toLowerCase()} — reopen it to change the decision`, 409);
+    }
 
     const status = String(body?.status ?? "").toUpperCase();
     if (!["IN_REVIEW", "APPROVED", "REJECTED", "FULFILLED"].includes(status))
@@ -371,6 +418,13 @@ router.patch("/applications/:id", async (req, res) => {
       });
     }
 
+    log.info("food_application_reviewed", {
+      applicationId: id,
+      refCode: row.refCode,
+      status,
+      beneficiaryId: beneficiaryId ?? null,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_APPLICATION_REVIEW",
@@ -437,12 +491,18 @@ router.post("/batches", async (req, res) => {
       throw new ApiError("Received quantity must be a positive number", 400);
 
     const item = await db.inventoryItem.findUnique({ where: { id: itemId } });
-    if (!item) throw new ApiError("Inventory item not found", 400);
+    if (!item) {
+      log.warn("food_batch_item_not_found", { itemId, actor: session.userId });
+      throw new ApiError("Inventory item not found", 400);
+    }
 
     const exists = await db.foodBatch.findUnique({
       where: { itemId_batchNo: { itemId, batchNo } },
     });
-    if (exists) throw new ApiError(`Batch "${batchNo}" already exists for ${item.name}`, 409);
+    if (exists) {
+      log.warn("food_batch_duplicate", { itemId, batchNo, actor: session.userId });
+      throw new ApiError(`Batch "${batchNo}" already exists for ${item.name}`, 409);
+    }
 
     const source = String(body?.source ?? "PURCHASED").toUpperCase();
     if (!BATCH_SOURCES.includes(source)) throw new ApiError("Invalid source", 400);
@@ -486,6 +546,15 @@ router.post("/batches", async (req, res) => {
       return batch;
     });
 
+    log.info("food_batch_received", {
+      batchId: row.id,
+      itemId,
+      itemCode: item.code,
+      batchNo,
+      quantity,
+      source,
+      actor: session.userId,
+    });
     await logActivity(session.name, "FOOD_BATCH_RECEIVE", "FoodBatch", `${item.code} / ${batchNo} × ${quantity}`, session.userId);
     return json(res, row, 201);
   } catch (e) {
@@ -503,7 +572,10 @@ router.patch("/batches/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const batch = await db.foodBatch.findUnique({ where: { id }, include: { item: true } });
-    if (!batch) throw new ApiError("Food batch not found", 404);
+    if (!batch) {
+      log.warn("food_batch_not_found", { batchId: id, actor: session.userId });
+      throw new ApiError("Food batch not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.storageNotes !== undefined) data.storageNotes = body.storageNotes ? String(body.storageNotes).trim() : null;
@@ -530,8 +602,16 @@ router.patch("/batches/:id", async (req, res) => {
     if (body?.wasteQty !== undefined) {
       const qty = Number(body.wasteQty);
       if (!Number.isInteger(qty) || qty <= 0) throw new ApiError("Waste quantity must be a positive whole number", 400);
-      if (qty > availableOf(batch))
+      if (qty > availableOf(batch)) {
+        log.warn("food_batch_waste_insufficient_stock", {
+          batchId: id,
+          batchNo: batch.batchNo,
+          wasteQty: qty,
+          available: availableOf(batch),
+          actor: session.userId,
+        });
         throw new ApiError(`Only ${availableOf(batch)} unit(s) are free in this batch — ${qty} cannot be written off`, 400);
+      }
       if (!body?.wasteReason) throw new ApiError("A waste reason is required", 400);
       data.quantityWasted = { increment: qty };
     }
@@ -563,6 +643,14 @@ router.patch("/batches/:id", async (req, res) => {
       return row;
     });
 
+    log.info("food_batch_inspected", {
+      batchId: id,
+      batchNo: batch.batchNo,
+      qualityStatus: updated.qualityStatus,
+      status: updated.status,
+      wasted: body?.wasteQty !== undefined ? Number(body.wasteQty) : 0,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       body?.wasteQty ? "FOOD_BATCH_WASTE" : "FOOD_BATCH_INSPECT",
@@ -628,7 +716,12 @@ router.post("/checkin", async (req, res) => {
         },
       });
       if (candidates.length === 1) reg = candidates[0];
-      else if (candidates.length > 1)
+      else if (candidates.length > 1) {
+        log.debug("food_checkin_needs_disambiguation", {
+          matches: candidates.length,
+          eventId,
+          actor: session.userId,
+        });
         return json(
           res,
           {
@@ -641,9 +734,17 @@ router.post("/checkin", async (req, res) => {
           },
           200
         );
+      }
     }
 
     if (!reg) throw new ApiError("No registration found for that code, ID or phone number", 404);
+    log.debug("food_checkin_resolved", {
+      registrationId: reg.id,
+      code: reg.code,
+      eventId: reg.eventId,
+      status: reg.status,
+      actor: session.userId,
+    });
 
     // ── role scoping ────────────────────────────────────────────────────────
     if (session.role === "VOLUNTEER") {
@@ -653,27 +754,57 @@ router.post("/checkin", async (req, res) => {
             where: { volunteerId: volunteer.id, refType: "FOOD_EVENT", refId: reg.eventId, status: { not: "CANCELLED" } },
           })
         : null;
-      if (!assigned)
+      if (!assigned) {
+        log.warn("food_checkin_volunteer_not_assigned", { registrationId: reg.id, eventId: reg.eventId, actor: session.userId });
         throw new ApiError("You are not assigned to this distribution event", 403);
+      }
     }
 
     const event = reg.event;
-    if (!FOOD_OPERATIONAL_STATUSES.includes(event.status))
+    if (!FOOD_OPERATIONAL_STATUSES.includes(event.status)) {
+      log.warn("food_checkin_event_not_operational", {
+        registrationId: reg.id,
+        eventId: event.id,
+        eventCode: event.code,
+        status: event.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Distribution is not operational right now (event is ${event.status})`, 409);
+    }
 
-    if (["CANCELLED", "REJECTED", "NO_SHOW"].includes(reg.status))
+    if (["CANCELLED", "REJECTED", "NO_SHOW"].includes(reg.status)) {
+      log.warn("food_checkin_registration_blocked", {
+        registrationId: reg.id,
+        code: reg.code,
+        status: reg.status,
+        actor: session.userId,
+      });
       throw new ApiError(`This registration is ${reg.status.toLowerCase()} — reinstate it from the admin desk first`, 409);
+    }
 
-    if (["DISTRIBUTED", "PARTIALLY_DISTRIBUTED"].includes(reg.status))
+    if (["DISTRIBUTED", "PARTIALLY_DISTRIBUTED"].includes(reg.status)) {
+      log.warn("food_checkin_duplicate_handover_blocked", {
+        registrationId: reg.id,
+        code: reg.code,
+        status: reg.status,
+        eventCode: event.code,
+        actor: session.userId,
+      });
       throw new ApiError(
         `Food was already handed over to ${reg.beneficiaryId ? "this beneficiary" : "them"} for ${event.code} — duplicate handover blocked`,
         409
       );
+    }
 
     // Offline replay: same offlineRef returns the same outcome, no double write.
     if (offlineRef) {
       const replay = await db.foodCheckIn.findUnique({ where: { offlineRef } });
       if (replay) {
+        log.debug("food_checkin_offline_replay", {
+          offlineRef,
+          registrationId: replay.registrationId,
+          actor: session.userId,
+        });
         const existing = await db.foodRegistration.findUnique({
           where: { id: replay.registrationId },
           include: { beneficiary: { select: { code: true, name: true } } },
@@ -694,8 +825,10 @@ router.post("/checkin", async (req, res) => {
             where: { id: reg.id, status: reg.status },
             data: { status: "CHECKED_IN" },
           });
-          if (claimed.count !== 1)
+          if (claimed.count !== 1) {
+            log.warn("food_checkin_concurrent_conflict", { registrationId: reg.id, code: reg.code, actor: session.userId });
             throw new ApiError("Registration changed while check-in was being processed", 409);
+          }
           await tx.foodCheckIn.create({
             data: {
               registrationId: reg.id,
@@ -709,6 +842,12 @@ router.post("/checkin", async (req, res) => {
         });
       }
 
+      log.info("food_registration_checked_in", {
+        registrationId: reg.id,
+        code: reg.code,
+        eventId: reg.eventId,
+        actor: session.userId,
+      });
       const fresh = await db.foodRegistration.findUnique({
         where: { id: reg.id },
         include: {
@@ -725,12 +864,22 @@ router.post("/checkin", async (req, res) => {
     }
 
     if (action === "checkout") {
-      if (reg.status !== "CHECKED_IN")
+      if (reg.status !== "CHECKED_IN") {
+        log.warn("food_checkout_not_checked_in", { registrationId: reg.id, code: reg.code, status: reg.status, actor: session.userId });
         throw new ApiError("Check the beneficiary in before recording the handover", 409);
+      }
 
       const units = Math.max(0, Number(body?.unitsDelivered ?? reg.unitsAllocated));
-      if (units > reg.unitsAllocated)
+      if (units > reg.unitsAllocated) {
+        log.warn("food_checkout_units_exceed_allocation", {
+          registrationId: reg.id,
+          code: reg.code,
+          units,
+          unitsAllocated: reg.unitsAllocated,
+          actor: session.userId,
+        });
         throw new ApiError(`Only ${reg.unitsAllocated} unit(s) were allocated for this registration`, 400);
+      }
 
       const ackMethod = String(body?.ackMethod ?? "DIGITAL").toUpperCase();
       if (!FOOD_ACK_METHODS.includes(ackMethod))
@@ -754,8 +903,10 @@ router.post("/checkin", async (req, res) => {
             reason: none ? "BENEFICIARY_DECLINED" : partial ? "PARTIAL_COLLECTION" : null,
           },
         });
-        if (changed.count !== 1)
+        if (changed.count !== 1) {
+          log.warn("food_checkout_concurrent_conflict", { registrationId: reg.id, code: reg.code, actor: session.userId });
           throw new ApiError("Registration was already handed over or changed", 409);
+        }
         return tx.foodRegistration.findUniqueOrThrow({
           where: { id: reg.id },
           include: {
@@ -765,6 +916,15 @@ router.post("/checkin", async (req, res) => {
         });
       });
 
+      log.info("food_handover_recorded", {
+        registrationId: reg.id,
+        code: reg.code,
+        units,
+        unitsAllocated: reg.unitsAllocated,
+        status: targetStatus,
+        ackMethod,
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "FOOD_HANDOVER",
@@ -886,7 +1046,10 @@ router.post("/events", async (req, res) => {
 
     const programmeId = String(body?.programmeId ?? "");
     const programme = await db.foodProgramme.findUnique({ where: { id: programmeId } });
-    if (!programme) throw new ApiError("Parent food programme is required", 400);
+    if (!programme) {
+      log.warn("food_programme_not_found", { programmeId, actor: session.userId });
+      throw new ApiError("Parent food programme is required", 400);
+    }
 
     const title = String(body?.title ?? "").trim();
     const venue = String(body?.venue ?? "").trim();
@@ -909,8 +1072,10 @@ router.post("/events", async (req, res) => {
 
     const maxCapacity = Number(body?.maxCapacity) > 0 ? Number(body.maxCapacity) : null;
     const plannedUnits = Math.max(0, Number(body?.plannedUnits) || 0);
-    if (maxCapacity && plannedUnits > maxCapacity)
+    if (maxCapacity && plannedUnits > maxCapacity) {
+      log.warn("food_event_capacity_exceeded", { plannedUnits, maxCapacity, actor: session.userId });
       throw new ApiError("Planned packages exceed the maximum capacity", 400);
+    }
 
     const row = await db.foodEvent.create({
       data: {
@@ -939,6 +1104,14 @@ router.post("/events", async (req, res) => {
       },
     });
 
+    log.info("food_event_created", {
+      eventId: row.id,
+      code: row.code,
+      title: row.title,
+      eventType: row.eventType,
+      plannedUnits: row.plannedUnits,
+      actor: session.userId,
+    });
     await logActivity(session.name, "FOOD_EVENT_CREATE", "FoodEvent", `${row.code} — ${row.title}`, session.userId);
     return json(res, row, 201);
   } catch (e) {
@@ -1042,7 +1215,10 @@ router.patch("/events/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const event = await db.foodEvent.findUnique({ where: { id } });
-    if (!event) throw new ApiError("Food event not found", 404);
+    if (!event) {
+      log.warn("food_event_not_found", { eventId: id, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.title !== undefined) data.title = String(body.title).trim();
@@ -1079,6 +1255,11 @@ router.patch("/events/:id", async (req, res) => {
         const reserved = await tx.foodStockAllocation.findMany({
           where: { eventId: id, status: "RESERVED" },
         });
+        log.debug("food_event_cancellation_releasing_reservations", {
+          eventId: id,
+          reservations: reserved.length,
+          actor: session.userId,
+        });
         for (const a of reserved) {
           await tx.foodStockAllocation.update({
             where: { id: a.id },
@@ -1104,6 +1285,12 @@ router.patch("/events/:id", async (req, res) => {
           orderBy: { createdAt: "asc" },
         });
         const totalIssued = issued.reduce((s, a) => s + a.quantity, 0);
+        log.debug("food_event_reconciliation_returning_stock", {
+          eventId: id,
+          issued: totalIssued,
+          delivered: deliveredAgg._sum.unitsDelivered ?? 0,
+          actor: session.userId,
+        });
         let undistributed = Math.max(0, totalIssued - (deliveredAgg._sum.unitsDelivered ?? 0));
         for (const a of issued) {
           if (undistributed <= 0) break;
@@ -1115,6 +1302,14 @@ router.patch("/events/:id", async (req, res) => {
       return row;
     });
 
+    log.info("food_event_updated", {
+      eventId: id,
+      code: updated.code,
+      status: updated.status,
+      statusChanged: data.status !== undefined,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_EVENT_UPDATE",
@@ -1151,7 +1346,10 @@ router.post("/events/:id/expenses", async (req, res) => {
     const body = req.body ?? {};
 
     const event = await db.foodEvent.findUnique({ where: { id } });
-    if (!event) throw new ApiError("Food event not found", 404);
+    if (!event) {
+      log.warn("food_event_not_found", { eventId: id, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
 
     const head = String(body?.head ?? "").trim();
     const amount = Number(body?.amount);
@@ -1169,6 +1367,14 @@ router.post("/events/:id/expenses", async (req, res) => {
       },
     });
 
+    log.info("food_expense_created", {
+      expenseId: row.id,
+      eventId: id,
+      eventCode: event.code,
+      head,
+      amount,
+      actor: session.userId,
+    });
     await logActivity(session.name, "FOOD_EXPENSE_CREATE", "FoodEventExpense", `${event.code}: ${head} ₹${amount}`, session.userId);
     return json(res, row, 201);
   } catch (e) {
@@ -1213,7 +1419,10 @@ router.post("/events/:id/registrations", async (req, res) => {
       where: { id },
       include: { packageTemplate: true },
     });
-    if (!event) throw new ApiError("Food event not found", 404);
+    if (!event) {
+      log.warn("food_event_not_found", { eventId: id, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
 
     let beneficiaryIds: string[] = [];
     let isAdmin = false;
@@ -1248,11 +1457,19 @@ router.post("/events/:id/registrations", async (req, res) => {
       const activeCount = await db.foodRegistration.count({
         where: { eventId: id, status: { in: FOOD_ACTIVE_REG_STATUSES } },
       });
-      if (activeCount + beneficiaryIds.length > event.maxCapacity)
+      if (activeCount + beneficiaryIds.length > event.maxCapacity) {
+        log.warn("food_registration_capacity_exceeded", {
+          eventId: id,
+          maxCapacity: event.maxCapacity,
+          activeCount,
+          requested: beneficiaryIds.length,
+          actor: session.userId,
+        });
         throw new ApiError(
           `Capacity is ${event.maxCapacity} and ${activeCount} are already registered — increase capacity first`,
           409
         );
+      }
     }
 
     const created: string[] = [];
@@ -1286,6 +1503,13 @@ router.post("/events/:id/registrations", async (req, res) => {
             created.push(dupe.code);
             continue;
           }
+          log.warn("food_registration_duplicate", {
+            eventId: id,
+            beneficiaryId,
+            registrationId: dupe.id,
+            status: dupe.status,
+            actor: session.userId,
+          });
           throw new ApiError(`${beneficiary.name} already has a ${dupe.status} registration for this event`, 409);
         }
 
@@ -1307,6 +1531,13 @@ router.post("/events/:id/registrations", async (req, res) => {
       }
     });
 
+    log.info("food_registrations_created", {
+      eventId: id,
+      eventCode: event.code,
+      count: created.length,
+      units,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_REGISTRATION_CREATE",
@@ -1386,16 +1617,24 @@ router.post("/events/:id/volunteers", async (req, res) => {
     const body = req.body as Record<string, unknown>;
 
     const event = await db.foodEvent.findUnique({ where: { id } });
-    if (!event) throw new ApiError("Food event not found", 404);
+    if (!event) {
+      log.warn("food_event_not_found", { eventId: id, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
 
     const volunteerId = String(body?.volunteerId ?? "");
     const volunteer = await db.volunteer.findUnique({
       where: { id: volunteerId },
       include: { user: { select: { name: true } } },
     });
-    if (!volunteer) throw new ApiError("Volunteer not found", 404);
-    if (volunteer.status !== "ACTIVE")
+    if (!volunteer) {
+      log.warn("food_volunteer_not_found", { volunteerId, eventId: id, actor: session.userId });
+      throw new ApiError("Volunteer not found", 404);
+    }
+    if (volunteer.status !== "ACTIVE") {
+      log.warn("food_volunteer_not_active", { volunteerId, eventId: id, status: volunteer.status, actor: session.userId });
       throw new ApiError("Only ACTIVE volunteers can be assigned to an event", 400);
+    }
 
     const role = String(body?.role ?? "").trim().toUpperCase();
     if (!VOLUNTEER_ROLES.includes(role))
@@ -1404,7 +1643,15 @@ router.post("/events/:id/volunteers", async (req, res) => {
     const dupe = await db.volunteerTask.findFirst({
       where: { volunteerId, refType: "FOOD_EVENT", refId: id, status: { not: "CANCELLED" } },
     });
-    if (dupe) throw new ApiError(`${volunteer.user.name} is already assigned to this event`, 409);
+    if (dupe) {
+      log.warn("food_volunteer_already_assigned", {
+        volunteerId,
+        eventId: id,
+        taskId: dupe.id,
+        actor: session.userId,
+      });
+      throw new ApiError(`${volunteer.user.name} is already assigned to this event`, 409);
+    }
 
     const task = await db.volunteerTask.create({
       data: {
@@ -1423,6 +1670,14 @@ router.post("/events/:id/volunteers", async (req, res) => {
       include: taskInclude,
     });
 
+    log.info("food_volunteer_assigned", {
+      taskId: task.id,
+      eventId: id,
+      eventCode: event.code,
+      volunteerId,
+      role,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_VOLUNTEER_ASSIGN",
@@ -1449,11 +1704,19 @@ router.delete("/events/:id/volunteers", async (req, res) => {
       where: { id: taskId },
       include: { volunteer: { select: { code: true, user: { select: { name: true } } } } },
     });
-    if (!task || task.refType !== "FOOD_EVENT" || task.refId !== id)
+    if (!task || task.refType !== "FOOD_EVENT" || task.refId !== id) {
+      log.warn("food_volunteer_assignment_not_found", { taskId, eventId: id, actor: session.userId });
       throw new ApiError("Assignment not found for this event", 404);
+    }
 
     if (task.status !== "CANCELLED") {
       await db.volunteerTask.update({ where: { id: taskId }, data: { status: "CANCELLED" } });
+      log.info("food_volunteer_unassigned", {
+        taskId,
+        eventId: id,
+        volunteerCode: task.volunteer.code,
+        actor: session.userId,
+      });
       await logActivity(
         session.name,
         "FOOD_VOLUNTEER_REMOVE",
@@ -1498,9 +1761,19 @@ router.post("/events/:id/walkin", async (req, res) => {
       where: { id },
       include: { packageTemplate: true },
     });
-    if (!event) throw new ApiError("Food event not found", 404);
-    if (!["READY", "IN_PROGRESS", "PACKAGES_PREPARED", "STOCK_ALLOCATED"].includes(event.status))
+    if (!event) {
+      log.warn("food_event_not_found", { eventId: id, actor: session.userId });
+      throw new ApiError("Food event not found", 404);
+    }
+    if (!["READY", "IN_PROGRESS", "PACKAGES_PREPARED", "STOCK_ALLOCATED"].includes(event.status)) {
+      log.warn("food_walkin_event_not_operational", {
+        eventId: id,
+        eventCode: event.code,
+        status: event.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Walk-ins are only possible while distribution is operational (event is ${event.status})`, 409);
+    }
 
     if (session.role === "VOLUNTEER") {
       const volunteer = await db.volunteer.findUnique({ where: { userId: session.userId } });
@@ -1509,15 +1782,25 @@ router.post("/events/:id/walkin", async (req, res) => {
             where: { volunteerId: volunteer.id, refType: "FOOD_EVENT", refId: id },
           })
         : null;
-      if (!assigned) throw new ApiError("You are not assigned to this distribution event", 403);
+      if (!assigned) {
+        log.warn("food_walkin_volunteer_not_assigned", { eventId: id, actor: session.userId });
+        throw new ApiError("You are not assigned to this distribution event", 403);
+      }
     }
 
     if (event.maxCapacity) {
       const active = await db.foodRegistration.count({
         where: { eventId: id, status: { in: FOOD_ACTIVE_REG_STATUSES } },
       });
-      if (active + 1 > event.maxCapacity)
+      if (active + 1 > event.maxCapacity) {
+        log.warn("food_walkin_capacity_full", {
+          eventId: id,
+          maxCapacity: event.maxCapacity,
+          activeCount: active,
+          actor: session.userId,
+        });
         throw new ApiError(`Event capacity (${event.maxCapacity}) is full`, 409);
+      }
     }
 
     // Duplicate identity guard (§8 — never create duplicate beneficiaries):
@@ -1544,6 +1827,13 @@ router.post("/events/:id/walkin", async (req, res) => {
         where: { phone: { contains: phoneRaw.slice(-10) } },
         orderBy: { createdAt: "asc" },
       });
+      if (beneficiary)
+        log.debug("food_walkin_beneficiary_reused", {
+          beneficiaryId: beneficiary.id,
+          beneficiaryCode: beneficiary.code,
+          eventId: id,
+          actor: session.userId,
+        });
     }
 
     const result = await db.$transaction(async (tx) => {
@@ -1601,6 +1891,15 @@ router.post("/events/:id/walkin", async (req, res) => {
       return { beneficiary, registration };
     });
 
+    log.info("food_walkin_registered", {
+      eventId: id,
+      eventCode: event.code,
+      registrationId: result.registration.id,
+      registrationCode: result.registration.code,
+      beneficiaryId: result.beneficiary.id,
+      beneficiaryCode: result.beneficiary.code,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_WALKIN_REGISTER",
@@ -1661,8 +1960,10 @@ router.post("/households", async (req, res) => {
       throw new ApiError("PIN code must look like 560001", 400);
 
     const headBeneficiaryId = body?.headBeneficiaryId ? String(body.headBeneficiaryId) : null;
-    if (headBeneficiaryId && !(await db.beneficiary.findUnique({ where: { id: headBeneficiaryId } })))
+    if (headBeneficiaryId && !(await db.beneficiary.findUnique({ where: { id: headBeneficiaryId } }))) {
+      log.warn("food_household_head_not_found", { headBeneficiaryId, actor: session.userId });
       throw new ApiError("Head beneficiary not found", 400);
+    }
 
     const members = Array.isArray(body?.members) ? body.members : [];
     const row = await db.$transaction(async (tx) => {
@@ -1699,6 +2000,14 @@ router.post("/households", async (req, res) => {
       return household;
     });
 
+    log.info("food_household_created", {
+      householdId: row.id,
+      code: row.code,
+      name: row.name,
+      size,
+      members: members.length,
+      actor: session.userId,
+    });
     await logActivity(session.name, "HOUSEHOLD_CREATE", "Household", `${row.code} — ${row.name}`, session.userId);
     return json(res, row, 201);
   } catch (e) {
@@ -1714,7 +2023,10 @@ router.patch("/households/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const household = await db.household.findUnique({ where: { id } });
-    if (!household) throw new ApiError("Household not found", 404);
+    if (!household) {
+      log.warn("food_household_not_found", { householdId: id, actor: session.userId });
+      throw new ApiError("Household not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.name !== undefined) data.name = String(body.name).trim();
@@ -1757,6 +2069,12 @@ router.patch("/households/:id", async (req, res) => {
       return row;
     });
 
+    log.info("food_household_updated", {
+      householdId: id,
+      code: updated.code,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(session.name, "HOUSEHOLD_UPDATE", "Household", updated.code, session.userId);
     return json(res, updated);
   } catch (e) {
@@ -1773,11 +2091,21 @@ router.delete("/households/:id", async (req, res) => {
       where: { id },
       include: { _count: { select: { registrations: true } } },
     });
-    if (!household) throw new ApiError("Household not found", 404);
-    if (household._count.registrations > 0)
+    if (!household) {
+      log.warn("food_household_not_found", { householdId: id, actor: session.userId });
+      throw new ApiError("Household not found", 404);
+    }
+    if (household._count.registrations > 0) {
+      log.warn("food_household_delete_blocked", {
+        householdId: id,
+        registrations: household._count.registrations,
+        actor: session.userId,
+      });
       throw new ApiError("This household has assistance registrations — archive it with a note instead of deleting", 409);
+    }
 
     await db.household.delete({ where: { id } });
+    log.info("food_household_deleted", { householdId: id, code: household.code, actor: session.userId });
     await logActivity(session.name, "HOUSEHOLD_DELETE", "Household", household.code, session.userId);
     return json(res, { deleted: true });
   } catch (e) {
@@ -1876,6 +2204,7 @@ router.post("/insights", async (req, res) => {
         `Plan this food distribution event. Data:\n${JSON.stringify(data)}\n\nSuggest: packages to prepare, ingredient/stock requirements vs availability (flag shortfalls), volunteer numbers by role, estimated cost, and risks. State every assumption.`
       );
       await storeInteraction("FOOD_PLAN", digest("event", event.code), output, eventId);
+      log.info("food_insight_generated", { mode: "plan", eventId, actor: session.userId });
       return json(res, { output });
     }
 
@@ -1901,6 +2230,7 @@ router.post("/insights", async (req, res) => {
         `Forecast food demand for the next 4-8 weeks. Data:\n${JSON.stringify(data)}\n\nGive: expected demand ranges by area, stock items likely to run short, and seasonality notes. State confidence and assumptions. This is advisory only.`
       );
       await storeInteraction("FOOD_FORECAST", digest("aggregates", data), output);
+      log.info("food_insight_generated", { mode: "forecast", actor: session.userId });
       return json(res, { output });
     }
 
@@ -1941,6 +2271,7 @@ router.post("/insights", async (req, res) => {
         `Answer this question using ONLY the data below. Include the reporting period (all time) and define metrics you use.\n\nQuestion: ${question}\n\nData:\n${JSON.stringify(data)}`
       );
       await storeInteraction("FOOD_ANALYTICS", digest("question", question), output);
+      log.info("food_insight_generated", { mode: "analytics", actor: session.userId });
       return json(res, { output });
     }
 
@@ -1963,6 +2294,7 @@ router.post("/insights", async (req, res) => {
         `Suggest how to prevent food waste. At-risk stock (expiring within ${riskWindowDays} days, free quantity):\n${JSON.stringify(atRisk)}\n\nCancelled/postponed events:\n${JSON.stringify(cancelled)}\n\nRecommend which upcoming distributions or programmes each batch could be redirected to, in priority order. NEVER suggest distributing expired, quarantined or rejected stock — exclude anything not PASSED and unexpired.`
       );
       await storeInteraction("FOOD_WASTE", digest("atRisk", atRisk), output);
+      log.info("food_insight_generated", { mode: "waste", actor: session.userId });
       return json(res, { output });
     }
 
@@ -2049,7 +2381,10 @@ router.post("/pledges", async (req, res) => {
       },
       select: { code: true },
     });
-    if (duplicate) throw new ApiError("You just submitted this pledge", 409);
+    if (duplicate) {
+      log.warn("food_pledge_duplicate_blocked", { duplicateCode: duplicate.code, actor: session?.userId });
+      throw new ApiError("You just submitted this pledge", 409);
+    }
 
     const row = await db.foodDonationPledge.create({
       data: {
@@ -2076,6 +2411,11 @@ router.post("/pledges", async (req, res) => {
         type: "DISTRIBUTION",
         actionUrl: "/admin/food",
       },
+    });
+    log.info("food_pledge_created", {
+      pledgeId: row.id,
+      code: row.code,
+      actor: session?.userId,
     });
     await logActivity(donorName, "FOOD_PLEDGE_CREATE", "FoodDonationPledge", row.code, session?.userId);
 
@@ -2117,7 +2457,10 @@ router.patch("/pledges/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const pledge = await db.foodDonationPledge.findUnique({ where: { id } });
-    if (!pledge) throw new ApiError("Donation pledge not found", 404);
+    if (!pledge) {
+      log.warn("food_pledge_not_found", { pledgeId: id, actor: session.userId });
+      throw new ApiError("Donation pledge not found", 404);
+    }
 
     const action = String(body?.action ?? "").toUpperCase();
 
@@ -2130,6 +2473,12 @@ router.patch("/pledges/:id", async (req, res) => {
         scheduledFor,
         assignedToName: body?.assignedToName ? String(body.assignedToName).trim() : session.name,
       });
+      log.info("food_pledge_scheduled", {
+        pledgeId: id,
+        code: pledge.code,
+        scheduledFor: scheduledFor.toISOString(),
+        actor: session.userId,
+      });
       await logActivity(session.name, "FOOD_PLEDGE_SCHEDULE", "FoodDonationPledge", `${pledge.code} → pickup ${scheduledFor.toISOString()}`, session.userId);
       return json(res, updated);
     }
@@ -2137,6 +2486,7 @@ router.patch("/pledges/:id", async (req, res) => {
     if (action === "COLLECT") {
       assertTransition(FOOD_PLEDGE_TRANSITIONS, pledge.status, "COLLECTED", "food donation pledge");
       const updated = await transitionPledge(id, pledge.status, "COLLECTED");
+      log.info("food_pledge_collected", { pledgeId: id, code: pledge.code, actor: session.userId });
       await logActivity(session.name, "FOOD_PLEDGE_COLLECT", "FoodDonationPledge", pledge.code, session.userId);
       return json(res, updated);
     }
@@ -2152,9 +2502,15 @@ router.patch("/pledges/:id", async (req, res) => {
         throw new ApiError("Received quantity must be a positive number", 400);
 
       const item = await db.inventoryItem.findUnique({ where: { id: itemId } });
-      if (!item) throw new ApiError("Inventory item not found", 400);
+      if (!item) {
+        log.warn("food_pledge_item_not_found", { pledgeId: id, itemId, actor: session.userId });
+        throw new ApiError("Inventory item not found", 400);
+      }
       const exists = await db.foodBatch.findUnique({ where: { itemId_batchNo: { itemId, batchNo } } });
-      if (exists) throw new ApiError(`Batch "${batchNo}" already exists for ${item.name}`, 409);
+      if (exists) {
+        log.warn("food_pledge_batch_conflict", { pledgeId: id, itemId, batchNo, actor: session.userId });
+        throw new ApiError(`Batch "${batchNo}" already exists for ${item.name}`, 409);
+      }
 
       const source = String(body?.source ?? "DONATED").toUpperCase();
       const updated = await db.$transaction(async (tx) => {
@@ -2198,6 +2554,14 @@ router.patch("/pledges/:id", async (req, res) => {
         });
         return tx.foodDonationPledge.findUniqueOrThrow({ where: { id } });
       });
+      log.info("food_pledge_received", {
+        pledgeId: id,
+        code: pledge.code,
+        itemId,
+        batchNo,
+        quantity,
+        actor: session.userId,
+      });
       await logActivity(session.name, "FOOD_PLEDGE_RECEIVE", "FoodDonationPledge", `${pledge.code} → batch ${batchNo} (${quantity})`, session.userId);
       return json(res, updated);
     }
@@ -2208,6 +2572,11 @@ router.patch("/pledges/:id", async (req, res) => {
       const status = action === "REJECT" ? "REJECTED" : "CANCELLED";
       assertTransition(FOOD_PLEDGE_TRANSITIONS, pledge.status, status, "food donation pledge");
       const updated = await transitionPledge(id, pledge.status, status, { rejectionReason: reason });
+      log.info(status === "REJECTED" ? "food_pledge_rejected" : "food_pledge_cancelled", {
+        pledgeId: id,
+        code: pledge.code,
+        actor: session.userId,
+      });
       await logActivity(session.name, `FOOD_PLEDGE_${status}`, "FoodDonationPledge", `${pledge.code}: ${reason.slice(0, 120)}`, session.userId);
       return json(res, updated);
     }
@@ -2294,8 +2663,10 @@ router.post("/programmes", async (req, res) => {
     const slug = `${slugBase}-${Date.now().toString(36).slice(-4)}`;
 
     const campaignId = body?.campaignId ? String(body.campaignId) : null;
-    if (campaignId && !(await db.campaign.findUnique({ where: { id: campaignId } })))
+    if (campaignId && !(await db.campaign.findUnique({ where: { id: campaignId } }))) {
+      log.warn("food_programme_campaign_not_found", { campaignId, actor: session.userId });
       throw new ApiError("Linked campaign was not found", 400);
+    }
 
     const row = await db.foodProgramme.create({
       data: {
@@ -2321,6 +2692,14 @@ router.post("/programmes", async (req, res) => {
       },
     });
 
+    log.info("food_programme_created", {
+      programmeId: row.id,
+      code: row.code,
+      title: row.title,
+      category: row.category,
+      frequency: row.frequency,
+      actor: session.userId,
+    });
     await logActivity(session.name, "FOOD_PROGRAMME_CREATE", "FoodProgramme", `${row.code} — ${row.title}`, session.userId);
     return json(res, row, 201);
   } catch (e) {
@@ -2358,7 +2737,10 @@ router.patch("/programmes/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const row = await db.foodProgramme.findUnique({ where: { id } });
-    if (!row) throw new ApiError("Food programme not found", 404);
+    if (!row) {
+      log.warn("food_programme_not_found", { programmeId: id, actor: session.userId });
+      throw new ApiError("Food programme not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.title !== undefined) data.title = String(body.title).trim();
@@ -2383,6 +2765,13 @@ router.patch("/programmes/:id", async (req, res) => {
     }
 
     const updated = await db.foodProgramme.update({ where: { id }, data });
+    log.info("food_programme_updated", {
+      programmeId: id,
+      code: updated.code,
+      status: updated.status,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(session.name, "FOOD_PROGRAMME_UPDATE", "FoodProgramme", `${updated.code} → ${updated.status}`, session.userId);
     return json(res, updated);
   } catch (e) {
@@ -2538,7 +2927,10 @@ router.patch("/registrations/:id", async (req, res) => {
       where: { id },
       include: { event: { select: { code: true, title: true } } },
     });
-    if (!reg) throw new ApiError("Registration not found", 404);
+    if (!reg) {
+      log.warn("food_registration_not_found", { registrationId: id, actor: session.userId });
+      throw new ApiError("Registration not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     let statusChanged = false;
@@ -2577,6 +2969,13 @@ router.patch("/registrations/:id", async (req, res) => {
           return tx.foodRegistration.findUniqueOrThrow({ where: { id } });
         })
       : await db.foodRegistration.update({ where: { id }, data });
+    log.info("food_registration_updated", {
+      registrationId: id,
+      code: reg.code,
+      status: updated.status ?? reg.status,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "FOOD_REGISTRATION_UPDATE",

@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -15,6 +16,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("pad-distributions");
 
 function parseFrom(sp: URLSearchParams): Date | undefined {
   const raw = sp.get("from")?.trim();
@@ -166,7 +169,10 @@ router.post("/", async (req, res) => {
       const assigned = await db.volunteer.findUnique({
         where: { id: String(body.volunteerId) },
       });
-      if (!assigned) throw new ApiError("Volunteer not found", 400);
+      if (!assigned) {
+        log.warn("pad_drive_volunteer_not_found", { volunteerId: body.volunteerId, actor: session.userId });
+        throw new ApiError("Volunteer not found", 400);
+      }
       volunteerId = assigned.id;
     } else {
       const volunteer = await db.volunteer.findUnique({
@@ -190,6 +196,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("pad_drive_created", {
+      padDistributionId: row.id,
+      area,
+      padsDistributed,
+      girlsCount,
+      awarenessSession,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "PAD_DRIVE",
@@ -212,14 +226,23 @@ async function assertCanMutate(
     where: { id },
     select: { id: true, volunteerId: true, area: true, padsDistributed: true },
   });
-  if (!existing) throw new ApiError("Pad distribution not found", 404);
+  if (!existing) {
+    log.warn("pad_drive_not_found", { padDistributionId: id, actor: session.userId });
+    throw new ApiError("Pad distribution not found", 404);
+  }
   if (session.role !== "ADMIN") {
     const own = await db.volunteer.findUnique({
       where: { userId: session.userId },
       select: { id: true },
     });
-    if (!own || existing.volunteerId !== own.id)
+    if (!own || existing.volunteerId !== own.id) {
+      log.warn("pad_drive_not_owner", {
+        padDistributionId: id,
+        area: existing.area,
+        actor: session.userId,
+      });
       throw new ApiError("You can only manage pad drives you recorded", 403);
+    }
   }
   return existing;
 }
@@ -291,12 +314,22 @@ router.patch("/:id", async (req, res) => {
         const v = await db.volunteer.findUnique({
           where: { id: String(body.volunteerId) },
         });
-        if (!v) throw new ApiError("Volunteer not found", 400);
+        if (!v) {
+          log.warn("pad_drive_volunteer_not_found", { volunteerId: body.volunteerId, padDistributionId: id, actor: session.userId });
+          throw new ApiError("Volunteer not found", 400);
+        }
         data.volunteerId = v.id;
       }
     }
 
     const row = await db.padDistribution.update({ where: { id }, data });
+    log.info("pad_drive_updated", {
+      padDistributionId: id,
+      area: row.area,
+      padsDistributed: row.padsDistributed,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "PAD_DRIVE_UPDATE",
@@ -318,6 +351,12 @@ router.delete("/:id", async (req, res) => {
     const existing = await assertCanMutate(session, id);
 
     await db.padDistribution.delete({ where: { id } });
+    log.info("pad_drive_deleted", {
+      padDistributionId: id,
+      area: existing.area,
+      padsDistributed: existing.padsDistributed,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "PAD_DRIVE_DELETE",

@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireRole, ApiError, json, handleError, logActivity } from "@/lib/session";
 import {
   SETTING_DEFAULTS,
@@ -16,6 +17,8 @@ import { publicOrgSettings } from "@/lib/api-org";
 import { cached, cacheTtl, invalidateSettings, settingsKey } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("settings");
 
 /** Non-secret default values — merged into GET responses for keys that the
  * admin has not customised yet, so every consumer sees a complete map.
@@ -82,6 +85,11 @@ router.patch("/", async (req, res) => {
       });
     }
     await invalidateSettings();
+    log.info("settings_updated", {
+      keys: entries.map(([k]) => k),
+      count: entries.length,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -126,6 +134,12 @@ router.post("/test", async (req, res) => {
             ? await verifyWhatsApp(map)
             : await verifyGateway(map);
 
+    log.debug("settings_test", {
+      channel,
+      ok: result.ok,
+      latencyMs: result.latencyMs,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "SETTINGS_TEST",

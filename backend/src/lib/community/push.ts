@@ -41,6 +41,12 @@ export async function sendPush(opts: {
       sentVia: deviceToken ? "fcm" : "none",
     },
   });
+  log.info("push_notification_created", {
+    notificationId: row.id,
+    userId: opts.userId,
+    delivery: deviceToken ? "fcm" : "database_only",
+    ...(opts.type ? { type: opts.type } : {}),
+  });
 
   if (deviceToken && process.env.FCM_SERVER_KEY) {
     try {

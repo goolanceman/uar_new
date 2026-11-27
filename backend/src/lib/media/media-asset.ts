@@ -5,8 +5,11 @@
  */
 import type { MediaAsset } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { activeDriverName, getStorage } from "@/lib/storage";
+
+const log = logger.child("media:asset");
 
 /** How long a playback URL stays valid. Players re-fetch the reel to renew. */
 const PLAYBACK_URL_TTL_SEC = 60 * 60;
@@ -68,17 +71,25 @@ export async function assertAttachableMedia(
 ): Promise<MediaAsset | null> {
   if (!mediaId) return null;
   const asset = await db.mediaAsset.findUnique({ where: { id: mediaId } });
-  if (!asset || asset.ownerId !== ownerId) throw new ApiError("Media asset not found", 404);
+  if (!asset || asset.ownerId !== ownerId) {
+    log.warn("media_not_found", { mediaId, actor: ownerId, purpose });
+    throw new ApiError("Media asset not found", 404);
+  }
   if (asset.purpose !== purpose) {
+    log.warn("media_purpose_mismatch", { mediaId, actor: ownerId, purpose, assetPurpose: asset.purpose });
     throw new ApiError(`This media was uploaded for a ${asset.purpose}, not a ${purpose}`, 400);
   }
   if (!ATTACHABLE_STATUSES.includes(asset.status)) {
+    log.warn("media_not_uploaded_yet", { mediaId, actor: ownerId, status: asset.status });
     throw new ApiError("This media has not finished uploading yet", 400);
   }
   const attached =
     purpose === "reel"
       ? await db.communityReel.findFirst({ where: { mediaId }, select: { id: true } })
       : await db.communityPostContent.findFirst({ where: { mediaId }, select: { id: true } });
-  if (attached) throw new ApiError("This media is already attached to another reel or post", 400);
+  if (attached) {
+    log.warn("media_already_attached", { mediaId, actor: ownerId });
+    throw new ApiError("This media is already attached to another reel or post", 400);
+  }
   return asset;
 }

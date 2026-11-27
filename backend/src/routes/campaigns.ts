@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -24,6 +25,8 @@ import {
 } from "@/lib/cache";
 
 export const router = Router();
+
+const log = logger.child("campaigns");
 
 function slugify(title: string): string {
   return title
@@ -426,6 +429,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("campaign_created", {
+      campaignId: campaign.id,
+      code: campaign.code,
+      title: campaign.title,
+      targetAmount: campaign.targetAmount,
+      actor: session.userId,
+    });
+
     await logActivity(
       session.name,
       "CAMPAIGN_CREATE",
@@ -483,13 +494,24 @@ router.patch("/:id/urgency", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.campaign.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Campaign not found", 404);
+    if (!existing) {
+      log.warn("campaign_urgency_not_found", { campaignId: id, actor: session.userId });
+      throw new ApiError("Campaign not found", 404);
+    }
     if (body.urgent === undefined) throw new ApiError("The urgent flag is required", 400);
 
     const { data, targetAmount } = resolveUrgencyPatch(existing, body);
     const campaign = await db.campaign.update({
       where: { id },
       data: { ...data, ...(data.urgent === true ? { urgentSetById: session.userId } : {}), ...(targetAmount !== undefined ? { targetAmount } : {}) },
+    });
+
+    log.info("campaign_urgency_updated", {
+      campaignId: id,
+      code: campaign.code,
+      urgent: campaign.urgent,
+      urgencyLevel: campaign.urgencyLevel,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -515,7 +537,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.campaign.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Campaign not found", 404);
+    if (!existing) {
+      log.warn("campaign_update_not_found", { campaignId: id, actor: session.userId });
+      throw new ApiError("Campaign not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.title !== undefined) {
@@ -532,7 +557,14 @@ router.patch("/:id", async (req, res) => {
       const taken = await db.campaign.findFirst({
         where: { slug, id: { not: id } },
       });
-      if (taken) throw new ApiError("That slug is already in use", 409);
+      if (taken) {
+        log.warn("campaign_slug_conflict", {
+          slug,
+          campaignId: id,
+          actor: session.userId,
+        });
+        throw new ApiError("That slug is already in use", 409);
+      }
       data.slug = slug;
     }
     if (body?.tagline !== undefined) data.tagline = body.tagline ? String(body.tagline) : "";
@@ -608,6 +640,13 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const campaign = await db.campaign.update({ where: { id }, data });
+    log.info("campaign_updated", {
+      campaignId: id,
+      code: campaign.code,
+      fields: Object.keys(data),
+      ...(data.status ? { newStatus: campaign.status } : {}),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -631,13 +670,22 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.campaign.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Campaign not found", 404);
+    if (!existing) {
+      log.warn("campaign_delete_not_found", { campaignId: id, actor: session.userId });
+      throw new ApiError("Campaign not found", 404);
+    }
 
     await db.donation.updateMany({
       where: { campaignId: id },
       data: { campaignId: null },
     });
     await db.campaign.delete({ where: { id } });
+    log.info("campaign_deleted", {
+      campaignId: id,
+      code: existing.code,
+      title: existing.title,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

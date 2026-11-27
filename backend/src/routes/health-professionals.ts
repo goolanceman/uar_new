@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -14,6 +15,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("health-professionals");
 
 const KINDS = ["DOCTOR", "NURSE", "PHARMACIST", "LAB_TECH", "OTHER"];
 
@@ -107,12 +110,17 @@ router.post("/", async (req, res) => {
     let orgId = body.orgId ? String(body.orgId) : null;
     if (session.role === "HOSPITAL") {
       const ownOrgId = await hospitalOrgId(session.userId);
-      if (!ownOrgId)
+      if (!ownOrgId) {
+        log.warn("health_professional_no_linked_org", { actor: session.userId });
         throw new ApiError("Your account is not linked to an organisation", 403);
+      }
       orgId = ownOrgId;
     } else if (orgId) {
       const org = await db.healthcareOrg.findUnique({ where: { id: orgId } });
-      if (!org) throw new ApiError("Organisation not found", 404);
+      if (!org) {
+        log.warn("health_professional_org_not_found", { orgId, actor: session.userId });
+        throw new ApiError("Organisation not found", 404);
+      }
     }
 
     const email = body.email ? String(body.email).trim() : null;
@@ -142,6 +150,14 @@ router.post("/", async (req, res) => {
         active: true,
       },
       include: { org: { select: { id: true, name: true } } },
+    });
+
+    log.info("health_professional_created", {
+      professionalId: professional.id,
+      kind: professional.kind,
+      ...(professional.orgId ? { orgId: professional.orgId } : {}),
+      verificationStatus: professional.verificationStatus,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -192,17 +208,33 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.healthProfessional.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Professional not found", 404);
+    if (!existing) {
+      log.warn("health_professional_update_not_found", {
+        professionalId: id,
+        actor: session.userId,
+      });
+      throw new ApiError("Professional not found", 404);
+    }
 
     const isAdmin = session.role === "ADMIN";
     if (!isAdmin) {
       const ownOrgId = await hospitalOrgId(session.userId);
-      if (!ownOrgId || existing.orgId !== ownOrgId)
+      if (!ownOrgId || existing.orgId !== ownOrgId) {
+        log.warn("health_professional_update_forbidden", {
+          professionalId: id,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
     }
 
-    if (!isAdmin && body.verificationStatus !== undefined)
+    if (!isAdmin && body.verificationStatus !== undefined) {
+      log.warn("health_professional_verify_forbidden", {
+        professionalId: id,
+        actor: session.userId,
+      });
       throw new ApiError("Only an administrator can verify a professional", 403);
+    }
 
     const data: Prisma.HealthProfessionalUpdateInput = {};
 
@@ -210,8 +242,15 @@ router.patch("/:id", async (req, res) => {
       const status = String(body.verificationStatus).trim().toUpperCase();
       if (!VERIFICATION_STATUSES.includes(status))
         throw new ApiError("Invalid verificationStatus", 400);
-      if (status !== existing.verificationStatus && !(VERIFICATION_TRANSITIONS[existing.verificationStatus] ?? []).includes(status))
+      if (status !== existing.verificationStatus && !(VERIFICATION_TRANSITIONS[existing.verificationStatus] ?? []).includes(status)) {
+        log.warn("health_professional_invalid_verification_transition", {
+          professionalId: id,
+          from: existing.verificationStatus,
+          to: status,
+          actor: session.userId,
+        });
         throw new ApiError(`Cannot move professional verification from ${existing.verificationStatus} to ${status}`, 409);
+      }
       data.verificationStatus = status;
       data.verifiedByName = status === "PENDING" ? null : session.name;
       data.verifiedAt = status === "PENDING" ? null : new Date();
@@ -226,7 +265,14 @@ router.patch("/:id", async (req, res) => {
     if (body.orgId !== undefined && isAdmin) {
       if (body.orgId) {
         const org = await db.healthcareOrg.findUnique({ where: { id: String(body.orgId) } });
-        if (!org) throw new ApiError("Organisation not found", 404);
+        if (!org) {
+          log.warn("health_professional_org_not_found", {
+            orgId: String(body.orgId),
+            professionalId: id,
+            actor: session.userId,
+          });
+          throw new ApiError("Organisation not found", 404);
+        }
         data.org = { connect: { id: String(body.orgId) } };
       } else {
         data.org = { disconnect: true };
@@ -254,6 +300,14 @@ router.patch("/:id", async (req, res) => {
       where: { id },
       data,
       include: { org: { select: { id: true, name: true } } },
+    });
+    log.info("health_professional_updated", {
+      professionalId: id,
+      fields: Object.keys(data),
+      ...(data.verificationStatus !== undefined
+        ? { newVerificationStatus: professional.verificationStatus }
+        : {}),
+      actor: session.userId,
     });
     await logActivity(
       session.name,

@@ -23,6 +23,7 @@
  */
 import { Router } from "express";
 import { requireAuth, json, handleError } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
   listAudioSpaces,
@@ -40,6 +41,8 @@ import {
 } from "@/lib/community/audio-spaces";
 
 export const router = Router();
+
+const log = logger.child("audio-spaces");
 
 // GET /api/audio-spaces — public spaces + mine, newest first.
 router.get("/", async (req, res) => {
@@ -59,6 +62,7 @@ router.post("/", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const space = await createAudioSpace(session.userId, (req.body ?? {}) as Record<string, unknown>);
+    log.info("audio_space_created", { spaceId: space.id, actor: session.userId });
     return json(res, space, 201);
   } catch (e) {
     return handleError(e, res);
@@ -79,8 +83,11 @@ router.get("/:id", async (req, res) => {
 router.patch("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
+    const spaceId = String(req.params.id);
     const users = (req.body ?? {}).users;
-    return json(res, await updateAudioSpace(session.userId, String(req.params.id), { users }));
+    const space = await updateAudioSpace(session.userId, spaceId, { users });
+    log.info("audio_space_updated", { spaceId, actor: session.userId });
+    return json(res, space);
   } catch (e) {
     return handleError(e, res);
   }
@@ -90,7 +97,10 @@ router.patch("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await deleteAudioSpace(session.userId, String(req.params.id)));
+    const spaceId = String(req.params.id);
+    const space = await deleteAudioSpace(session.userId, spaceId);
+    log.info("audio_space_ended", { spaceId, actor: session.userId });
+    return json(res, space);
   } catch (e) {
     return handleError(e, res);
   }
@@ -100,7 +110,14 @@ router.delete("/:id", async (req, res) => {
 router.post("/:id/join", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await joinAudioSpace(session.userId, String(req.params.id)));
+    const spaceId = String(req.params.id);
+    const result = await joinAudioSpace(session.userId, spaceId);
+    if (result.joined) {
+      log.info("audio_space_joined", { spaceId, actor: session.userId });
+    } else {
+      log.debug("audio_space_already_joined", { spaceId, actor: session.userId });
+    }
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -110,7 +127,10 @@ router.post("/:id/join", async (req, res) => {
 router.post("/:id/leave", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await leaveAudioSpace(session.userId, String(req.params.id)));
+    const spaceId = String(req.params.id);
+    const result = await leaveAudioSpace(session.userId, spaceId);
+    log.info("audio_space_left", { spaceId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -123,7 +143,16 @@ router.post("/:id/participants/:userId/role", async (req, res) => {
     const session = await requireAuth(req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const type = b.type ?? (b as Record<string, unknown>).role;
-    return json(res, await changeParticipantRole(session.userId, String(req.params.id), String(req.params.userId), type));
+    const spaceId = String(req.params.id);
+    const participantId = String(req.params.userId);
+    const result = await changeParticipantRole(session.userId, spaceId, participantId, type);
+    log.info("participant_role_changed", {
+      spaceId,
+      participantId,
+      actor: session.userId,
+      role: result.type,
+    });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -136,7 +165,16 @@ router.post("/:id/participants/:userId/mic", async (req, res) => {
     const session = await requireAuth(req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const micStatus = b.micStatus ?? (b as Record<string, unknown>).mic_status;
-    return json(res, await toggleParticipantMic(session.userId, String(req.params.id), String(req.params.userId), micStatus));
+    const spaceId = String(req.params.id);
+    const participantId = String(req.params.userId);
+    const result = await toggleParticipantMic(session.userId, spaceId, participantId, micStatus);
+    log.info("participant_mic_toggled", {
+      spaceId,
+      participantId,
+      actor: session.userId,
+      micStatus: result.micStatus,
+    });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -146,7 +184,11 @@ router.post("/:id/participants/:userId/mic", async (req, res) => {
 router.post("/:id/participants/:userId/kick", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await kickParticipant(session.userId, String(req.params.id), String(req.params.userId)));
+    const spaceId = String(req.params.id);
+    const participantId = String(req.params.userId);
+    await kickParticipant(session.userId, spaceId, participantId);
+    log.info("participant_kicked", { spaceId, participantId, actor: session.userId });
+    return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
   }
@@ -168,7 +210,9 @@ router.get("/:id/messages", async (req, res) => {
 router.post("/:id/messages", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    const message = await sendAudioSpaceMessage(session.userId, String(req.params.id), (req.body ?? {}) as Record<string, unknown>);
+    const spaceId = String(req.params.id);
+    const message = await sendAudioSpaceMessage(session.userId, spaceId, (req.body ?? {}) as Record<string, unknown>);
+    log.info("audio_space_message_sent", { messageId: message.id, spaceId, actor: session.userId });
     return json(res, message, 201);
   } catch (e) {
     return handleError(e, res);

@@ -26,6 +26,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import { ApiError, requireAuth, json, handleError, type Session } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { multipart, type MulterFile } from "@/lib/multipart";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
@@ -41,6 +42,8 @@ import {
 } from "@/lib/community/chat";
 
 export const router = Router();
+
+const log = logger.child("chat");
 
 /** Grab one uploaded file by its multipart field name (legacy 'media'/'thumbnail'). */
 function fileByField(req: Request, field: string): File | null {
@@ -84,6 +87,15 @@ router.post("/conversations", async (req, res) => {
     const session = await requireAuth(req);
     const userId = strField(req, "userId") ?? strField(req, "user_id");
     const conversation = await createOrGetConversation(session.userId, userId ?? "");
+    if (conversation.created) {
+      log.info("conversation_created", {
+        conversationId: conversation.id,
+        actor: session.userId,
+        otherUserId: userId ?? "",
+      });
+    } else {
+      log.debug("conversation_existing", { conversationId: conversation.id, actor: session.userId });
+    }
     return json(res, conversation);
   } catch (e) {
     return handleError(e, res);
@@ -129,6 +141,12 @@ async function sendMessageRoute(req: Request, res: Response, conversationId: str
     storyId: strField(req, "storyId") ?? strField(req, "story_id"),
     store: (file) => storeUpload(req, session, file),
   });
+  log.info("message_sent", {
+    messageId: message.id,
+    conversationId: message.conversationId,
+    actor: session.userId,
+    type,
+  });
   return json(res, message, 201);
 }
 
@@ -155,7 +173,10 @@ router.post("/messages", multipart, async (req, res) => {
 router.post("/conversations/:id/read", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await markRead(session.userId, String(req.params.id)));
+    const conversationId = String(req.params.id);
+    const result = await markRead(session.userId, conversationId);
+    log.info("conversation_read", { conversationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -165,7 +186,10 @@ router.post("/conversations/:id/read", async (req, res) => {
 router.post("/conversations/:id/mute", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await muteConversation(session.userId, String(req.params.id)));
+    const conversationId = String(req.params.id);
+    const result = await muteConversation(session.userId, conversationId);
+    log.info("conversation_muted", { conversationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -175,7 +199,10 @@ router.post("/conversations/:id/mute", async (req, res) => {
 router.delete("/conversations/:id/mute", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await unmuteConversation(session.userId, String(req.params.id)));
+    const conversationId = String(req.params.id);
+    const result = await unmuteConversation(session.userId, conversationId);
+    log.info("conversation_unmuted", { conversationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -185,7 +212,10 @@ router.delete("/conversations/:id/mute", async (req, res) => {
 router.post("/conversations/:id/clear", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await clearConversation(session.userId, String(req.params.id)));
+    const conversationId = String(req.params.id);
+    const result = await clearConversation(session.userId, conversationId);
+    log.info("conversation_cleared", { conversationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -195,7 +225,10 @@ router.post("/conversations/:id/clear", async (req, res) => {
 router.delete("/conversations/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
-    return json(res, await deleteConversation(session.userId, String(req.params.id)));
+    const conversationId = String(req.params.id);
+    const result = await deleteConversation(session.userId, conversationId);
+    log.info("conversation_deleted", { conversationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }

@@ -7,6 +7,7 @@
  */
 import { Router, type Request } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   verifyPassword,
@@ -22,6 +23,8 @@ import { communityUser, csvList } from "@/lib/community/serializers";
 import type { User } from "@prisma/client";
 
 export const router = Router();
+
+const log = logger.child("profile");
 
 const PHONE_RE = /^(\+91[\-\s]?)?[6-9]\d{9}$/;
 
@@ -232,7 +235,10 @@ router.patch("/", multipart, async (req, res) => {
           where: { username, id: { not: session.userId } },
           select: { id: true },
         });
-        if (taken) throw new ApiError("Username is not available", 409);
+        if (taken) {
+          log.warn("profile_username_conflict", { userId: session.userId, username });
+          throw new ApiError("Username is not available", 409);
+        }
         data.username = username;
       }
     }
@@ -266,6 +272,11 @@ router.patch("/", multipart, async (req, res) => {
       where: { id: session.userId },
       data,
     });
+    log.info("profile_updated", {
+      userId: session.userId,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
 
     await logActivity(
       updated.name,
@@ -288,8 +299,14 @@ router.post("/verification", multipart, async (req, res) => {
     const session = await requireAuth(req);
     const user = await db.user.findUnique({ where: { id: session.userId } });
     if (!user) throw new ApiError("User not found", 404);
-    if (user.isVerified === 1) throw new ApiError("Profile verification in pending", 400);
-    if (user.isVerified !== 0) throw new ApiError("Profile is already verified", 400);
+    if (user.isVerified === 1) {
+      log.warn("profile_verification_already_pending", { userId: session.userId });
+      throw new ApiError("Profile verification in pending", 400);
+    }
+    if (user.isVerified !== 0) {
+      log.warn("profile_verification_already_verified", { userId: session.userId });
+      throw new ApiError("Profile is already verified", 400);
+    }
 
     const body = req.body ?? {};
     const fullName = String(body?.fullName ?? body?.full_name ?? "").trim();
@@ -306,6 +323,12 @@ router.post("/verification", multipart, async (req, res) => {
       data: { userId: session.userId, selfie: selfieUrl, document: documentUrl, documentType, fullName },
     });
     await db.user.update({ where: { id: session.userId }, data: { isVerified: 1 } }); // pending review
+    log.info("profile_verification_submitted", {
+      userId: session.userId,
+      verificationId: row.id,
+      documentType,
+      actor: session.userId,
+    });
 
     return json(res, {
       ok: true,
@@ -336,8 +359,13 @@ router.post("/user-type", async (req, res) => {
 
     const user = await db.user.findUnique({ where: { id: session.userId } });
     if (!user) throw new ApiError("User not found", 404);
-    if (user.userType !== null && user.userType !== undefined)
+    if (user.userType !== null && user.userType !== undefined) {
+      log.warn("profile_user_type_already_set", {
+        userId: session.userId,
+        userType: user.userType,
+      });
       throw new ApiError("User type has already been selected", 400);
+    }
 
     const updated = await db.user.update({
       where: { id: session.userId },
@@ -347,6 +375,11 @@ router.post("/user-type", async (req, res) => {
           ? { volunteerStatus: "pending", volunteerRequestedAt: new Date() }
           : {}),
       },
+    });
+    log.info("profile_user_type_selected", {
+      userId: session.userId,
+      userType,
+      actor: session.userId,
     });
 
     return json(res, { ok: true, user: fullSelfUser(updated) });
@@ -379,6 +412,11 @@ router.post("/device-token", async (req, res) => {
         deviceToken: token, // backward compatibility
       },
     });
+    log.info("device_token_registered", {
+      userId: session.userId,
+      deviceType,
+      actor: session.userId,
+    });
     return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
@@ -394,6 +432,7 @@ router.delete("/device-token", async (req, res) => {
       where: { id: session.userId },
       data: { fcmToken: null, apnsToken: null, deviceToken: null },
     });
+    log.info("device_token_cleared", { userId: session.userId, actor: session.userId });
     return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
@@ -684,6 +723,11 @@ router.post("/password", async (req, res) => {
       data: { password: hashPassword(next) },
     });
 
+    log.info("password_changed", {
+      userId: session.userId,
+      email: session.email,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "PASSWORD_CHANGE",

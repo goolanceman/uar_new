@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import {
 import { nextKitTemplateCode } from "@/lib/codes";
 
 export const router = Router();
+
+const log = logger.child("kit-templates");
 
 // GET /api/kit-templates (auth) — incl. _count batches
 router.get("/", async (req, res) => {
@@ -64,6 +67,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("kit_template_created", {
+      templateId: template.id,
+      code: template.code,
+      name: template.name,
+      kind: template.kind,
+      itemCount: items.length,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "KIT_TEMPLATE_ADD",
@@ -85,7 +96,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.kitTemplate.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Template not found", 404);
+    if (!existing) {
+      log.warn("kit_template_update_not_found", { templateId: id, actor: session.userId });
+      throw new ApiError("Template not found", 404);
+    }
 
     const data: Prisma.KitTemplateUpdateInput = {};
     if (body.name !== undefined) data.name = String(body.name).trim();
@@ -114,6 +128,13 @@ router.patch("/:id", async (req, res) => {
       data.costPerUnit = Number(body.costPerUnit) || 0;
 
     const template = await db.kitTemplate.update({ where: { id }, data });
+    log.info("kit_template_updated", {
+      templateId: id,
+      name: template.name,
+      status: template.status,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "KIT_TEMPLATE_UPDATE",
@@ -136,11 +157,26 @@ router.delete("/:id", async (req, res) => {
       where: { id },
       include: { _count: { select: { batches: true } } },
     });
-    if (!existing) throw new ApiError("Template not found", 404);
-    if (existing._count.batches > 0)
+    if (!existing) {
+      log.warn("kit_template_delete_not_found", { templateId: id, actor: session.userId });
+      throw new ApiError("Template not found", 404);
+    }
+    if (existing._count.batches > 0) {
+      log.warn("kit_template_delete_blocked", {
+        templateId: id,
+        name: existing.name,
+        batches: existing._count.batches,
+        actor: session.userId,
+      });
       throw new ApiError("Template has batches", 409);
+    }
 
     await db.kitTemplate.delete({ where: { id } });
+    log.info("kit_template_deleted", {
+      templateId: id,
+      name: existing.name,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "KIT_TEMPLATE_DELETE",

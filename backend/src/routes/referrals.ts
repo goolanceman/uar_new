@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { REFERRAL_FLOW, REFERRAL_TERMINAL_STATUSES, referralTransitions } from "@/lib/referrals";
 import {
   requireRole,
@@ -15,6 +16,8 @@ import {
 import { nextRefCode } from "@/lib/health-codes";
 
 export const router = Router();
+
+const log = logger.child("referrals");
 
 const VALID_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "EMERGENCY"];
 
@@ -107,7 +110,13 @@ router.post("/", async (req, res) => {
       where: { id: beneficiaryId },
       select: { id: true, code: true },
     });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("referral_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const reason = optText(body?.reason);
     if (!reason) throw new ApiError("reason is required", 400);
@@ -119,12 +128,21 @@ router.post("/", async (req, res) => {
     const campId = optText(body?.campId);
     if (campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("referral_camp_not_found", { campId, actor: session.userId });
+        throw new ApiError("Camp not found", 404);
+      }
     }
     const encounterId = optText(body?.encounterId);
     if (encounterId) {
       const enc = await db.encounter.findUnique({ where: { id: encounterId }, select: { id: true } });
-      if (!enc) throw new ApiError("Encounter not found", 404);
+      if (!enc) {
+        log.warn("referral_encounter_not_found", {
+          encounterId,
+          actor: session.userId,
+        });
+        throw new ApiError("Encounter not found", 404);
+      }
     }
     const receivingOrgId = optText(body?.receivingOrgId);
     if (receivingOrgId) {
@@ -132,7 +150,13 @@ router.post("/", async (req, res) => {
         where: { id: receivingOrgId },
         select: { id: true },
       });
-      if (!org) throw new ApiError("Receiving organisation not found", 404);
+      if (!org) {
+        log.warn("referral_org_not_found", {
+          receivingOrgId,
+          actor: session.userId,
+        });
+        throw new ApiError("Receiving organisation not found", 404);
+      }
     }
 
     const code = await nextRefCode();
@@ -150,6 +174,16 @@ router.post("/", async (req, res) => {
         status: "CREATED",
       },
       include: REFERRAL_INCLUDE,
+    });
+
+    log.info("referral_created", {
+      referralId: referral.id,
+      code: referral.code,
+      beneficiaryId,
+      priority,
+      ...(campId ? { campId } : {}),
+      ...(receivingOrgId ? { receivingOrgId } : {}),
+      actor: session.userId,
     });
 
     await logActivity(
@@ -206,7 +240,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.medicalReferral.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Referral not found", 404);
+    if (!existing) {
+      log.warn("referral_update_not_found", { referralId: id, actor: session.userId });
+      throw new ApiError("Referral not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
 
@@ -215,13 +252,31 @@ router.patch("/:id", async (req, res) => {
         where: { ownerUserId: session.userId },
         select: { id: true },
       });
-      if (!org || existing.receivingOrgId !== org.id)
+      if (!org || existing.receivingOrgId !== org.id) {
+        log.warn("referral_update_forbidden", {
+          referralId: id,
+          receivingOrgId: existing.receivingOrgId,
+          actor: session.userId,
+        });
         throw new ApiError("You do not have permission for this action", 403);
+      }
       const target = String(body?.status ?? "");
-      if (target !== "ACCEPTED")
+      if (target !== "ACCEPTED") {
+        log.warn("referral_hospital_status_forbidden", {
+          referralId: id,
+          to: target,
+          actor: session.userId,
+        });
         throw new ApiError("Hospital users may only set referral status to ACCEPTED", 403);
-      if (!["CREATED", "SHARED"].includes(existing.status))
+      }
+      if (!["CREATED", "SHARED"].includes(existing.status)) {
+        log.warn("referral_accept_blocked_status", {
+          referralId: id,
+          status: existing.status,
+          actor: session.userId,
+        });
         throw new ApiError(`Cannot accept a referral in status ${existing.status}`, 409);
+      }
       data.status = "ACCEPTED";
     } else if (body?.status !== undefined && String(body.status) !== existing.status) {
       const target = String(body.status).trim();
@@ -230,7 +285,14 @@ router.patch("/:id", async (req, res) => {
           `status must be a forward move along ${CHAIN.join("→")} or ${TERMINAL_CANCELLED.join("/")}`,
           400
         );
-      if (!referralTransitions(existing.status).includes(target))
+      if (!referralTransitions(existing.status).includes(target)) {
+        log.warn("referral_invalid_transition", {
+          referralId: id,
+          code: existing.code,
+          from: existing.status,
+          to: target,
+          actor: session.userId,
+        });
         throw new ApiError(
           CHAIN.includes(target)
             ? existing.status === "CREATED"
@@ -241,6 +303,7 @@ router.patch("/:id", async (req, res) => {
               : `Referral is already ${existing.status} (terminal)`,
           409
         );
+      }
       data.status = target;
     }
 
@@ -253,6 +316,16 @@ router.patch("/:id", async (req, res) => {
       where: { id },
       data,
       include: REFERRAL_ID_INCLUDE,
+    });
+
+    log.info("referral_updated", {
+      referralId: id,
+      code: existing.code,
+      fields: Object.keys(data),
+      ...(data.status !== undefined
+        ? { from: existing.status, to: String(data.status) }
+        : {}),
+      actor: session.userId,
     });
 
     await logActivity(

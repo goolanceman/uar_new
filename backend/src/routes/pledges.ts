@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -17,6 +18,8 @@ import { invalidateCauses } from "@/lib/cache";
 import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
 
 export const router = Router();
+
+const log = logger.child("pledges");
 
 const STATUSES = ["ACTIVE", "COMPLETED", "CANCELLED"];
 
@@ -115,11 +118,16 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const pledge = await db.pledge.findUnique({ where: { id } });
-    if (!pledge) throw new ApiError("Pledge not found", 404);
+    if (!pledge) {
+      log.warn("pledge_update_not_found", { pledgeId: id, actor: session.userId });
+      throw new ApiError("Pledge not found", 404);
+    }
 
     const isOwner = Boolean(pledge.donorId) && pledge.donorId === session.userId;
-    if (session.role !== "ADMIN" && !isOwner)
+    if (session.role !== "ADMIN" && !isOwner) {
+      log.warn("pledge_update_forbidden", { pledgeId: id, actor: session.userId });
       throw new ApiError("You can only manage your own pledges", 403);
+    }
 
     const status = String(body.status ?? "").trim().toUpperCase();
     if (!STATUSES.includes(status))
@@ -131,6 +139,12 @@ router.patch("/:id", async (req, res) => {
     });
     await recomputeCause(updated.causeId);
     await invalidateCauses();
+    log.info("pledge_updated", {
+      pledgeId: id,
+      causeId: updated.causeId,
+      status,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "PLEDGE_UPDATE",
@@ -151,9 +165,17 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const pledge = await db.pledge.findUnique({ where: { id } });
-    if (!pledge) throw new ApiError("Pledge not found", 404);
+    if (!pledge) {
+      log.warn("pledge_delete_not_found", { pledgeId: id, actor: session.userId });
+      throw new ApiError("Pledge not found", 404);
+    }
 
     await db.pledge.delete({ where: { id } });
+    log.info("pledge_deleted", {
+      pledgeId: id,
+      causeId: pledge.causeId,
+      actor: session.userId,
+    });
     await recomputeCause(pledge.causeId);
     await invalidateCauses();
     await logActivity(

@@ -10,7 +10,10 @@
  * POST /api/donations + POST /api/payments + /api/payments/verify flow.
  */
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { recomputeCause } from "@/lib/causes";
+
+const log = logger.child("recurring");
 
 export const VALID_FREQUENCIES = ["WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"] as const;
 export type RecurringFrequency = (typeof VALID_FREQUENCIES)[number];
@@ -69,9 +72,16 @@ export async function settleDonationCommitments(donationId: string): Promise<voi
       const base = parent.nextChargeAt && parent.nextChargeAt > donation.createdAt
         ? parent.nextChargeAt
         : donation.createdAt;
+      const nextChargeAt = nextChargeAfter(base, parent.recurringFrequency);
       await db.donation.update({
         where: { id: parent.id },
-        data: { nextChargeAt: nextChargeAfter(base, parent.recurringFrequency) },
+        data: { nextChargeAt },
+      });
+      log.info("recurring_next_charge_advanced", {
+        donationId,
+        parentId: parent.id,
+        frequency: parent.recurringFrequency,
+        nextChargeAt,
       });
     }
   }
@@ -101,6 +111,11 @@ export async function recomputePledge(pledgeId: string): Promise<void> {
       await db.pledge.update({
         where: { id: pledge.id },
         data: { status: "COMPLETED", completedAt: new Date() },
+      });
+      log.info("recurring_pledge_completed", {
+        pledgeId: pledge.id,
+        totalCommitted: total,
+        paid: agg._sum.amount ?? 0,
       });
       await recomputeCause(pledge.causeId);
     }

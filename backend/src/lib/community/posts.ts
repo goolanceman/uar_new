@@ -10,6 +10,7 @@
 import type { Request } from "express";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError } from "@/lib/session";
 import { saveUpload } from "@/lib/files";
 import { assertAttachableMedia, mediaWire } from "@/lib/media/media-asset";
@@ -19,6 +20,8 @@ import { csvList, communityAuthor, type CommunityAuthorRow } from "@/lib/communi
 import { sendPush, feedEvent } from "@/lib/community/push";
 import { syncPostCommentCounts } from "@/lib/community/counters";
 import type { MulterFile } from "@/lib/multipart";
+
+const log = logger.child("community:posts");
 
 /** SavedNotification types (legacy wire): 2 = comment, 3 = post like. */
 const NOTIFICATION_TYPE_COMMENT = 2;
@@ -63,16 +66,28 @@ export async function isActorModerator(userId: string, role: string | undefined)
 /** Load the acting user (must exist and not be blocked). */
 export async function actorOr404(userId: string): Promise<UserRow> {
   const user = await db.user.findUnique({ where: { id: userId } });
-  if (!user) throw new ApiError("User not found", 404);
-  if (user.isBlock === 1) throw new ApiError("User not found", 404);
+  if (!user) {
+    log.warn("actor_not_found", { actor: userId });
+    throw new ApiError("User not found", 404);
+  }
+  if (user.isBlock === 1) {
+    log.warn("actor_blocked", { actor: userId });
+    throw new ApiError("User not found", 404);
+  }
   return user;
 }
 
 /** Own post or moderator — shared gate for DELETE /api/posts/:id. */
 async function postOr403(postId: string, meId: string, moderator: boolean): Promise<PostRow> {
   const post = await db.communityPost.findUnique({ where: { id: postId }, include: POST_INCLUDE });
-  if (!post) throw new ApiError("Post not found", 404);
-  if (post.userId !== meId && !moderator) throw new ApiError("You do not have permission for this action", 403);
+  if (!post) {
+    log.warn("post_not_found", { postId, actor: meId });
+    throw new ApiError("Post not found", 404);
+  }
+  if (post.userId !== meId && !moderator) {
+    log.warn("post_not_owner", { postId, actor: meId, moderator });
+    throw new ApiError("You do not have permission for this action", 403);
+  }
   return post;
 }
 
@@ -318,6 +333,7 @@ export async function listFeed(meId: string, opts: { type?: string; skip: number
   let posts: PostRow[];
   let total: number | undefined;
   if (opts.type === "random") {
+    log.debug("feed_random_branch", { actor: meId, take: opts.take });
     const ids = await randomPostIds(me.id, where, opts.take);
     posts = ids.length
       ? await db.communityPost.findMany({ where: { id: { in: ids } }, include: POST_INCLUDE })
@@ -490,6 +506,12 @@ export async function createPost(
   }
   // Validate every media asset BEFORE creating the post row (owner/purpose/
   // status/not-attached) — a 400 after the post row would orphan it.
+  log.debug("post_upload_mode", {
+    actor: me.id,
+    mode: contentFiles.length > 0 ? "files" : mediaIds.length > 0 ? "mediaIds" : "text_only",
+    contentFiles: contentFiles.length,
+    mediaIds: mediaIds.length,
+  });
   const assets = [];
   for (const id of mediaIds) {
     assets.push(await assertAttachableMedia(me.id, id, "post"));
@@ -689,7 +711,10 @@ export async function searchHashtags(meId: string, keyword: string) {
 export async function reportPost(meId: string, postId: string, reason: string, desc: string) {
   if (!reason || !desc) throw new ApiError("reason and desc are required", 400);
   const post = await db.communityPost.findUnique({ where: { id: postId } });
-  if (!post) throw new ApiError("Post not found", 404);
+  if (!post) {
+    log.warn("post_report_not_found", { postId, actor: meId });
+    throw new ApiError("Post not found", 404);
+  }
 
   // Legacy leaves userId null on post reports (the reported entity is the post).
   const report = await db.communityReport.create({
@@ -709,7 +734,10 @@ export async function likePost(meId: string, postId: string, reaction?: string |
 
   const user = await actorOr404(meId);
   const post = await db.communityPost.findUnique({ where: { id: postId }, include: POST_INCLUDE });
-  if (!post) throw new ApiError("Post not found", 404);
+  if (!post) {
+    log.warn("post_like_not_found", { postId, actor: user.id });
+    throw new ApiError("Post not found", 404);
+  }
 
   const existing = await db.communityLike.findFirst({ where: { userId: user.id, postId: post.id } });
   if (existing) {
@@ -721,6 +749,7 @@ export async function likePost(meId: string, postId: string, reaction?: string |
       });
       return { like: serializeLike(updated), post: null, message: "Reaction Updated" };
     }
+    log.warn("post_already_liked", { postId: post.id, actor: user.id, reaction: reactionType });
     throw new ApiError("Already Liked", 409);
   }
 
@@ -761,7 +790,10 @@ export async function likePost(meId: string, postId: string, reaction?: string |
 export async function unlikePost(meId: string, postId: string) {
   const user = await actorOr404(meId);
   const likedPost = await db.communityLike.findFirst({ where: { userId: meId, postId } });
-  if (!likedPost) throw new ApiError("Post Already Dislike", 404);
+  if (!likedPost) {
+    log.warn("post_not_liked", { postId, actor: meId });
+    throw new ApiError("Post Already Dislike", 404);
+  }
 
   const post = await db.communityPost.findUnique({ where: { id: postId } });
   if (post) {
@@ -828,7 +860,10 @@ export async function addComment(meId: string, postId: string, desc: string) {
   const user = await actorOr404(meId);
 
   const post = await db.communityPost.findUnique({ where: { id: postId }, include: POST_INCLUDE });
-  if (!post) throw new ApiError("Post not found", 404);
+  if (!post) {
+    log.warn("comment_post_not_found", { postId, actor: user.id });
+    throw new ApiError("Post not found", 404);
+  }
 
   const comment = await db.communityComment.create({
     data: { userId: user.id, postId: post.id, desc },
@@ -859,8 +894,12 @@ export async function addComment(meId: string, postId: string, desc: string) {
 export async function deleteComment(meId: string, role: string | undefined, commentId: string) {
   const moderator = await isActorModerator(meId, role);
   const comment = await db.communityComment.findUnique({ where: { id: commentId } });
-  if (!comment) throw new ApiError("Comment not found", 404);
+  if (!comment) {
+    log.warn("comment_not_found", { commentId, actor: meId });
+    throw new ApiError("Comment not found", 404);
+  }
   if (comment.userId !== meId && !moderator) {
+    log.warn("comment_delete_not_owner", { commentId, actor: meId, moderator });
     throw new ApiError("You do not have permission for this action", 403);
   }
 
@@ -875,7 +914,10 @@ export async function deleteComment(meId: string, role: string | undefined, comm
 export async function toggleCommentLike(meId: string, commentId: string) {
   const user = await actorOr404(meId);
   const comment = await db.communityComment.findUnique({ where: { id: commentId } });
-  if (!comment) throw new ApiError("Comment not found", 404);
+  if (!comment) {
+    log.warn("comment_not_found", { commentId, actor: user.id });
+    throw new ApiError("Comment not found", 404);
+  }
 
   const existing = await db.likeComment.findUnique({
     where: { commentId_userId: { commentId: comment.id, userId: user.id } },

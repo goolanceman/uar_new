@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -15,6 +16,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("kit-batches");
 
 const STATUSES = ["READY", "IN_PROGRESS", "DEPLETED"];
 
@@ -55,9 +58,18 @@ router.post("/", async (req, res) => {
       throw new ApiError("totalUnits must be between 1 and 500", 400);
 
     const template = await db.kitTemplate.findUnique({ where: { id: templateId } });
-    if (!template) throw new ApiError("Template not found", 404);
-    if (template.status === "RETIRED")
+    if (!template) {
+      log.warn("kit_batch_template_not_found", { templateId, actor: session.userId });
+      throw new ApiError("Template not found", 404);
+    }
+    if (template.status === "RETIRED") {
+      log.warn("kit_batch_template_retired", {
+        templateId,
+        templateName: template.name,
+        actor: session.userId,
+      });
       throw new ApiError("Template is retired — pick an active one", 400);
+    }
 
     const PREFIX_BY_KIND: Record<string, string> = {
       RATION: "UAR-RK", FOOD: "UAR-FD", EDUCATION: "UAR-ED", MEDICAL: "UAR-MK",
@@ -108,11 +120,22 @@ router.post("/", async (req, res) => {
           (lineName ? await tx.inventoryItem.findFirst({ where: { name: { equals: lineName } } }) : null) ??
           (lineName ? await tx.inventoryItem.findFirst({ where: { name: { contains: q } } }) : null);
         if (!match) continue;
-        if (match.quantity < needed)
+        if (match.quantity < needed) {
+          log.warn("kit_batch_insufficient_stock", {
+            templateId,
+            batchName: name,
+            itemId: match.id,
+            itemName: match.name,
+            needed,
+            available: match.quantity,
+            totalUnits,
+            actor: session.userId,
+          });
           throw new ApiError(
             `Not enough "${match.name}" in stock to build ${totalUnits} kit(s) — needs ${needed} ${match.unit}, only ${match.quantity} ${match.unit} available`,
             400
           );
+        }
         await tx.inventoryItem.update({
           where: { id: match.id },
           data: { quantity: match.quantity - needed },
@@ -149,6 +172,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("kit_batch_created", {
+      batchId: batch.id,
+      name,
+      totalUnits,
+      templateId,
+      templateName: template.name,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "KIT_BATCH",
@@ -170,7 +201,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.kitBatch.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Batch not found", 404);
+    if (!existing) {
+      log.warn("kit_batch_update_not_found", { batchId: id, actor: session.userId });
+      throw new ApiError("Batch not found", 404);
+    }
 
     const data: Prisma.KitBatchUpdateInput = {};
     if (body.name !== undefined) data.name = String(body.name).trim();
@@ -183,14 +217,28 @@ router.patch("/:id", async (req, res) => {
       // KitBatch.status is DERIVED from scanned-unit counts (kitBatchStatus in
       // @/lib/kit, written by /api/kit-scan) — manual moves would desync the
       // roll-up. Only an explicit no-op (same status) passes.
-      if (status !== existing.status)
+      if (status !== existing.status) {
+        log.warn("kit_batch_status_manual_blocked", {
+          batchId: id,
+          name: existing.name,
+          currentStatus: existing.status,
+          requestedStatus: status,
+          actor: session.userId,
+        });
         throw new ApiError(
           `Kit batch status is derived from unit scans and cannot be set manually (current: ${existing.status})`,
           409
         );
+      }
     }
 
     const batch = await db.kitBatch.update({ where: { id }, data });
+    log.info("kit_batch_updated", {
+      batchId: id,
+      name: batch.name,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "KIT_BATCH_UPDATE",
@@ -210,10 +258,19 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.kitBatch.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Batch not found", 404);
+    if (!existing) {
+      log.warn("kit_batch_delete_not_found", { batchId: id, actor: session.userId });
+      throw new ApiError("Batch not found", 404);
+    }
 
     await db.kitUnit.deleteMany({ where: { batchId: id } });
     await db.kitBatch.delete({ where: { id } });
+    log.info("kit_batch_deleted", {
+      batchId: id,
+      name: existing.name,
+      totalUnits: existing.totalUnits,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

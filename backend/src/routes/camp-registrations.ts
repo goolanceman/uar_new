@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -16,6 +17,8 @@ import { nextCampRegCode } from "@/lib/health-codes";
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("camp-registrations");
 
 const REGISTERED_VIA = ["SELF", "DESK", "ASSISTED", "BULK", "QR"];
 const REG_STATUSES = ["REGISTERED", "CONFIRMED", "CANCELLED", "REJECTED"];
@@ -110,36 +113,80 @@ router.post("/", async (req, res) => {
     if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
 
     const camp = await db.medicalCamp.findUnique({ where: { id: campId } });
-    if (!camp) throw new ApiError("Camp not found", 404);
-    if (!["SCHEDULED", "LIVE"].includes(camp.status))
+    if (!camp) {
+      log.warn("camp_registration_camp_not_found", { campId, actor: session.userId });
+      throw new ApiError("Camp not found", 404);
+    }
+    if (!["SCHEDULED", "LIVE"].includes(camp.status)) {
+      log.warn("camp_registration_blocked_camp_status", {
+        campId,
+        campStatus: camp.status,
+        actor: session.userId,
+      });
       throw new ApiError(`Camp is ${camp.status} — registration requires SCHEDULED or LIVE`, 409);
+    }
 
     const beneficiary = await db.beneficiary.findUnique({ where: { id: beneficiaryId } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("camp_registration_beneficiary_not_found", {
+        beneficiaryId,
+        campId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     const duplicate = await db.campRegistration.findUnique({
       where: { campId_beneficiaryId: { campId, beneficiaryId } },
     });
-    if (duplicate)
+    if (duplicate) {
+      log.warn("camp_registration_duplicate", {
+        campId,
+        beneficiaryId,
+        registrationId: duplicate.id,
+        actor: session.userId,
+      });
       throw new ApiError("Beneficiary is already registered for this camp", 409);
+    }
 
     // Capacity counts active registrations only (cancelled/rejected free a slot)
     const activeCount = await db.campRegistration.count({
       where: { campId, status: { notIn: BLOCKING_STATUSES } },
     });
-    if (activeCount >= camp.capacity) throw new ApiError("Camp capacity reached", 409);
+    if (activeCount >= camp.capacity) {
+      log.warn("camp_registration_capacity_reached", {
+        campId,
+        capacity: camp.capacity,
+        activeCount,
+        actor: session.userId,
+      });
+      throw new ApiError("Camp capacity reached", 409);
+    }
 
     const registeredVia = String(body.registeredVia ?? "DESK").trim().toUpperCase();
     if (!REGISTERED_VIA.includes(registeredVia)) throw new ApiError("Invalid registeredVia", 400);
 
     // Self-service: a BENEFICIARY session may only register their own record.
     if (session.role === "BENEFICIARY") {
-      if (registeredVia !== "SELF")
+      if (registeredVia !== "SELF") {
+        log.warn("camp_registration_self_via_forbidden", {
+          campId,
+          beneficiaryId,
+          registeredVia,
+          actor: session.userId,
+        });
         throw new ApiError("Beneficiaries may only self-register (registeredVia: SELF)", 403);
+      }
       const own = await db.beneficiary.findFirst({ where: { userId: session.userId } });
       if (!own) throw new ApiError("No beneficiary profile is linked to your account", 403);
-      if (own.id !== beneficiaryId)
+      if (own.id !== beneficiaryId) {
+        log.warn("camp_registration_self_other_forbidden", {
+          campId,
+          beneficiaryId,
+          actor: session.userId,
+        });
         throw new ApiError("You can only register yourself for a camp", 403);
+      }
     }
 
     let scheduledSlot: Date | null = null;
@@ -162,6 +209,15 @@ router.post("/", async (req, res) => {
         registeredByName: session.name,
       },
       include: { beneficiary: { select: BENEFICIARY_SELECT } },
+    });
+
+    log.info("camp_registration_created", {
+      registrationId: registration.id,
+      code: registration.code,
+      campId,
+      beneficiaryId,
+      registeredVia,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -211,7 +267,10 @@ router.patch("/:id", async (req, res) => {
       where: { id },
       include: { camp: { select: { code: true, title: true } } },
     });
-    if (!existing) throw new ApiError("Registration not found", 404);
+    if (!existing) {
+      log.warn("camp_registration_update_not_found", { registrationId: id, actor: session.userId });
+      throw new ApiError("Registration not found", 404);
+    }
 
     const data: { status?: string; scheduledSlot?: Date | null; notes?: string | null } = {};
 
@@ -219,6 +278,13 @@ router.patch("/:id", async (req, res) => {
       const status = String(body.status).trim().toUpperCase();
       if (!SETTABLE_STATUSES.includes(status))
         throw new ApiError("Invalid status", 400);
+      if (existing.status !== status && !TRANSITIONS[existing.status]?.includes(status))
+        log.warn("camp_registration_invalid_transition", {
+          registrationId: id,
+          from: existing.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(TRANSITIONS, existing.status, status, "camp registration");
       data.status = status;
     }
@@ -242,6 +308,14 @@ router.patch("/:id", async (req, res) => {
           select: { id: true, code: true, name: true, phone: true, age: true, gender: true },
         },
       },
+    });
+
+    log.info("camp_registration_updated", {
+      registrationId: id,
+      code: registration.code,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: registration.status } : {}),
+      actor: session.userId,
     });
 
     await logActivity(

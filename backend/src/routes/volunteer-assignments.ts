@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("volunteer-assignments");
 
 /**
  * Volunteer assignments — auto-generate VolunteerTasks from another module's
@@ -107,10 +110,16 @@ router.post("/", async (req, res) => {
     let recordTitle: string | null = null;
     if (refType === "DISTRIBUTION") {
       const record = await db.distribution.findUnique({ where: { id: refId } });
-      if (!record) throw new ApiError("Distribution not found", 404);
+      if (!record) {
+        log.warn("volunteer_assignment_ref_not_found", { refType, refId, actor: session.userId });
+        throw new ApiError("Distribution not found", 404);
+      }
     } else if (refType === "CAMPAIGN") {
       const record = await db.campaign.findUnique({ where: { id: refId } });
-      if (!record) throw new ApiError("Campaign not found", 404);
+      if (!record) {
+        log.warn("volunteer_assignment_ref_not_found", { refType, refId, actor: session.userId });
+        throw new ApiError("Campaign not found", 404);
+      }
       recordTitle = record.title;
     }
 
@@ -121,8 +130,15 @@ router.post("/", async (req, res) => {
     });
     const foundIds = new Set(volunteers.map((v) => v.id));
     const missing = volunteerIds.filter((id) => !foundIds.has(id));
-    if (missing.length > 0)
+    if (missing.length > 0) {
+      log.warn("volunteer_assignment_volunteers_not_found", {
+        refType,
+        refId,
+        missing,
+        actor: session.userId,
+      });
       throw new ApiError(`Volunteer(s) not found: ${missing.join(", ")}`, 404);
+    }
 
     // Skip duplicates: same volunteer + refType + refId, task not CANCELLED.
     const existing = await db.volunteerTask.findMany({
@@ -157,8 +173,12 @@ router.post("/", async (req, res) => {
     const type = refType === "DISTRIBUTION" ? "DISTRIBUTION" : "EVENT";
 
     const created: Array<{ id: string }> = [];
+    const skippedIds: string[] = [];
     for (const volunteer of volunteers) {
-      if (alreadyAssigned.has(volunteer.id)) continue;
+      if (alreadyAssigned.has(volunteer.id)) {
+        skippedIds.push(volunteer.id);
+        continue;
+      }
       created.push(
         await db.volunteerTask.create({
           data: {
@@ -177,6 +197,21 @@ router.post("/", async (req, res) => {
         })
       );
     }
+
+    log.info("volunteer_tasks_assigned", {
+      refType,
+      refId,
+      taskIds: created.map((t) => t.id),
+      skippedCount: skippedIds.length,
+      actor: session.userId,
+    });
+    if (skippedIds.length > 0)
+      log.warn("volunteer_assignment_duplicates_skipped", {
+        refType,
+        refId,
+        volunteerIds: skippedIds,
+        actor: session.userId,
+      });
 
     await logActivity(
       session.name,

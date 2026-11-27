@@ -9,6 +9,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import { requireAuth, ApiError, json, handleError } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { multipart, multipartErrorHandler } from "@/lib/multipart";
 import { saveUpload } from "@/lib/files";
 import { assertAttachableMedia } from "@/lib/media/media-asset";
@@ -33,6 +34,8 @@ import {
 } from "@/lib/community/reels";
 
 export const router = Router();
+
+const log = logger.child("reels");
 
 /** :id path param — reject missing ids early. */
 function reelId(req: Request): string {
@@ -133,6 +136,12 @@ router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Res
       await assertAttachableMedia(session.userId, mediaId, "reel");
     }
 
+    log.debug("reel_upload_mode", {
+      actor: session.userId,
+      mode: content ? "multipart" : "direct",
+      mediaId,
+    });
+
     const reel = await createReel(session.userId, {
       description: typeof body.description === "string" ? body.description : null,
       hashtags: typeof body.hashtags === "string" ? body.hashtags : null,
@@ -143,6 +152,14 @@ router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Res
       thumbnailUrl,
       mediaId,
     });
+    if (reel) {
+      log.info("reel_created", {
+        reelId: (reel as { id: string }).id,
+        actor: session.userId,
+        musicId: musicIdRaw,
+        mode: content ? "multipart" : "direct",
+      });
+    }
     return json(res, reel, 201); // POST /api/posts parity
   } catch (e) {
     return handleError(e, res);
@@ -230,6 +247,7 @@ router.delete("/comments/:commentId", async (req, res) => {
     const commentId = String((req.params as Record<string, string>).commentId ?? "").trim();
     if (!commentId) throw new ApiError("Comment id is required", 400);
     await deleteReelComment(session.userId, session.role, commentId);
+    log.info("reel_comment_deleted", { commentId, actor: session.userId });
     return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
@@ -253,6 +271,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const reel = await deleteReel(session.userId, session.role, reelId(req));
+    log.info("reel_deleted", { reelId: reel.id, actor: session.userId });
     return json(res, { ok: true, reel });
   } catch (e) {
     return handleError(e, res);
@@ -272,7 +291,8 @@ router.patch("/:id", async (req, res) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : undefined;
     };
-    const reel = await updateReel(session.userId, session.role, reelId(req), {
+    const reelIdStr = reelId(req);
+    const patch = {
       description: b.description !== undefined ? String(b.description) : b.desc !== undefined ? String(b.desc) : undefined,
       hashtags: b.hashtags !== undefined ? String(b.hashtags) : undefined,
       interestIds:
@@ -280,6 +300,12 @@ router.patch("/:id", async (req, res) => {
       thumbnail: b.thumbnail !== undefined ? String(b.thumbnail) : undefined,
       content: b.content !== undefined ? String(b.content) : b.media !== undefined ? String(b.media) : undefined,
       musicId: numOrNull(b.musicId ?? b.music_id),
+    };
+    const reel = await updateReel(session.userId, session.role, reelIdStr, patch);
+    log.info("reel_updated", {
+      reelId: reelIdStr,
+      actor: session.userId,
+      fields: Object.entries(patch).filter(([, v]) => v !== undefined).map(([k]) => k),
     });
     return json(res, { ok: true, reel });
   } catch (e) {
@@ -292,6 +318,12 @@ router.post("/:id/like", async (req, res) => {
   try {
     const session = await requireAuth(req);
     const reel = await toggleReelLike(session.userId, reelId(req));
+    log.info("reel_like_toggled", {
+      reelId: reel.id,
+      actor: session.userId,
+      isLike: reel.isLike,
+      likesCount: reel.likesCount,
+    });
     return json(res, reel);
   } catch (e) {
     return handleError(e, res);
@@ -320,6 +352,7 @@ router.post("/:id/report", async (req, res) => {
       String(body.reason ?? ""),
       String(body.desc ?? "")
     );
+    log.info("reel_reported", { reelId: report.reelId, actor: session.userId, reason: report.reason });
     return json(res, { ok: true, report });
   } catch (e) {
     return handleError(e, res);
@@ -344,6 +377,7 @@ router.post("/:id/comments", async (req, res) => {
     const session = await requireAuth(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const comment = await addReelComment(session.userId, reelId(req), String(body.description ?? ""));
+    log.info("reel_comment_added", { reelId: comment.reelId, commentId: comment.id, actor: session.userId });
     return json(res, comment);
   } catch (e) {
     return handleError(e, res);

@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -15,6 +16,8 @@ import {
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("beneficiary-requests");
 
 // GET /api/beneficiary-requests — admin queue, or ?mine=1 for the caller
 router.get("/", async (req, res) => {
@@ -83,6 +86,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("beneficiary_request_created", {
+      requestId: row.id,
+      category: row.category,
+      urgency: row.urgency,
+      ...(row.beneficiaryId ? { beneficiaryId: row.beneficiaryId } : {}),
+      ...(session ? { actor: session.userId } : {}),
+    });
+
     return json(res, row, 201);
   } catch (e) {
     return handleError(e, res);
@@ -109,13 +120,23 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.beneficiaryRequest.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Request not found", 404);
+    if (!existing) {
+      log.warn("beneficiary_request_update_not_found", { requestId: id, actor: session.userId });
+      throw new ApiError("Request not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body?.status !== undefined) {
       const status = String(body.status).toUpperCase();
       if (!VALID_STATUSES.includes(status))
         throw new ApiError("Invalid request status", 400);
+      if (existing.status !== status && !TRANSITIONS[existing.status]?.includes(status))
+        log.warn("beneficiary_request_invalid_transition", {
+          requestId: id,
+          from: existing.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(TRANSITIONS, existing.status, status, "beneficiary request", 400);
       data.status = status;
       data.reviewedBy = session.name;
@@ -134,6 +155,12 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const row = await db.beneficiaryRequest.update({ where: { id }, data });
+
+    log.info("beneficiary_request_reviewed", {
+      requestId: id,
+      ...(data.status !== undefined ? { from: existing.status, to: row.status } : { fields: Object.keys(data) }),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -155,8 +182,16 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.beneficiaryRequest.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Request not found", 404);
+    if (!existing) {
+      log.warn("beneficiary_request_delete_not_found", { requestId: id, actor: session.userId });
+      throw new ApiError("Request not found", 404);
+    }
     await db.beneficiaryRequest.delete({ where: { id } });
+    log.info("beneficiary_request_deleted", {
+      requestId: id,
+      status: existing.status,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "BENEFICIARY_REQUEST_DELETE",

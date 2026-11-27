@@ -4,9 +4,12 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireRole, ApiError, json, handleError } from "@/lib/session";
 
 export const router = Router();
+
+const log = logger.child("volunteer-attendances");
 
 // GET /api/volunteer-attendances?volunteerId=&from=&to=&limit=
 router.get("/", async (req, res) => {
@@ -63,8 +66,13 @@ router.post("/", async (req, res) => {
 
     if (session.role === "VOLUNTEER") {
       const volunteer = await db.volunteer.findUnique({ where: { userId: session.userId } });
-      if (!volunteer || volunteer.status !== "ACTIVE")
+      if (!volunteer || volunteer.status !== "ACTIVE") {
+        log.warn("volunteer_checkin_blocked_inactive", {
+          volunteerId: volunteer?.id,
+          actor: session.userId,
+        });
         throw new ApiError("Only active volunteers can check in", 403);
+      }
 
       let task: { title: string; location: string | null } | null = null;
       if (body?.taskId) {
@@ -72,7 +80,14 @@ router.post("/", async (req, res) => {
           where: { id: String(body.taskId), volunteerId: volunteer.id },
           select: { title: true, location: true },
         });
-        if (!task) throw new ApiError("Task not found", 404);
+        if (!task) {
+          log.warn("volunteer_checkin_task_not_found", {
+            volunteerId: volunteer.id,
+            taskId: String(body.taskId),
+            actor: session.userId,
+          });
+          throw new ApiError("Task not found", 404);
+        }
       }
 
       const now = new Date();
@@ -88,7 +103,14 @@ router.post("/", async (req, res) => {
         where: { volunteerId_date: { volunteerId: volunteer.id, date: day } },
       });
       // Idempotent: a second tap the same day keeps the first check-in time.
-      if (existing?.checkIn) return json(res, existing);
+      if (existing?.checkIn) {
+        log.warn("volunteer_checkin_duplicate", {
+          attendanceId: existing.id,
+          volunteerId: volunteer.id,
+          actor: session.userId,
+        });
+        return json(res, existing);
+      }
 
       const row = existing
         ? await db.volunteerAttendance.update({
@@ -98,13 +120,25 @@ router.post("/", async (req, res) => {
         : await db.volunteerAttendance.create({
             data: { volunteerId: volunteer.id, date: day, checkIn: now, location, notes },
           });
+      log.info("volunteer_checkin_recorded", {
+        attendanceId: row.id,
+        volunteerId: volunteer.id,
+        ...(body?.taskId ? { taskId: String(body.taskId) } : {}),
+        actor: session.userId,
+      });
       return json(res, row, 201);
     }
 
     const volunteerId = String(body?.volunteerId ?? "");
     if (!volunteerId) throw new ApiError("volunteerId is required", 400);
     const volunteer = await db.volunteer.findUnique({ where: { id: volunteerId } });
-    if (!volunteer) throw new ApiError("Volunteer not found", 404);
+    if (!volunteer) {
+      log.warn("volunteer_attendance_volunteer_not_found", {
+        volunteerId,
+        actor: session.userId,
+      });
+      throw new ApiError("Volunteer not found", 404);
+    }
 
     const date = body?.date ? new Date(String(body.date)) : new Date();
     if (Number.isNaN(date.getTime())) throw new ApiError("Date is invalid", 400);
@@ -144,6 +178,14 @@ router.post("/", async (req, res) => {
         location: body?.location ? String(body.location).trim() : null,
         notes: body?.notes ? String(body.notes) : null,
       },
+    });
+
+    log.info("volunteer_attendance_recorded", {
+      attendanceId: row.id,
+      volunteerId,
+      date: day.toISOString().slice(0, 10),
+      ...(hours !== null ? { hours } : {}),
+      actor: session.userId,
     });
 
     return json(res, row, 201);

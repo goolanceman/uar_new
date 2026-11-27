@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -15,6 +16,8 @@ import {
 import { assertTransition } from "@/lib/workflow";
 
 export const router = Router();
+
+const log = logger.child("appointments");
 
 const APPT_TYPES = ["SCREENING", "CONSULTATION", "LAB", "PHARMACY", "FOLLOW_UP"];
 
@@ -106,17 +109,35 @@ router.post("/", async (req, res) => {
     const beneficiaryId = String(body.beneficiaryId ?? "").trim();
     if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
     const beneficiary = await db.beneficiary.findUnique({ where: { id: beneficiaryId } });
-    if (!beneficiary) throw new ApiError("Beneficiary not found", 404);
+    if (!beneficiary) {
+      log.warn("appointment_beneficiary_not_found", {
+        beneficiaryId,
+        actor: session.userId,
+      });
+      throw new ApiError("Beneficiary not found", 404);
+    }
 
     if (body.campId) {
       const camp = await db.medicalCamp.findUnique({ where: { id: String(body.campId) } });
-      if (!camp) throw new ApiError("Camp not found", 404);
+      if (!camp) {
+        log.warn("appointment_camp_not_found", {
+          campId: String(body.campId),
+          actor: session.userId,
+        });
+        throw new ApiError("Camp not found", 404);
+      }
     }
 
     let professionalId = body.professionalId ? String(body.professionalId).trim() : null;
     if (professionalId) {
       const professional = await db.healthProfessional.findUnique({ where: { id: professionalId } });
-      if (!professional) throw new ApiError("Professional not found", 404);
+      if (!professional) {
+        log.warn("appointment_professional_not_found", {
+          professionalId,
+          actor: session.userId,
+        });
+        throw new ApiError("Professional not found", 404);
+      }
     } else if (session.role === "DOCTOR") {
       const own = await db.healthProfessional.findUnique({ where: { userId: session.userId } });
       professionalId = own?.id ?? null;
@@ -145,6 +166,15 @@ router.post("/", async (req, res) => {
         beneficiary: { select: { id: true, code: true, name: true, phone: true } },
         professional: { select: { id: true, name: true, kind: true, speciality: true } },
       },
+    });
+
+    log.info("appointment_created", {
+      appointmentId: appointment.id,
+      beneficiaryId,
+      ...(body.campId ? { campId: String(body.campId) } : {}),
+      ...(professionalId ? { professionalId } : {}),
+      type,
+      actor: session.userId,
     });
 
     await logActivity(
@@ -191,7 +221,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.appointment.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Appointment not found", 404);
+    if (!existing) {
+      log.warn("appointment_update_not_found", { appointmentId: id, actor: session.userId });
+      throw new ApiError("Appointment not found", 404);
+    }
 
     const data: {
       status?: string;
@@ -205,6 +238,13 @@ router.patch("/:id", async (req, res) => {
       const status = String(body.status).trim().toUpperCase();
       if (!SETTABLE_STATUSES.includes(status))
         throw new ApiError("Invalid status", 400);
+      if (existing.status !== status && !TRANSITIONS[existing.status]?.includes(status))
+        log.warn("appointment_invalid_transition", {
+          appointmentId: id,
+          from: existing.status,
+          to: status,
+          actor: session.userId,
+        });
       assertTransition(TRANSITIONS, existing.status, status, "appointment");
       if (status === "NO_SHOW") {
         const reason = String(body.noShowReason ?? "").trim();
@@ -224,7 +264,14 @@ router.patch("/:id", async (req, res) => {
         const professional = await db.healthProfessional.findUnique({
           where: { id: String(body.professionalId).trim() },
         });
-        if (!professional) throw new ApiError("Professional not found", 404);
+        if (!professional) {
+          log.warn("appointment_professional_not_found", {
+            professionalId: String(body.professionalId).trim(),
+            appointmentId: id,
+            actor: session.userId,
+          });
+          throw new ApiError("Professional not found", 404);
+        }
         data.professionalId = professional.id;
       }
     }
@@ -237,6 +284,13 @@ router.patch("/:id", async (req, res) => {
     if (body.notes !== undefined) data.notes = body.notes ? String(body.notes).trim() : null;
 
     const appointment = await db.appointment.update({ where: { id }, data });
+
+    log.info("appointment_updated", {
+      appointmentId: id,
+      fields: Object.keys(data),
+      ...(data.status !== undefined ? { newStatus: appointment.status } : {}),
+      actor: session.userId,
+    });
 
     if (appointment.status === "NO_SHOW") {
       await logActivity(
@@ -267,11 +321,26 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.appointment.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Appointment not found", 404);
-    if (existing.status !== "SCHEDULED")
+    if (!existing) {
+      log.warn("appointment_delete_not_found", { appointmentId: id, actor: session.userId });
+      throw new ApiError("Appointment not found", 404);
+    }
+    if (existing.status !== "SCHEDULED") {
+      log.warn("appointment_delete_blocked_status", {
+        appointmentId: id,
+        status: existing.status,
+        actor: session.userId,
+      });
       throw new ApiError("Only appointments in SCHEDULED status can be deleted", 409);
+    }
 
     await db.appointment.delete({ where: { id } });
+
+    log.info("appointment_deleted", {
+      appointmentId: id,
+      type: existing.type,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

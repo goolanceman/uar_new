@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   json,
@@ -14,6 +15,8 @@ import {
 import { ANIMAL_PLEDGE_STATUSES } from "@/lib/animals";
 
 export const router = Router();
+
+const log = logger.child("animal-pledges");
 
 const STATUSES = ANIMAL_PLEDGE_STATUSES;
 const KINDS = ["FOOD", "MEDICAL", "VACCINATION", "SHELTER"];
@@ -29,7 +32,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const pledge = await db.animalPledge.findUnique({ where: { id } });
-    if (!pledge) throw new ApiError("Pledge not found", 404);
+    if (!pledge) {
+      log.warn("animal_pledge_update_not_found", { pledgeId: id, actor: session.userId });
+      throw new ApiError("Pledge not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
     if (body.status !== undefined) {
@@ -68,7 +74,10 @@ router.patch("/:id", async (req, res) => {
         const animal = await db.animal.findUnique({
           where: { id: String(body.animalId) },
         });
-        if (!animal) throw new ApiError("Animal not found", 404);
+        if (!animal) {
+          log.warn("animal_pledge_animal_not_found", { pledgeId: id, animalId: body.animalId, actor: session.userId });
+          throw new ApiError("Animal not found", 404);
+        }
         data.animalId = String(body.animalId);
       } else {
         data.animalId = null;
@@ -78,6 +87,14 @@ router.patch("/:id", async (req, res) => {
     const updated = await db.animalPledge.update({
       where: { id },
       data: data as never,
+    });
+    log.info("animal_pledge_updated", {
+      pledgeId: id,
+      donorName: updated.donorName,
+      kind: updated.kind,
+      ...(data.status ? { status: String(data.status) } : {}),
+      fields: Object.keys(data),
+      actor: session.userId,
     });
     await logActivity(
       session.name,
@@ -98,9 +115,19 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const pledge = await db.animalPledge.findUnique({ where: { id } });
-    if (!pledge) throw new ApiError("Pledge not found", 404);
+    if (!pledge) {
+      log.warn("animal_pledge_delete_not_found", { pledgeId: id, actor: session.userId });
+      throw new ApiError("Pledge not found", 404);
+    }
 
     await db.animalPledge.delete({ where: { id } });
+    log.info("animal_pledge_deleted", {
+      pledgeId: id,
+      donorName: pledge.donorName,
+      kind: pledge.kind,
+      amount: pledge.amount,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "ANIMAL_PLEDGE_DELETE",

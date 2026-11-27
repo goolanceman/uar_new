@@ -1,5 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { ApiError } from "@/lib/session";
+import { logger } from "@/lib/logger";
+
+const log = logger.child("distribution-stock");
 
 type Tx = Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
 
@@ -64,12 +67,23 @@ export async function consumeItemsStock(
 
   for (const [itemId, qty] of totals) {
     const item = await tx.inventoryItem.findUnique({ where: { id: itemId } });
-    if (!item) throw new ApiError(`Inventory item not found (${itemId})`, 400);
-    if (item.quantity < qty)
+    if (!item) {
+      log.warn("distribution_stock_item_not_found", { distributionId, itemId });
+      throw new ApiError(`Inventory item not found (${itemId})`, 400);
+    }
+    if (item.quantity < qty) {
+      log.warn("distribution_stock_insufficient", {
+        distributionId,
+        itemId,
+        itemName: item.name,
+        requested: qty,
+        available: item.quantity,
+      });
       throw new ApiError(
         `Insufficient stock for "${item.name}" — requested ${qty} ${item.unit}, only ${item.quantity} ${item.unit} in stock`,
         400
       );
+    }
     await tx.inventoryItem.update({
       where: { id: itemId },
       data: { quantity: item.quantity - qty },
@@ -106,21 +120,40 @@ export async function consumeKitBatch(
   location: string | null
 ): Promise<void> {
   const batch = await tx.kitBatch.findUnique({ where: { id: kitBatchId } });
-  if (!batch) throw new ApiError("Kit batch not found", 400);
+  if (!batch) {
+    log.warn("distribution_kit_batch_not_found", { distributionId, kitBatchId });
+    throw new ApiError("Kit batch not found", 400);
+  }
   const available = batch.totalUnits - batch.scannedUnits;
-  if (available < kitQuantity)
+  if (available < kitQuantity) {
+    log.warn("distribution_kit_batch_insufficient", {
+      distributionId,
+      kitBatchId,
+      batchName: batch.name,
+      requested: kitQuantity,
+      available,
+    });
     throw new ApiError(
       `Only ${available} unit(s) left in "${batch.name}" — requested ${kitQuantity}`,
       400
     );
+  }
 
   const units = await tx.kitUnit.findMany({
     where: { batchId: kitBatchId, status: "READY" },
     take: kitQuantity,
     orderBy: { code: "asc" },
   });
-  if (units.length < kitQuantity)
+  if (units.length < kitQuantity) {
+    log.warn("distribution_kit_batch_not_enough_ready", {
+      distributionId,
+      kitBatchId,
+      batchName: batch.name,
+      requested: kitQuantity,
+      ready: units.length,
+    });
     throw new ApiError(`Only ${units.length} ready unit(s) left in "${batch.name}"`, 400);
+  }
 
   await tx.kitUnit.updateMany({
     where: { id: { in: units.map((u) => u.id) } },
@@ -133,13 +166,25 @@ export async function consumeKitBatch(
   });
 
   const scannedUnits = batch.scannedUnits + kitQuantity;
+  const nextBatchStatus = scannedUnits >= batch.totalUnits ? "DEPLETED" : "IN_PROGRESS";
   await tx.kitBatch.update({
     where: { id: kitBatchId },
     data: {
       scannedUnits,
-      status: scannedUnits >= batch.totalUnits ? "DEPLETED" : "IN_PROGRESS",
+      status: nextBatchStatus,
     },
   });
+  if (nextBatchStatus !== batch.status) {
+    log.debug("distribution_kit_batch_status_changed", {
+      distributionId,
+      kitBatchId,
+      batchName: batch.name,
+      from: batch.status,
+      to: nextBatchStatus,
+      scannedUnits,
+      totalUnits: batch.totalUnits,
+    });
+  }
 }
 
 /** Reverse kit-unit consumption tied to a distribution — returns units to READY. */

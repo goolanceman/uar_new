@@ -26,6 +26,7 @@ export async function awardDonationPoints(userId: string, donationId: string, am
       expiresAt: new Date(new Date().setFullYear(new Date().getFullYear() + 1)),
     },
   });
+  log.info("donation_points_awarded", { userId, donationId, points, amount });
 }
 
 /**
@@ -56,6 +57,11 @@ export async function settleDonationSideEffects(donation: {
       amount: donation.amount,
       campaignId: donation.campaignId,
       userId: donation.donorId,
+    });
+    log.debug("settlement_side_effects_completed", {
+      donationId: donation.id,
+      donorId: donation.donorId,
+      amount: donation.amount,
     });
   } catch (e) {
     log.error("settlement_side_effects_failed", { error: e, donationId: donation.id, donorId: donation.donorId });

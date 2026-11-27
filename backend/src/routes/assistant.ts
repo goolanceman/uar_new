@@ -85,6 +85,7 @@ router.post("/chat", async (req, res) => {
       const sections = await buildLiveOpsContext(message, role);
       if (sections.length > 0) {
         liveContext = "\n\n" + sections.map((s) => `### ${s.title}\n${s.content}`).join("\n\n");
+        log.debug("assistant_live_ops_attached", { sections: sections.length, role });
       }
     } catch (e) {
       log.warn("live_ops_snapshot_failed", { error: e instanceof Error ? e : String(e) });
@@ -117,6 +118,7 @@ router.post("/chat", async (req, res) => {
     }
 
     if (!reply) {
+      log.debug("assistant_kb_fallback_reply", { kbChunks: chunks.length, role });
       // Fallback: answer directly from the best knowledge chunk so the
       // agent is ALWAYS available, even offline / API down.
       if (chunks.length > 0) {

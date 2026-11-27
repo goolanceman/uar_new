@@ -5,6 +5,7 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireAuth,
   requireRole,
@@ -16,6 +17,8 @@ import {
 import { nextInventoryItemCode } from "@/lib/codes";
 
 export const router = Router();
+
+const log = logger.child("inventory");
 
 // GET /api/inventory?category=&q=&low=1 (auth) — orderBy name
 router.get("/", async (req, res) => {
@@ -77,6 +80,14 @@ router.post("/", async (req, res) => {
       },
     });
 
+    log.info("inventory_item_created", {
+      itemId: item.id,
+      code: item.code,
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "STOCK_ADD",
@@ -123,7 +134,10 @@ router.patch("/:id", async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const existing = await db.inventoryItem.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Inventory item not found", 404);
+    if (!existing) {
+      log.warn("inventory_item_update_not_found", { itemId: id, actor: session.userId });
+      throw new ApiError("Inventory item not found", 404);
+    }
 
     const data: Prisma.InventoryItemUpdateInput = {};
 
@@ -171,6 +185,17 @@ router.patch("/:id", async (req, res) => {
     }
 
     const item = await db.inventoryItem.update({ where: { id }, data });
+    log.info("inventory_item_updated", {
+      itemId: id,
+      code: item.code,
+      name: item.name,
+      quantity: item.quantity,
+      ...(body.addQuantity !== undefined
+        ? { stockAdded: Math.trunc(Number(body.addQuantity) || 0) }
+        : {}),
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
     await logActivity(
       session.name,
       "STOCK_UPDATE",
@@ -197,11 +222,20 @@ router.delete("/:id", async (req, res) => {
     const session = await requireRole(req, "ADMIN");
     const { id } = req.params;
     const existing = await db.inventoryItem.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Inventory item not found", 404);
+    if (!existing) {
+      log.warn("inventory_item_delete_not_found", { itemId: id, actor: session.userId });
+      throw new ApiError("Inventory item not found", 404);
+    }
 
     await db.inventoryPurchase.deleteMany({ where: { itemId: id } });
     await db.inventoryDistribution.deleteMany({ where: { itemId: id } });
     await db.inventoryItem.delete({ where: { id } });
+    log.info("inventory_item_deleted", {
+      itemId: id,
+      code: existing.code,
+      name: existing.name,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

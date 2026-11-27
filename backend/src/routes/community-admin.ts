@@ -27,6 +27,7 @@
  */
 import { Router } from "express";
 import { ApiError, handleError, json } from "@/lib/session";
+import { logger } from "@/lib/logger";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
   requireElevated,
@@ -61,6 +62,8 @@ import {
 } from "@/lib/community/admin";
 
 export const router = Router();
+
+const log = logger.child("community:admin");
 
 // GET /api/community/admin/users — members + charity profile + activity counts
 router.get("/users", async (req, res) => {
@@ -112,7 +115,9 @@ router.post("/posts/moderate", async (req, res) => {
     const body = req.body ?? {};
     const postId = String(body.postId ?? body.post_id ?? "");
     const action = String(body.action ?? "");
-    return json(res, await moderatePost(session, postId, action));
+    const result = await moderatePost(session, postId, action);
+    log.info("post_moderated", { postId, action, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -143,7 +148,9 @@ router.post("/reports/resolve", async (req, res) => {
     const body = req.body ?? {};
     const reportId = String(body.reportId ?? body.report_id ?? "");
     const action = String(body.action ?? "");
-    return json(res, await resolveReport(session, reportId, action));
+    const result = await resolveReport(session, reportId, action);
+    log.info("report_resolved", { reportId, action, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -190,10 +197,12 @@ router.get("/document-types", async (req, res) => {
 
 router.post("/document-types", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await addDocumentType(title), 201);
+    const result = await addDocumentType(title);
+    log.info("document_type_created", { id: result.id, title, actor: session.userId });
+    return json(res, result, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -201,12 +210,14 @@ router.post("/document-types", async (req, res) => {
 
 router.patch("/document-types/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const id = Number((req.params as Record<string, string>).id);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!Number.isInteger(id) || id < 0) throw new ApiError("Invalid document type id", 400);
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await updateDocumentType(id, title));
+    const result = await updateDocumentType(id, title);
+    log.info("document_type_updated", { id, title, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -214,10 +225,12 @@ router.patch("/document-types/:id", async (req, res) => {
 
 router.delete("/document-types/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const id = Number((req.params as Record<string, string>).id);
     if (!Number.isInteger(id) || id < 0) throw new ApiError("Invalid document type id", 400);
-    return json(res, await deleteDocumentType(id));
+    const result = await deleteDocumentType(id);
+    log.info("document_type_deleted", { id, title: result.title, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -238,10 +251,12 @@ router.get("/report-reasons", async (req, res) => {
 
 router.post("/report-reasons", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await addReportReason(title), 201);
+    const row = await addReportReason(title);
+    log.info("report_reason_created", { id: row.id, title, actor: session.userId });
+    return json(res, row, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -249,10 +264,13 @@ router.post("/report-reasons", async (req, res) => {
 
 router.patch("/report-reasons/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await updateReportReason(Number((req.params as Record<string, string>).id), title));
+    const id = Number((req.params as Record<string, string>).id);
+    const row = await updateReportReason(id, title);
+    log.info("report_reason_updated", { id: row.id, title, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }
@@ -260,8 +278,11 @@ router.patch("/report-reasons/:id", async (req, res) => {
 
 router.delete("/report-reasons/:id", async (req, res) => {
   try {
-    await requireElevated(req);
-    return json(res, await deleteReportReason(Number((req.params as Record<string, string>).id)));
+    const session = await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    const row = await deleteReportReason(id);
+    log.info("report_reason_deleted", { id, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }
@@ -283,10 +304,12 @@ router.get("/username-restrictions", async (req, res) => {
 // POST accepts a single title or a comma-separated batch (legacy batch add).
 router.post("/username-restrictions", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, { items: await addUsernameRestrictions(title) }, 201);
+    const items = await addUsernameRestrictions(title);
+    log.info("username_restrictions_created", { count: items.length, actor: session.userId });
+    return json(res, { items }, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -294,10 +317,13 @@ router.post("/username-restrictions", async (req, res) => {
 
 router.patch("/username-restrictions/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const title = String((req.body ?? {}).title ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
-    return json(res, await updateUsernameRestriction(Number((req.params as Record<string, string>).id), title));
+    const id = Number((req.params as Record<string, string>).id);
+    const row = await updateUsernameRestriction(id, title);
+    log.info("username_restriction_updated", { id: row.id, title, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }
@@ -305,8 +331,11 @@ router.patch("/username-restrictions/:id", async (req, res) => {
 
 router.delete("/username-restrictions/:id", async (req, res) => {
   try {
-    await requireElevated(req);
-    return json(res, await deleteUsernameRestriction(Number((req.params as Record<string, string>).id)));
+    const session = await requireElevated(req);
+    const id = Number((req.params as Record<string, string>).id);
+    const row = await deleteUsernameRestriction(id);
+    log.info("username_restriction_deleted", { id, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }
@@ -348,7 +377,9 @@ router.post("/verifications/:userId/approve", async (req, res) => {
     const session = await requireElevated(req);
     const userId = String((req.params as Record<string, string>).userId ?? "");
     if (!userId) throw new ApiError("User id is required", 400);
-    return json(res, await resolveVerification(session, userId, true));
+    const result = await resolveVerification(session, userId, true);
+    log.info("verification_approved", { userId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -359,7 +390,9 @@ router.post("/verifications/:userId/reject", async (req, res) => {
     const session = await requireElevated(req);
     const userId = String((req.params as Record<string, string>).userId ?? "");
     if (!userId) throw new ApiError("User id is required", 400);
-    return json(res, await resolveVerification(session, userId, false));
+    const result = await resolveVerification(session, userId, false);
+    log.info("verification_rejected", { userId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -389,7 +422,13 @@ router.post("/notifications", async (req, res) => {
     const description = String(body.description ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
     if (!description) throw new ApiError("The description field is required.", 400);
-    return json(res, await sendAdminNotification(session, title, description), 201);
+    const result = await sendAdminNotification(session, title, description);
+    log.info("notification_sent", {
+      notificationId: result.id,
+      recipients: result.recipients,
+      actor: session.userId,
+    });
+    return json(res, result, 201);
   } catch (e) {
     return handleError(e, res);
   }
@@ -397,13 +436,16 @@ router.post("/notifications", async (req, res) => {
 
 router.patch("/notifications/:id", async (req, res) => {
   try {
-    await requireElevated(req);
+    const session = await requireElevated(req);
     const body = req.body ?? {};
     const title = String(body.title ?? "").trim();
     const description = String(body.description ?? "").trim();
     if (!title) throw new ApiError("The title field is required.", 400);
     if (!description) throw new ApiError("The description field is required.", 400);
-    return json(res, await updateAdminNotification(Number((req.params as Record<string, string>).id), title, description));
+    const notificationId = Number((req.params as Record<string, string>).id);
+    const result = await updateAdminNotification(notificationId, title, description);
+    log.info("notification_updated", { notificationId, actor: session.userId });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -415,12 +457,19 @@ router.post("/notifications/:id/repeat", async (req, res) => {
   try {
     const session = await requireElevated(req);
     const body = req.body ?? {};
-    return json(res, await repeatAdminNotification(
+    const notificationId = Number((req.params as Record<string, string>).id);
+    const result = await repeatAdminNotification(
       session,
-      Number((req.params as Record<string, string>).id),
+      notificationId,
       body.title !== undefined ? String(body.title) : undefined,
       body.description !== undefined ? String(body.description) : undefined
-    ));
+    );
+    log.info("notification_repeated", {
+      notificationId,
+      recipients: result.recipients,
+      actor: session.userId,
+    });
+    return json(res, result);
   } catch (e) {
     return handleError(e, res);
   }
@@ -428,8 +477,11 @@ router.post("/notifications/:id/repeat", async (req, res) => {
 
 router.delete("/notifications/:id", async (req, res) => {
   try {
-    await requireElevated(req);
-    return json(res, await deleteAdminNotification(Number((req.params as Record<string, string>).id)));
+    const session = await requireElevated(req);
+    const notificationId = Number((req.params as Record<string, string>).id);
+    const row = await deleteAdminNotification(notificationId);
+    log.info("notification_deleted", { notificationId, actor: session.userId });
+    return json(res, row);
   } catch (e) {
     return handleError(e, res);
   }

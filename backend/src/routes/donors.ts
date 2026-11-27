@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import {
   requireRole,
   ApiError,
@@ -14,6 +15,8 @@ import {
 import { nextDonorCode } from "@/lib/codes";
 
 export const router = Router();
+
+const log = logger.child("donors");
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const PHONE_RE = /^(\+91[\-\s]?)?[6-9]\d{9}$/;
@@ -103,7 +106,14 @@ router.post("/", async (req, res) => {
       throw new ApiError("Please enter a valid email address", 400);
 
     const existing = await db.donor.findUnique({ where: { email } });
-    if (existing) throw new ApiError("A donor with this email already exists", 409);
+    if (existing) {
+      log.warn("donor_email_conflict", {
+        email,
+        existingId: existing.id,
+        actor: session.userId,
+      });
+      throw new ApiError("A donor with this email already exists", 409);
+    }
 
     const phone = body?.phone ? String(body.phone).trim() : null;
     if (phone && !PHONE_RE.test(phone.replace(/[\s-]/g, "")))
@@ -153,6 +163,13 @@ router.post("/", async (req, res) => {
         notes: body?.notes ? String(body.notes) : null,
         userId: linkedUser?.id ?? null,
       },
+    });
+
+    log.info("donor_created", {
+      donorId: donor.id,
+      code: donor.code,
+      linkedUserId: linkedUser?.id ?? null,
+      actor: session.userId,
     });
 
     await logActivity(session.name, "DONOR_CREATE", "DONOR", `${donor.name} (${donor.email})`, session.userId);
@@ -232,7 +249,10 @@ router.patch("/:id", async (req, res) => {
     const body = req.body ?? {};
 
     const existing = await db.donor.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Donor not found", 404);
+    if (!existing) {
+      log.warn("donor_update_not_found", { donorId: id, actor: session.userId });
+      throw new ApiError("Donor not found", 404);
+    }
 
     const data: Record<string, unknown> = {};
 
@@ -287,6 +307,12 @@ router.patch("/:id", async (req, res) => {
       throw new ApiError("Nothing to update", 400);
 
     const donor = await db.donor.update({ where: { id }, data });
+    log.info("donor_updated", {
+      donorId: id,
+      code: donor.code,
+      fields: Object.keys(data),
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,
@@ -309,13 +335,21 @@ router.delete("/:id", async (req, res) => {
     const { id } = req.params;
 
     const existing = await db.donor.findUnique({ where: { id } });
-    if (!existing) throw new ApiError("Donor not found", 404);
+    if (!existing) {
+      log.warn("donor_delete_not_found", { donorId: id, actor: session.userId });
+      throw new ApiError("Donor not found", 404);
+    }
 
     await db.donation.updateMany({
       where: { donorRefId: id },
       data: { donorRefId: null },
     });
     await db.donor.delete({ where: { id } });
+    log.info("donor_deleted", {
+      donorId: id,
+      code: existing.code,
+      actor: session.userId,
+    });
 
     await logActivity(
       session.name,

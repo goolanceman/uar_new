@@ -13,11 +13,14 @@
  */
 import { Prisma, type CommunityReport, type CommunityRoom, type CommunityRoomUser } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ApiError, requireAuth, type Session } from "@/lib/session";
 import { communityAuthor, communityAuthorSelect, communityUser, communityUserSelect, csvList } from "@/lib/community/serializers";
 import { sendPush } from "@/lib/community/push";
 import { deleteFileByUrl } from "@/lib/community/reels";
 import { invalidateCatalog } from "@/lib/cache";
+
+const log = logger.child("community:rooms");
 
 // ─── Legacy constants (app/Models/Constants.php) ─────────────────────────────
 
@@ -120,7 +123,10 @@ function notFound(msg: string): never {
 
 async function requireRoom(roomId: string): Promise<CommunityRoom> {
   const room = await db.communityRoom.findUnique({ where: { id: roomId } });
-  if (!room) notFound("Room not found");
+  if (!room) {
+    log.warn("room_not_found", { roomId });
+    notFound("Room not found");
+  }
   return room;
 }
 
@@ -131,7 +137,10 @@ async function roomRow(roomId: string, userId: string): Promise<CommunityRoomUse
 /** The session user's own row in the room — 404 when absent. */
 async function requireRoomRow(roomId: string, userId: string): Promise<CommunityRoomUser> {
   const row = await roomRow(roomId, userId);
-  if (!row) notFound("You are not a member of this room");
+  if (!row) {
+    log.warn("room_membership_not_found", { roomId, userId });
+    notFound("You are not a member of this room");
+  }
   return row;
 }
 
@@ -140,6 +149,7 @@ async function requireRoomAdminOrModerator(roomId: string, session: Session): Pr
   const row = await roomRow(roomId, session.userId);
   if (row?.type === RU_ADMIN) return;
   if (await isModerator(session)) return;
+  log.warn("room_admin_required", { roomId, actor: session.userId });
   throw new ApiError("Only the room admin can do this", 403);
 }
 
@@ -148,6 +158,7 @@ async function requireRoomStaff(roomId: string, session: Session): Promise<void>
   const row = await roomRow(roomId, session.userId);
   if (row?.type === RU_ADMIN || row?.type === RU_CO_ADMIN) return;
   if (await isModerator(session)) return;
+  log.warn("room_staff_required", { roomId, actor: session.userId });
   throw new ApiError("Only room admins can do this", 403);
 }
 
@@ -381,6 +392,7 @@ export async function roomDetail(myId: string, roomId: string, showMembers: bool
     for (const member of members) {
       await addConversationParticipant(conversation.id, member.userId, member.type === RU_ADMIN ? 2 : 1);
     }
+    log.info("room_conversation_created", { roomId: room.id, conversationId: room.conversationId });
   }
 
   const userRoomStatus = await roomRow(room.id, myId);
@@ -513,19 +525,28 @@ export async function deleteRoom(session: Session, roomId: string) {
 /** Join request (type 1) or direct join (type 2) per room config. */
 export async function joinRoom(session: Session, roomId: string) {
   const user = await db.user.findFirst({ where: { isBlock: UNBLOCKED, id: session.userId } });
-  if (!user) notFound("User Not Found");
+  if (!user) {
+    log.warn("room_join_user_blocked", { actor: session.userId });
+    notFound("User Not Found");
+  }
 
   const room = await db.communityRoom.findUnique({ where: { id: roomId }, include: { admin: true } });
   if (!room) notFound("Room Not Found");
 
   const existing = await roomRow(room.id, user.id);
-  if (existing) throw new ApiError("Already in room users list", 409);
+  if (existing) {
+    log.warn("room_join_duplicate", { roomId: room.id, actor: user.id });
+    throw new ApiError("Already in room users list", 409);
+  }
 
   const limit = await roomUsersLimit();
 
   if (room.isJoinRequestEnable === 1) {
     const memberCount = await db.communityRoomUser.count({ where: memberCountWhere(room.id, false) });
-    if (memberCount >= limit) throw new ApiError("Room users limit reached", 400);
+    if (memberCount >= limit) {
+      log.warn("room_join_limit_reached", { roomId: room.id, actor: user.id, mode: "request" });
+      throw new ApiError("Room users limit reached", 400);
+    }
 
     const roomUser = await db.communityRoomUser.create({
       data: { roomId: room.id, userId: user.id, type: RU_REQUEST },
@@ -549,7 +570,10 @@ export async function joinRoom(session: Session, roomId: string) {
   }
 
   const memberCount = await db.communityRoomUser.count({ where: memberCountWhere(room.id, true) });
-  if (memberCount >= limit) throw new ApiError("Room users limit reached", 400);
+  if (memberCount >= limit) {
+    log.warn("room_join_limit_reached", { roomId: room.id, actor: user.id, mode: "direct" });
+    throw new ApiError("Room users limit reached", 400);
+  }
 
   const roomUser = await db.communityRoomUser.create({
     data: { roomId: room.id, userId: user.id, type: RU_MEMBER },
@@ -610,7 +634,10 @@ export async function reportRoom(session: Session, roomId: string, reason: strin
 export async function setMute(session: Session, roomId: string, isMute?: number) {
   const room = await db.communityRoom.findUnique({ where: { id: roomId } });
   const row = await db.communityRoomUser.findFirst({ where: { roomId, userId: session.userId } });
-  if (!room || !row) throw new ApiError("Something went wrong", 404);
+  if (!room || !row) {
+    log.warn("room_mute_membership_missing", { roomId, actor: session.userId });
+    throw new ApiError("Something went wrong", 404);
+  }
 
   const next = isMute !== undefined ? (isMute ? 1 : 0) : row.isMute ? 0 : 1;
   const updated = await db.communityRoomUser.update({ where: { id: row.id }, data: { isMute: next } });
@@ -624,20 +651,32 @@ export async function inviteUser(session: Session, roomId: string, userId: strin
   if (!userId) throw new ApiError("The userId field is required", 400);
 
   const user = await db.user.findFirst({ where: { isBlock: UNBLOCKED, id: userId } });
-  if (!user) notFound("User Not Found");
+  if (!user) {
+    log.warn("room_invite_user_not_found", { userId, actor: session.userId });
+    notFound("User Not Found");
+  }
 
   const room = await db.communityRoom.findUnique({ where: { id: roomId }, include: { admin: true } });
   if (!room) notFound("Room Not Found");
   await requireRoomStaff(room.id, session);
 
-  if (room.adminId === userId) throw new ApiError("Lol, You are the Admin of the room", 400);
+  if (room.adminId === userId) {
+    log.warn("room_invite_admin_self", { roomId: room.id, invitedUserId: userId, actor: session.userId });
+    throw new ApiError("Lol, You are the Admin of the room", 400);
+  }
 
   const existing = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId } });
-  if (existing) throw new ApiError("User record already exists", 409);
+  if (existing) {
+    log.warn("room_invite_duplicate", { roomId: room.id, invitedUserId: userId, actor: session.userId });
+    throw new ApiError("User record already exists", 409);
+  }
 
   const memberCount = await db.communityRoomUser.count({ where: memberCountWhere(room.id, true) });
   const limit = await roomUsersLimit();
-  if (memberCount >= limit) throw new ApiError("Room users limit reached", 400);
+  if (memberCount >= limit) {
+    log.warn("room_invite_limit_reached", { roomId: room.id, invitedUserId: userId, actor: session.userId });
+    throw new ApiError("Room users limit reached", 400);
+  }
 
   const roomUser = await db.communityRoomUser.create({
     data: { roomId: room.id, userId: user.id, invitedBy: session.userId, type: RU_INVITED },
@@ -693,8 +732,12 @@ export async function acceptInvitation(session: Session, roomId: string) {
 
   const room = await requireRoom(roomId);
   const row = await requireRoomRow(room.id, userId);
-  if (row.type === RU_MEMBER) throw new ApiError("Invitation Already Accepted", 400);
+  if (row.type === RU_MEMBER) {
+    log.warn("room_invitation_already_accepted", { roomId: room.id, actor: userId });
+    throw new ApiError("Invitation Already Accepted", 400);
+  }
   if (row.type !== RU_REQUEST && row.type !== RU_INVITED) {
+    log.warn("room_invitation_invalid_state", { roomId: room.id, actor: userId, memberType: row.type });
     throw new ApiError("Record not found", 400);
   }
 
@@ -760,15 +803,27 @@ export async function acceptRequest(session: Session, roomId: string, userId: st
   await requireRoomAdminOrModerator(room.id, session);
 
   const user = await db.user.findFirst({ where: { isBlock: UNBLOCKED, id: userId } });
-  if (!user) notFound("User Not Found");
+  if (!user) {
+    log.warn("room_user_blocked", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("User Not Found");
+  }
 
   const row = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId } });
-  if (!row) notFound("Record Not found");
-  if (row.type === RU_MEMBER) throw new ApiError("Invitation Already Accepted", 400);
+  if (!row) {
+    log.warn("room_request_not_found", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("Record Not found");
+  }
+  if (row.type === RU_MEMBER) {
+    log.warn("room_request_already_accepted", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    throw new ApiError("Invitation Already Accepted", 400);
+  }
 
   const memberCount = await db.communityRoomUser.count({ where: memberCountWhere(room.id, true) });
   const limit = await roomUsersLimit();
-  if (memberCount >= limit) throw new ApiError("Room users limit reached", 400);
+  if (memberCount >= limit) {
+    log.warn("room_accept_limit_reached", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    throw new ApiError("Room users limit reached", 400);
+  }
 
   await db.communityRoomUser.update({ where: { id: row.id }, data: { type: RU_MEMBER } });
   await db.communityRoom.update({ where: { id: room.id }, data: { totalMember: { increment: 1 } } });
@@ -807,7 +862,10 @@ export async function rejectRequest(session: Session, roomId: string, userId: st
   if (!user) notFound("User Not Found");
 
   const row = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId } });
-  if (!row) notFound("Record does not exist");
+  if (!row) {
+    log.warn("room_request_not_found", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("Record does not exist");
+  }
 
   await db.communityRoomUser.delete({ where: { id: row.id } });
 
@@ -841,10 +899,16 @@ export async function removeMember(session: Session, roomId: string, userId: str
   await requireRoomStaff(room.id, session);
 
   const user = await db.user.findFirst({ where: { isBlock: UNBLOCKED, id: userId } });
-  if (!user) notFound("User Not Found");
+  if (!user) {
+    log.warn("room_remove_user_not_found", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("User Not Found");
+  }
 
   const row = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId } });
-  if (!row) notFound("User Not Found");
+  if (!row) {
+    log.warn("room_remove_membership_not_found", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("User Not Found");
+  }
 
   await db.communityRoom.update({
     where: { id: room.id },
@@ -874,7 +938,10 @@ export async function makeAdmin(session: Session, roomId: string, userId: string
   if (!user) notFound("User not found");
 
   const row = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId } });
-  if (!row) notFound("Room user not found");
+  if (!row) {
+    log.warn("room_promote_membership_not_found", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    notFound("Room user not found");
+  }
 
   const updated = await db.communityRoomUser.update({ where: { id: row.id }, data: { type: RU_CO_ADMIN } });
   return roomMemberWire(updated);
@@ -886,7 +953,10 @@ export async function removeAdmin(session: Session, roomId: string, userId: stri
   await requireRoomAdminOrModerator(room.id, session);
 
   const row = await db.communityRoomUser.findFirst({ where: { roomId: room.id, userId, type: RU_CO_ADMIN } });
-  if (!row) throw new ApiError("Already User not co-admin", 400);
+  if (!row) {
+    log.warn("room_demote_not_co_admin", { roomId: room.id, targetUserId: userId, actor: session.userId });
+    throw new ApiError("Already User not co-admin", 400);
+  }
 
   const updated = await db.communityRoomUser.update({ where: { id: row.id }, data: { type: RU_MEMBER } });
   return roomMemberWire(updated);

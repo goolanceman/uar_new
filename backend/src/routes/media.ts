@@ -14,6 +14,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { Router } from "express";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { requireAuth, json, handleError, ApiError } from "@/lib/session";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { UPLOAD_DIR } from "@/lib/files";
@@ -24,6 +25,8 @@ import { getCachedMedia, setCachedMedia } from "@/lib/cache";
 import { markMediaUploaded } from "@/lib/media/transcoder";
 
 export const router = Router();
+
+const log = logger.child("media");
 
 const ALLOWED_VIDEO_MIMES: ReadonlySet<string> = new Set([
   "video/mp4",
@@ -94,6 +97,7 @@ router.post("/uploads", async (req, res) => {
       },
     });
     if (inFlight >= MAX_CONCURRENT_ASSETS) {
+      log.warn("media_upload_concurrency_rejected", { actor: session.userId, inFlight });
       throw new ApiError("You already have several videos processing. Wait for them to finish first.", 429);
     }
 
@@ -118,6 +122,14 @@ router.post("/uploads", async (req, res) => {
       mediaId: asset.id,
     });
 
+    log.info("media_upload_presigned", {
+      mediaId: asset.id,
+      purpose,
+      contentType,
+      size,
+      actor: session.userId,
+    });
+
     return json(res, { mediaId: asset.id, upload: { url: presigned.url, method: presigned.method, headers: presigned.headers }, expiresAt: presigned.expiresAt }, 201);
   } catch (e) {
     return handleError(e, res);
@@ -138,6 +150,7 @@ router.put("/upload/:token", async (req, res) => {
     const asset = await db.mediaAsset.findUnique({ where: { id: claims.mediaId } });
     if (!asset || asset.sourceKey !== claims.key) throw new ApiError("Invalid or expired upload token", 400);
     if (asset.status !== "pending_upload") {
+      log.warn("media_upload_already_finalized", { mediaId: asset.id, status: asset.status });
       throw new ApiError("This upload was already finalized", 409);
     }
 
@@ -182,6 +195,7 @@ router.put("/upload/:token", async (req, res) => {
     }
 
     await fs.rename(tmpPath, target);
+    log.info("media_upload_received", { mediaId: claims.mediaId, size: received });
     return json(res, { ok: true });
   } catch (e) {
     // Drain (or discard) the request body before erroring — answering without
@@ -201,8 +215,14 @@ router.post("/:id/complete", async (req, res) => {
     if (!id) throw new ApiError("Media id is required", 400);
 
     const asset = await db.mediaAsset.findUnique({ where: { id } });
-    if (!asset) throw new ApiError("Media asset not found", 404);
-    if (asset.ownerId !== session.userId) throw new ApiError("You do not have permission for this action", 403);
+    if (!asset) {
+      log.warn("media_complete_not_found", { mediaId: id, actor: session.userId });
+      throw new ApiError("Media asset not found", 404);
+    }
+    if (asset.ownerId !== session.userId) {
+      log.warn("media_complete_not_owner", { mediaId: id, actor: session.userId });
+      throw new ApiError("You do not have permission for this action", 403);
+    }
 
     if (asset.status === "pending_upload") {
       const head = await (await getStorage()).headObject(asset.sourceKey);
@@ -212,10 +232,12 @@ router.post("/:id/complete", async (req, res) => {
       }
       // Records the uploaded state, announces it, and queues the id.
       const updated = await markMediaUploaded(asset.id);
+      log.info("media_completed", { mediaId: updated.id, status: updated.status, actor: session.userId });
       return json(res, await mediaJson(updated));
     }
 
     // uploaded / processing / ready — already complete, return the current state.
+    log.debug("media_complete_already_done", { mediaId: asset.id, status: asset.status });
     return json(res, await mediaJson(asset));
   } catch (e) {
     return handleError(e, res);
@@ -234,13 +256,19 @@ router.get("/:id", async (req, res) => {
     // only holds ready videos) falls back to Postgres.
     const cached = await getCachedMedia(id);
     if (cached && cached.status !== "ready") {
-      if (cached.ownerId !== session.userId) throw new ApiError("You do not have permission for this action", 403);
+      if (cached.ownerId !== session.userId) {
+        log.warn("media_poll_not_owner", { mediaId: id, actor: session.userId });
+        throw new ApiError("You do not have permission for this action", 403);
+      }
       return json(res, { id: cached.id, status: cached.status, error: cached.error, attempts: cached.attempts });
     }
 
     const asset = await db.mediaAsset.findUnique({ where: { id } });
     if (!asset) throw new ApiError("Media asset not found", 404);
-    if (asset.ownerId !== session.userId) throw new ApiError("You do not have permission for this action", 403);
+    if (asset.ownerId !== session.userId) {
+      log.warn("media_poll_not_owner", { mediaId: id, actor: session.userId });
+      throw new ApiError("You do not have permission for this action", 403);
+    }
 
     return json(res, await mediaJson(asset));
   } catch (e) {
