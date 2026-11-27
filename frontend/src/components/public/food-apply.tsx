@@ -176,7 +176,25 @@ export function FoodApplyPage() {
 
   return (
     <div>
-      <Section title="Request food assistance" subtitle="Free, confidential, and reviewed by people — a short form is all we need. Nobody is refused food for lacking documents.">
+      {/* Page heading (H1) — unique per page, above every other heading */}
+      <section
+        aria-labelledby="food-apply-heading"
+        className="mx-auto w-full max-w-screen-2xl px-4 pt-12 sm:px-6 sm:pt-16"
+      >
+        <h1
+          id="food-apply-heading"
+          className="max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl"
+        >
+          Request{" "}
+          <span className="text-emerald-600 dark:text-emerald-400">food assistance</span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          Free, confidential ration-kit support from United Angel Reach — reviewed
+          by people, delivered to your door with a QR scan.
+        </p>
+      </section>
+
+      <Section>
         <div className="grid gap-8 lg:grid-cols-5">
           {/* form */}
           <div className="space-y-4 rounded-2xl border bg-card p-6 lg:col-span-3">

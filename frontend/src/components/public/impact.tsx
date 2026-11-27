@@ -137,11 +137,26 @@ export function ImpactPage() {
 
   return (
     <div className="print-sheet">
-      {/* KPIs + controls */}
-      <Section
-        title="Impact, measured"
-        subtitle="Every figure below is an aggregate — no personal data leaves the platform."
+      {/* Page heading (H1) — unique per page, above every other heading */}
+      <section
+        aria-labelledby="impact-heading"
+        className="mx-auto w-full max-w-screen-2xl px-4 pt-12 sm:px-6 sm:pt-16"
       >
+        <h1
+          id="impact-heading"
+          className="max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl"
+        >
+          Impact, measured{" "}
+          <span className="text-emerald-600 dark:text-emerald-400">in the open</span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          Every figure below is an aggregate — no personal data leaves the platform.
+          Money in, kits scanned, doors reached: reconciled every month.
+        </p>
+      </section>
+
+      {/* KPIs + controls */}
+      <Section>
         <div className="mb-4 flex flex-wrap items-center gap-2 print:hidden">
           <Select value={String(fy)} onValueChange={(v) => setFy(Number(v))}>
             <SelectTrigger className="h-10 w-[150px]" aria-label="Select financial year">

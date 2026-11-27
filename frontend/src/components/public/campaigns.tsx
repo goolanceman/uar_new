@@ -426,10 +426,28 @@ export function CampaignsPage() {
   }, [currentPage, totalPages]);
 
   return (
-    <Section
-      title="All programmes"
-      subtitle="Nine long-term campaigns — each one an educational resource, a rescue service and a funding pipeline at once."
-    >
+    <>
+      {/* Page heading (H1) — unique per page, above every other heading */}
+      <section
+        aria-labelledby="campaigns-heading"
+        className="mx-auto w-full max-w-screen-2xl px-4 pt-12 sm:px-6 sm:pt-16"
+      >
+        <h1
+          id="campaigns-heading"
+          className="max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl"
+        >
+          All programmes{" "}
+          <span className="text-emerald-600 dark:text-emerald-400">
+            — nine campaigns, one promise: proof
+          </span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          Each programme page carries the full playbook, live progress and an
+          audited delivery trail — every rupee QR-traced to a doorstep.
+        </p>
+      </section>
+
+      <Section>
       {/* ---------------- Urgent Causes (server-curated) ---------------- */}
       {urgent.length > 0 && (
         <Card className="mb-6 border-red-500/25 p-4 sm:p-5">
@@ -619,7 +637,7 @@ export function CampaignsPage() {
                   {cover ? (
                     <img
                       src={cover}
-                      alt=""
+                      alt={`${c.title} — campaign cover photo`}
                       loading="lazy"
                       className="size-10 shrink-0 rounded-xl object-cover sm:size-11"
                     />
@@ -701,7 +719,7 @@ export function CampaignsPage() {
                 {cover ? (
                   <img
                     src={cover}
-                    alt=""
+                    alt={`${c.title} — campaign cover photo`}
                     loading="lazy"
                     className="h-36 w-full object-cover"
                   />
@@ -883,7 +901,8 @@ export function CampaignsPage() {
           </PaginationContent>
         </Pagination>
       )}
-    </Section>
+      </Section>
+    </>
   );
 }
 

@@ -1648,7 +1648,7 @@ export function DonatePage() {
               {coverImageOf(selected) ? (
                 <img
                   src={coverImageOf(selected) as string}
-                  alt=""
+                  alt={`${selected.title ?? "Campaign"} — fund cover photo`}
                   className="aspect-[21/9] w-full object-cover"
                 />
               ) : (

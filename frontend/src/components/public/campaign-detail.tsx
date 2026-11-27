@@ -461,7 +461,7 @@ function PublicCampCard({ camp, isLive }: { camp: PublicCamp; isLive: boolean })
       <div className="relative h-28 w-full overflow-hidden bg-muted">
         <img
           src="https://images.unsplash.com/photo-1532619675605-1ede6c2ed2b0?w=1200&q=80&auto=format&fit=crop"
-          alt=""
+          alt="Volunteers and families gathered at a United Angel Reach community camp"
           loading="lazy"
           className="size-full object-cover"
         />

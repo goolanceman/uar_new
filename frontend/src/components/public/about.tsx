@@ -152,6 +152,26 @@ export function AboutPage() {
 
   return (
     <>
+      {/* Page heading (H1) — unique per page, above every other heading */}
+      <section
+        aria-labelledby="about-heading"
+        className="mx-auto w-full max-w-screen-2xl px-4 pt-12 sm:px-6 sm:pt-16"
+      >
+        <h1
+          id="about-heading"
+          className="max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl"
+        >
+          About United Angel Reach{" "}
+          <span className="text-emerald-600 dark:text-emerald-400">
+            — proof-first charity from Bengaluru
+          </span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          Registration, mission, people and audited numbers — everything about the
+          trust, published in the open.
+        </p>
+      </section>
+
       {/* Mission / Vision */}
       <Section
         title="Who we are"

@@ -1,3 +1,21 @@
+# ─── Production ────────────────────────────────────────────────────────────
+# Canonical host is the apex domain. The www subdomain 301-redirects every
+# request to the apex so both hostnames never split SEO signals — search
+# engines consolidate all www traffic onto unitedangelreach.org.
+www.unitedangelreach.org {
+	redir https://unitedangelreach.org{uri} permanent
+}
+
+unitedangelreach.org {
+	reverse_proxy localhost:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+}
+
+# ─── Local / sandbox harness on :81 (unchanged) ────────────────────────────
 :81 {
 	@transform_port_query {
 		query XTransformPort=*

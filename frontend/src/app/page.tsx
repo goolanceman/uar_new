@@ -65,7 +65,26 @@ function AppShell() {
   const route = useRoute();
   const top = route.segments[0] ?? "";
 
-  if (loading) return <Splash />;
+  // "/volunteer" is dual-purpose: it's also the public recruitment page
+  // (marketing content + apply form) for signed-out visitors. Only treat it
+  // as the authenticated portal when a session exists or a sub-route is
+  // requested (e.g. /volunteer/tasks deep-linked while signed out).
+  const isPortalArea =
+    top === "donor" ||
+    top === "beneficiary" ||
+    top === "doctor" ||
+    top === "hospital" ||
+    (top === "volunteer" && (!!user || route.segments.length > 1));
+
+  if (loading) {
+    // SEO + first paint: render the public website optimistically while the
+    // session resolves, so the server-rendered HTML always carries the real
+    // H1, heading hierarchy and internal links (crawler-visible content)
+    // instead of a bare splash spinner. Authenticated areas keep the splash
+    // until the session lands.
+    if (top === "admin" || isPortalArea) return <Splash />;
+    return <PublicSite />;
+  }
 
   if (top === "admin") {
     if (!user)
@@ -85,16 +104,6 @@ function AppShell() {
     return <AdminApp />;
   }
 
-  // "/volunteer" is dual-purpose: it's also the public recruitment page
-  // (marketing content + apply form) for signed-out visitors. Only treat it
-  // as the authenticated portal when a session exists or a sub-route is
-  // requested (e.g. /volunteer/tasks deep-linked while signed out).
-  const isPortalArea =
-    top === "donor" ||
-    top === "beneficiary" ||
-    top === "doctor" ||
-    top === "hospital" ||
-    (top === "volunteer" && (!!user || route.segments.length > 1));
   if (isPortalArea) {
     if (!user)
       return (

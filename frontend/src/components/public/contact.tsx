@@ -96,10 +96,25 @@ export function ContactPage() {
 
   return (
     <>
-      <Section
-        title="Contact us"
-        subtitle="Partnerships, school adoptions, CSR, volunteering or a question about a programme — write to us."
+      {/* Page heading (H1) — unique per page, above every other heading */}
+      <section
+        aria-labelledby="contact-heading"
+        className="mx-auto w-full max-w-screen-2xl px-4 pt-12 sm:px-6 sm:pt-16"
       >
+        <h1
+          id="contact-heading"
+          className="max-w-3xl text-3xl font-extrabold tracking-tight sm:text-4xl lg:text-5xl"
+        >
+          Contact{" "}
+          <span className="text-emerald-600 dark:text-emerald-400">United Angel Reach</span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+          Partnerships, school adoptions, CSR, volunteering or a question about a
+          programme — write to us, we reply within two working days.
+        </p>
+      </section>
+
+      <Section>
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
           {/* Form / success screen */}
           <Card className="p-5 sm:p-6">

@@ -445,7 +445,7 @@ export function HomePage() {
                   {cover ? (
                     <img
                       src={cover}
-                      alt=""
+                      alt={`${c.title} — campaign cover photo`}
                       loading="lazy"
                       className="h-36 w-full object-cover"
                     />
