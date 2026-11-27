@@ -1,8 +1,9 @@
 /**
  * Profile controller — HTTP layer only. Extracts the verified session,
  * validated body, multipart file parts and the request origin, delegates to
- * the service, returns the response. Errors flow to the centralized error
- * middleware via next(error) — it renders through the same lib handleError
+ * the service, returns the response. Errors render through the lib
+ * handleError (the legacy per-route catch contract — identical JSON body
+ * and status, safe in bare test harnesses without an error middleware).
  * the legacy per-route catch used, so response bodies are byte-identical.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
