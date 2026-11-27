@@ -6,7 +6,7 @@
  * error middleware.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { requireAuth, requireRole, type Session } from "@/lib/session";
+import { requireAuth, requireRole, handleError, type Session } from "@/lib/session";
 import { requireElevated } from "@/lib/community/admin";
 
 declare global {
@@ -18,29 +18,37 @@ declare global {
   }
 }
 
+/** Renders the error exactly like the legacy per-route catch — lib
+ *  handleError sends {error: message} with the ApiError status. Used
+ *  directly (not via next) so bare test harnesses without an app-level
+ *  error middleware still receive the legacy JSON body. */
+function fail(_req: Request, res: Response, error: unknown): Response {
+  return handleError(error, res);
+}
+
 /** Requires a valid, non-revoked session. Attaches it to req.session. */
 export const authenticate: RequestHandler = async (
   req: Request,
-  _res: Response,
+  res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
     req.session = await requireAuth(req);
     next();
   } catch (error) {
-    next(error);
+    fail(req, res, error);
   }
 };
 
 /** Requires a valid session whose role is one of `roles`. */
 export const authorize =
   (...roles: string[]): RequestHandler =>
-  async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       req.session = await requireRole(req, ...roles);
       next();
     } catch (error) {
-      next(error);
+      fail(req, res, error);
     }
   };
 
@@ -48,13 +56,13 @@ export const authorize =
  *  verified session to req.session — same gate legacy routes awaited inline. */
 export const elevated: RequestHandler = async (
   req: Request,
-  _res: Response,
+  res: Response,
   next: NextFunction
 ): Promise<void> => {
   try {
     req.session = await requireElevated(req);
     next();
   } catch (error) {
-    next(error);
+    fail(req, res, error);
   }
 };
