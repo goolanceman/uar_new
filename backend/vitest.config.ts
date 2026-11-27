@@ -16,6 +16,11 @@ export default defineConfig({
       SESSION_SECRET: "test-secret-value-at-least-16ch",
       NODE_ENV: "test",
       UPLOAD_DIR: "../upload-test",
+      // Pin the cache OFF: vitest auto-loads backend/.env (REDIS_URL would
+      // otherwise leak in), and a shared Redis serves the dev API's cached
+      // settings/responses OVER the tests' direct db writes. The documented
+      // test contract is "no Redis — tests hit Postgres directly".
+      REDIS_URL: "",
     },
   },
   resolve: {

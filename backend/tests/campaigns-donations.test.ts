@@ -57,12 +57,12 @@ function mpost(path: string, body: Record<string, unknown>, token?: string) {
 }
 
 async function setSetting(key: string, value: string) {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   // donations are found via donorName prefix (server-generated receipt numbers
@@ -79,7 +79,7 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
 
   me = await db.user.create({
     data: { email: `${PREFIX}-me@test.local`, name: `${PREFIX} donor`, password: "test-1234" },
@@ -133,7 +133,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -203,7 +203,7 @@ describe("POST /api/donations + /api/payments — the website pipeline", () => {
 // ═══════════════════════ VERIFY CONTRACT ═══════════════════════
 describe("POST /api/payments/verify — website contract, mobile caller", () => {
   it("settles with a valid Razorpay HMAC signature and bumps the campaign total", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await setSetting("finance.razorpayKeyId", KEY_ID);
     await setSetting("finance.gatewayKeySecret", KEY_SECRET);
     // simulate the order step (real one calls Razorpay; not needed for verify)
@@ -236,7 +236,7 @@ describe("POST /api/payments/verify — website contract, mobile caller", () => 
   });
 
   it("rejects a bad signature and keeps the donation unpaid", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const d2 = await db.donation.create({
       data: {
         donorId: me.id,
@@ -295,7 +295,7 @@ describe("GET /api/donations?mine=1 — session donation history", () => {
   });
 
   it("returns only my donations with their campaign", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const other = await db.user.create({
       data: { email: `${PREFIX}-other@test.local`, name: `${PREFIX} other`, password: "test-1234" },
     });

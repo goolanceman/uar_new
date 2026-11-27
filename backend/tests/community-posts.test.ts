@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
 import request from "supertest";
-import { issueToken } from "@/lib/session";
+import { issueToken } from "@/infrastructure/auth/session";
 
 const PREFIX = `s2-${Date.now()}`;
 const PASSWORD = ["Pass", "w0rd!", "123"].join("");
@@ -66,7 +66,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -89,8 +89,8 @@ const PNG = { filename: "p.png", contentType: "image/png" };
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword } = await import("@/infrastructure/auth/session");
 
   const mk = (email: string, name: string, role: string, extra: Record<string, unknown> = {}) =>
     db.user.create({
@@ -131,7 +131,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -171,7 +171,7 @@ describe("S2 posts CRUD", () => {
   it("serves the feed with author + reactions and cause progress", async () => {
     const created = (await createAPost(bToken, { desc: `${PREFIX} b-post` })).body;
     // addPost never sets the type — causes flip their own posts server-side.
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.communityPost.update({ where: { id: created.id }, data: { type: "cause", goalAmount: 200, raisedAmount: 50 } });
 
     const res = await request(app).get("/api/posts").query({ page: 1, limit: 10 }).set("Authorization", `Bearer ${aToken}`);
@@ -260,7 +260,7 @@ describe("S2 reactions", () => {
     expect(likers.body.items[0].user.id).toBe(aId);
 
     // a saved notification landed on the post owner
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const saved = await db.savedNotification.findFirst({ where: { myUserId: bId, userId: aId, postId: post.id, type: 3 } });
     expect(saved).toBeTruthy();
 
@@ -306,7 +306,7 @@ describe("S2 comments", () => {
     expect(toggleOff.body.liked).toBe(false);
 
     // comments_count synced (comments by non-blocked users)
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const row = await db.communityPost.findUnique({ where: { id: post.id } });
     expect(row?.commentsCount).toBe(1);
 
@@ -481,7 +481,7 @@ describe("S2 interests + moderator tools", () => {
     expect(byFlag.body.user.isBlocked).toBe(true);
 
     // restore carol so her rows keep behaving in other tests
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.user.update({ where: { id: cId }, data: { isBlock: 0 } });
   });
 

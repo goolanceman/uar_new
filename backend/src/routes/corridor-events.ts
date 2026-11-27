@@ -1,36 +1,23 @@
 /**
  * Corridor events route — /api/corridor-events
- * Converted 1:1 from src/app/api/corridor-events/route.ts (Next.js route handler) to Express.
+ * Thin endpoint definitions; all logic lives in src/modules/corridor-events
+ * (routes → controllers → services → repositories). The historical export
+ * path (`@/routes/corridor-events`) is preserved: tests and the app entry
+ * import `router` from here.
  */
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { requireAuth, json, handleError } from "@/lib/session";
+import { authenticate } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
+import { listCorridorEventsQuerySchema } from "@/modules/corridor-events/schemas/corridor-event.schema";
+import { corridorEventController } from "@/modules/corridor-events";
 
 export const router = Router();
 
 // GET /api/corridor-events?missionId=&limit= (auth) — desc createdAt
-router.get("/", async (req, res) => {
-  try {
-    await requireAuth(req);
-    const sp = new URL(req.url, "http://localhost").searchParams;
-    const missionId = sp.get("missionId") || undefined;
-    const limit = Math.min(
-      200,
-      Math.max(1, Math.trunc(Number(sp.get("limit")) || 50))
-    );
-
-    const events = await db.corridorEvent.findMany({
-      where: {
-        ...(missionId ? { missionId } : {}),
-        ...(sp.get("method") ? { method: sp.get("method")! } : {}),
-        ...(sp.get("congestion") ? { congestion: sp.get("congestion")! } : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-      include: { mission: { select: { requestRef: true } } },
-    });
-    return json(res, events);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// (legacy gate: `await requireAuth(req)` as the handler's first step).
+router.get(
+  "/",
+  authenticate,
+  validate({ query: listCorridorEventsQuerySchema }),
+  corridorEventController.list
+);

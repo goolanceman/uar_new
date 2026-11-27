@@ -51,7 +51,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -77,8 +77,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword, issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword, issueToken } = await import("@/infrastructure/auth/session");
 
   const mk = (email: string, name: string, extra: Record<string, unknown> = {}) =>
     db.user.create({
@@ -122,7 +122,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -147,7 +147,7 @@ describe("S3 reel create + fetch", () => {
     expect(res.body.thumbnail).toContain("/api/files/");
     reelId = res.body.id;
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const assets = await db.fileAsset.findMany({ where: { uploadedByName: `${PREFIX} owner` } });
     expect(assets.length).toBe(2);
     contentAssetId = assets.find((x) => x.mime === "video/mp4")?.id ?? "";
@@ -192,7 +192,7 @@ describe("S3 reel feeds + filters", () => {
     expect(following.body.items.some((r: { id: string }) => r.id === reelId)).toBe(false);
 
     // b follows the owner → the following feed picks the reel up
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.userFollow.create({ data: { myUserId: bId, userId: aId } });
     const after = await request(app).get("/api/reels").query({ feed: "following" }).set("Authorization", `Bearer ${bToken}`);
     expect(after.body.items.some((r: { id: string }) => r.id === reelId)).toBe(true);
@@ -256,7 +256,7 @@ describe("S3 reel feeds + filters", () => {
     expect(profile.status).toBe(403); // "User blocked" (legacy fetchReelsByUserId)
 
     // …but the explore/by-id/by-hashtag filters use the VIEWER's own blocklist.
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.user.update({ where: { id: cId }, data: { blockUserIds: aId } });
 
     const single = await request(app).get(`/api/reels/${reelId}`).set("Authorization", `Bearer ${cToken}`);
@@ -277,7 +277,7 @@ describe("S3 reel feeds + filters", () => {
 
 describe("S3 likes, views, reports, saved", () => {
   it("toggles a like with counters + saved notifications (legacy parity)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const liked = await request(app).post(`/api/reels/${reelId}/like`).set("Authorization", `Bearer ${bToken}`);
     expect(liked.status).toBe(200);
     expect(liked.body.isLike).toBe(1);
@@ -318,7 +318,7 @@ describe("S3 likes, views, reports, saved", () => {
   });
 
   it("serves the session user's saved reels (savedReelIds CSV)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.user.update({ where: { id: bId }, data: { savedReelIds: reelId } });
 
     const res = await request(app).get("/api/reels/saved").set("Authorization", `Bearer ${bToken}`);
@@ -334,7 +334,7 @@ describe("S3 reel comments", () => {
   let commentId = "";
 
   it("adds and lists comments (500-char cap, owner notification)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app)
       .post(`/api/reels/${reelId}/comments`)
       .set("Authorization", `Bearer ${bToken}`)
@@ -369,7 +369,7 @@ describe("S3 reel comments", () => {
     const mod = await request(app).delete(`/api/reels/comments/${commentId}`).set("Authorization", `Bearer ${mToken}`);
     expect(mod.status).toBe(200);
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     expect(await db.communityReelComment.findUnique({ where: { id: commentId } })).toBeNull();
     expect(await db.savedNotification.findFirst({ where: { reelCommentId: commentId, type: 10 } })).toBeNull();
     expect(await db.communityReel.findUnique({ where: { id: reelId }, select: { commentsCount: true } })).toMatchObject({ commentsCount: 0 });
@@ -383,7 +383,7 @@ describe("S3 reel deletion (owner OR moderator)", () => {
   });
 
   it("deletes as moderator with the full legacy cascade + file cleanup", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     // dependent rows to cascade
     const like = await db.communityLike.create({ data: { userId: bId, reelId } });
     const comment = await db.communityReelComment.create({ data: { userId: bId, reelId, description: "bye" } });
@@ -405,7 +405,7 @@ describe("S3 reel deletion (owner OR moderator)", () => {
   });
 
   it("lets the owner delete their own reel (file cleanup included)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const created = await request(app)
       .post("/api/reels")
       .set("Authorization", `Bearer ${aToken}`)
@@ -452,7 +452,7 @@ describe("S3 music", () => {
   });
 
   it("serves the session user's saved music (savedMusicIds CSV)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.user.update({ where: { id: bId }, data: { savedMusicIds: String(musicId) } });
 
     const res = await request(app).get("/api/music/saved").set("Authorization", `Bearer ${bToken}`);

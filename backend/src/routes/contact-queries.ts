@@ -1,192 +1,40 @@
 /**
  * Contact query routes — /api/contact-queries, /api/contact-queries/:id
+ * Thin endpoint definitions; all logic lives in src/modules/contact-queries
+ * (routes → controllers → services → repositories).
  * Converted 1:1 from src/app/api/contact-queries/* (Next.js route handlers) to Express.
  */
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { logger } from "@/lib/logger";
-import { assertTransition } from "@/lib/workflow";
+import { authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
+import { stringIdParamSchema } from "@/shared/schemas/common";
 import {
-  requireRole,
-  ApiError,
-  json,
-  handleError,
-  logActivity,
-} from "@/lib/session";
-import { loadSettings, notifyContactQuery } from "@/lib/notify";
-
-const log = logger.child("contact-queries");
+  createContactQuerySchema,
+  listContactQueriesQuerySchema,
+  updateContactQuerySchema,
+} from "@/modules/contact-queries/schemas/contact-query.schema";
+import { contactQueryController } from "@/modules/contact-queries";
 
 export const router = Router();
 
-const CONTACT_QUERY_STATUSES = ["PENDING", "RESOLVED", "CLOSED"];
-const CONTACT_QUERY_TRANSITIONS: Record<string, string[]> = {
-  PENDING: ["RESOLVED", "CLOSED"],
-  RESOLVED: ["CLOSED", "PENDING"],
-  CLOSED: ["PENDING"],
-};
-
 // GET /api/contact-queries?status — admin inbox
-router.get("/", async (req, res) => {
-  try {
-    await requireRole(req, "ADMIN");
-
-    const sp = new URL(req.url, "http://localhost").searchParams;
-    const status = sp.get("status");
-
-    const queries = await db.contactQuery.findMany({
-      ...(status ? { where: { status } } : {}),
-      orderBy: { createdAt: "desc" },
-    });
-
-    return json(res, queries);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/",
+  authorize("ADMIN"),
+  validate({ query: listContactQueriesQuerySchema }),
+  contactQueryController.list
+);
 
 // POST /api/contact-queries — public contact form
-router.post("/", async (req, res) => {
-  try {
-    const body = req.body ?? {};
-
-    const name = String(body?.name ?? "").trim();
-    const email = String(body?.email ?? "").trim().toLowerCase();
-    const subject = String(body?.subject ?? "").trim();
-    const message = String(body?.message ?? "").trim();
-
-    if (!name || !email || !subject || !message)
-      throw new ApiError("Name, email, subject and message are required", 400);
-    if (!/^\S+@\S+\.\S+$/.test(email))
-      throw new ApiError("Please enter a valid email address", 400);
-
-    const query = await db.contactQuery.create({
-      data: {
-        name,
-        email,
-        phone: body?.phone ? String(body.phone).trim() : null,
-        subject,
-        message,
-        status: "PENDING",
-      },
-    });
-
-    log.info("contact_query_created", {
-      queryId: query.id,
-      email: query.email,
-      status: query.status,
-    });
-    await logActivity(name, "CONTACT", "CONTACT_QUERY", `${subject} · ${email}`);
-
-    // Fire-and-forget public acknowledgement (senders no-op when disabled)
-    void (async () => {
-      try {
-        const map = await loadSettings();
-        await notifyContactQuery(
-          map,
-          {
-            name: map["org.name"] || "United Angel Reach",
-            footer: map["receipts.footer"] || undefined,
-          },
-          { name: query.name, email: query.email }
-        );
-      } catch (e) {
-        log.warn("contact_query_ack_failed", {
-          error: e instanceof Error ? e : String(e),
-          queryId: query.id,
-        });
-      }
-    })();
-
-    return json(res, query, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post("/", validate({ body: createContactQuerySchema }), contactQueryController.create);
 
 // PATCH /api/contact-queries/:id — admin updates query status
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const body = req.body ?? {};
-
-    const status = String(body?.status ?? "").trim().toUpperCase();
-    if (!CONTACT_QUERY_STATUSES.includes(status))
-      throw new ApiError("Status must be RESOLVED, CLOSED or PENDING", 400);
-
-    const existing = await db.contactQuery.findUnique({ where: { id } });
-    if (!existing) {
-      log.warn("contact_query_update_not_found", { queryId: id, actor: session.userId });
-      throw new ApiError("Query not found", 404);
-    }
-    const allowedNext = CONTACT_QUERY_TRANSITIONS[existing.status] ?? [];
-    if (existing.status !== status && !allowedNext.includes(status)) {
-      log.warn("contact_query_invalid_transition", {
-        queryId: id,
-        from: existing.status,
-        to: status,
-        actor: session.userId,
-      });
-    }
-    assertTransition(CONTACT_QUERY_TRANSITIONS, existing.status, status, "contact query");
-
-    const data: Record<string, unknown> = { status };
-    if (status === "RESOLVED") {
-      data.resolvedAt = new Date();
-      data.resolvedBy = session.name;
-    }
-
-    const query = await db.contactQuery.update({ where: { id }, data });
-    log.info("contact_query_updated", {
-      queryId: id,
-      status,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "CONTACT_QUERY_UPDATE",
-      "CONTACT_QUERY",
-      `${query.subject} → ${status}`,
-      session.userId
-    );
-
-    return json(res, query);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.patch(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: stringIdParamSchema, body: updateContactQuerySchema }),
+  contactQueryController.update
+);
 
 // DELETE /api/contact-queries/:id — admin removes a query
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-
-    const existing = await db.contactQuery.findUnique({ where: { id } });
-    if (!existing) {
-      log.warn("contact_query_delete_not_found", { queryId: id, actor: session.userId });
-      throw new ApiError("Query not found", 404);
-    }
-
-    await db.contactQuery.delete({ where: { id } });
-    log.info("contact_query_deleted", {
-      queryId: id,
-      email: existing.email,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "CONTACT_QUERY_DELETE",
-      "CONTACT_QUERY",
-      `${existing.subject} · ${existing.email}`,
-      session.userId
-    );
-
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete("/:id", authorize("ADMIN"), validate({ params: stringIdParamSchema }), contactQueryController.remove);

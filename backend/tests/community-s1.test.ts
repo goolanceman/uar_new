@@ -57,7 +57,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -84,8 +84,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword } = await import("@/infrastructure/auth/session");
 
   const mk = (email: string, name: string, role: string, extra: Record<string, unknown> = {}) =>
     db.user.create({
@@ -109,7 +109,7 @@ beforeAll(async () => {
   bId = b.id;
   cId = c.id;
 
-  const { issueToken } = await import("@/lib/session");
+  const { issueToken } = await import("@/infrastructure/auth/session");
   adminToken = issueToken({ userId: admin.id, role: "ADMIN", name: admin.name, email: admin.email });
   aToken = issueToken({ userId: a.id, role: "DONOR", name: a.name, email: a.email });
   bToken = issueToken({ userId: b.id, role: "DONOR", name: b.name, email: b.email });
@@ -117,7 +117,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -193,7 +193,7 @@ describe("S1 auth extensions", () => {
   });
 
   it("stores the device token on login (optional field)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app)
       .post("/api/auth/login")
       .send({ email: `${PREFIX}-a@test.local`, password: PASSWORD, deviceToken: "tok-s1-login", deviceType: 2 });
@@ -212,8 +212,8 @@ describe("S1 auth extensions", () => {
     expect(sent.body.otp).toBeUndefined(); // the OTP never leaks in the response
 
     // The OTP is only stored hashed — plant a known pending code to verify with.
-    const { db } = await import("@/lib/db");
-    const { hashPassword } = await import("@/lib/session");
+    const { db } = await import("@/infrastructure/database/prisma");
+    const { hashPassword } = await import("@/infrastructure/auth/session");
     await db.passwordReset.create({
       data: { email: `${PREFIX}-a@test.local`, otpHash: hashPassword("123456"), expiresAt: new Date(Date.now() + 600_000) },
     });
@@ -294,7 +294,7 @@ describe("S1 profile extensions", () => {
       .set("Authorization", `Bearer ${aToken}`)
       .send({ token: "fcm-s1-token", platform: "android" });
     expect(reg.status).toBe(200);
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const withToken = await db.user.findUnique({ where: { id: aId } });
     expect(withToken?.fcmToken).toBe("fcm-s1-token");
     expect(withToken?.deviceType).toBe(2);
@@ -384,7 +384,7 @@ describe("S1 community users", () => {
   });
 
   it("returns a random profile sharing my interests", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.user.update({ where: { id: aId }, data: { interestIds: "" } });
     const none = await request(app).get("/api/community/users/random").set("Authorization", `Bearer ${aToken}`);
     expect(none.status).toBe(400); // no interests yet
@@ -403,7 +403,7 @@ describe("S1 community users", () => {
 
 describe("S1 notifications", () => {
   it("serves the platform announcements feed", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.notification.create({ data: { userId: null, title: `${PREFIX} announce`, message: "hello all" } });
     const res = await request(app).get("/api/notifications/platform").query({ page: 1, limit: 5 });
     expect(res.status).toBe(200);
@@ -413,7 +413,7 @@ describe("S1 notifications", () => {
   });
 
   it("exposes the community feed (saved notifications + marks read)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     // a follow-style saved notification lands in b's feed
     await db.savedNotification.create({ data: { myUserId: bId, userId: aId, type: 1 } });
     const res = await request(app).get("/api/notifications").query({ feed: "all", page: 1, limit: 10 }).set("Authorization", `Bearer ${adminToken}`);
@@ -443,7 +443,7 @@ describe("S1 notifications", () => {
       .send({ userId: bId, title: "hi", body: "hi" });
     expect(forbidden.status).toBe(403);
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const convo = await db.conversation.create({ data: { user1Id: aId, user2Id: bId } });
     await db.user.update({ where: { id: bId }, data: { fcmToken: "fcm-b-s1" } });
 
@@ -471,12 +471,12 @@ describe("S1 notifications", () => {
       .set("Authorization", `Bearer ${reg.body.token}`)
       .send({});
     expect(res.status).toBe(200);
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     expect(await db.user.findUnique({ where: { id: reg.body.user.id } })).toBeNull();
   });
 
   it("deletes the user's volunteer application with the account (no dangling PENDING rows)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const email = `${PREFIX}-volapp@test.local`;
     const reg = await request(app)
       .post("/api/auth/register")
@@ -507,7 +507,7 @@ describe("S1 notifications", () => {
 
 describe("S1 app config", () => {
   it("serves the mobile app settings without secrets", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const existing = await db.setting.findUnique({ where: { key: "mobile.app" } });
     if (!existing) {
       createdOwnSetting = true;
@@ -530,7 +530,7 @@ describe("S1 app config", () => {
   });
 
   it("serves the FAQ categories with nested faqs", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const type = await db.faqType.create({ data: { title: `${PREFIX} faq` } });
     faqTypeId = type.id;
     await db.faq.create({ data: { faqsTypeId: type.id, question: `${PREFIX} q?`, answer: `${PREFIX} a` } });

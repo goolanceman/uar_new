@@ -49,7 +49,7 @@ async function buildApp() {
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -72,8 +72,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { issueToken, hashPassword } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { issueToken, hashPassword } = await import("@/infrastructure/auth/session");
 
   const mk = (tag: string, extra: Record<string, unknown> = {}) =>
     db.user.create({
@@ -99,7 +99,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -318,7 +318,7 @@ describe("mute / unmute / clear / delete", () => {
   });
 
   it("deactivates the caller's participant row for group conversations", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const group = await db.conversation.create({
       data: {
         type: 2,
@@ -525,7 +525,7 @@ describe("/api/realtime/auth (Pusher channel authorization)", () => {
       .set(auth(aToken))
       .send({ socket_id: "1234.5678", channel_name: `private-conversation.${conversationId}` });
     expect(res.status).toBe(200);
-    const { channelAuth } = await import("@/lib/realtime/pusher");
+    const { channelAuth } = await import("@/infrastructure/external-services/pusher-server");
     expect(res.body.auth).toBe(channelAuth("1234.5678", `private-conversation.${conversationId}`));
   });
 

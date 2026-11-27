@@ -1,329 +1,50 @@
 /**
  * Camp staff routes — /api/camp-staff, /api/camp-staff/:id
- * Converted 1:1 from src/app/api/camp-staff/* (Next.js route handlers) to Express.
+ * Thin endpoint definitions; all logic lives in src/modules/camp-staff
+ * (routes → controllers → services → repositories).
+ * The historical export path (`@/routes/camp-staff`) is preserved: tests and
+ * the app entry import `router` from here.
+ *
  * NOTE: DELETE /api/camp-staff?id=… keeps its query-parameter id (as in the
  * original route handler), so it is router.delete("/") not router.delete("/:id").
  */
-import { Prisma } from "@prisma/client";
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { logger } from "@/lib/logger";
+import { authenticate, authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
+import { stringIdParamSchema } from "@/shared/schemas/common";
 import {
-  requireAuth,
-  requireRole,
-  json,
-  handleError,
-  ApiError,
-  logActivity,
-} from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { CAMP_STAFF_STATUSES, CAMP_STAFF_TRANSITIONS } from "@/lib/camp-staff";
+  createCampStaffBodySchema,
+  deleteCampStaffQuerySchema,
+  listCampStaffQuerySchema,
+  updateCampStaffBodySchema,
+} from "@/modules/camp-staff/schemas/camp-staff.schema";
+import { campStaffController } from "@/modules/camp-staff";
 
 export const router = Router();
 
-const log = logger.child("camp-staff");
-
-const STAFF_ROLES = ["DOCTOR", "NURSE", "PHARMACIST", "LAB_TECH", "COORDINATOR", "VOLUNTEER"];
-// Camp-staff roles that must map to a VERIFIED professional of the same kind
-const CLINICAL_ROLES = ["DOCTOR", "NURSE", "PHARMACIST", "LAB_TECH"];
-
-const VALID_STATUSES: readonly string[] = CAMP_STAFF_STATUSES;
-
-function pageParams(sp: URLSearchParams) {
-  const page = Math.max(1, parseInt(sp.get("page") ?? "1", 10) || 1);
-  const take = Math.min(200, Math.max(1, parseInt(sp.get("limit") ?? "24", 10) || 24));
-  return { page, take, skip: (page - 1) * take };
-}
-
-function envelope<T>(items: T[], total: number, page: number, take: number) {
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / take)) };
-}
-
 // GET /api/camp-staff?campId= — authenticated (camp roster)
-router.get("/", async (req, res) => {
-  try {
-    await requireAuth(req);
-    const sp = new URL(req.url, "http://localhost").searchParams;
-    const campId = sp.get("campId") || undefined;
-    const status = sp.get("status") || undefined;
-    const { page, take, skip } = pageParams(sp);
+router.get("/", authenticate, validate({ query: listCampStaffQuerySchema }), campStaffController.list);
 
-    const where: Prisma.CampStaffWhereInput = {};
-    if (campId) where.campId = campId;
-    if (status) where.status = status;
-
-    const [items, total] = await Promise.all([
-      db.campStaff.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take,
-        include: {
-          professional: {
-            select: { id: true, name: true, kind: true, speciality: true, verificationStatus: true },
-          },
-          camp: { select: { id: true, code: true, title: true, status: true } },
-        },
-      }),
-      db.campStaff.count({ where }),
-    ]);
-    return json(res, envelope(items, total, page, take));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
-
-// POST /api/camp-staff (ADMIN) {campId, professionalId?, volunteerId?, role}
-router.post("/", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN", "HOSPITAL");
-    const body = req.body ?? {};
-
-    const campId = String(body.campId ?? "").trim();
-    if (!campId) throw new ApiError("campId is required", 400);
-    const camp = await db.medicalCamp.findUnique({ where: { id: campId } });
-    if (!camp) {
-      log.warn("camp_staff_camp_not_found", { campId, actor: session.userId });
-      throw new ApiError("Camp not found", 404);
-    }
-
-    // A hospital partner rosters only its own staff on camps it has accepted.
-    if (session.role === "HOSPITAL") {
-      const org = await db.healthcareOrg.findUnique({ where: { ownerUserId: session.userId }, select: { id: true } });
-      if (!org) {
-        log.warn("camp_staff_no_linked_org", { campId, actor: session.userId });
-        throw new ApiError("No healthcare organisation is linked to your account", 403);
-      }
-      const partner = await db.campPartner.findFirst({ where: { campId, orgId: org.id, status: "ACCEPTED" }, select: { id: true } });
-      if (!partner) {
-        log.warn("camp_staff_partner_not_accepted", {
-          campId,
-          orgId: org.id,
-          actor: session.userId,
-        });
-        throw new ApiError("Accept the camp invitation before assigning staff", 403);
-      }
-      if (body.volunteerId) {
-        log.warn("camp_staff_partner_volunteer_forbidden", {
-          campId,
-          orgId: org.id,
-          actor: session.userId,
-        });
-        throw new ApiError("Partners can assign only their own staff", 403);
-      }
-      const own = body.professionalId
-        ? await db.healthProfessional.findFirst({ where: { id: String(body.professionalId), orgId: org.id }, select: { id: true } })
-        : null;
-      if (!own) {
-        log.warn("camp_staff_partner_not_own_staff", {
-          campId,
-          orgId: org.id,
-          ...(body.professionalId ? { professionalId: String(body.professionalId) } : {}),
-          actor: session.userId,
-        });
-        throw new ApiError("Partners can assign only their own staff", 403);
-      }
-    }
-
-    const role = String(body.role ?? "DOCTOR").trim().toUpperCase();
-    if (!STAFF_ROLES.includes(role)) throw new ApiError("Invalid role", 400);
-
-    const professionalId = body.professionalId ? String(body.professionalId).trim() : null;
-    const volunteerId = body.volunteerId ? String(body.volunteerId).trim() : null;
-
-    if (!professionalId && !volunteerId)
-      throw new ApiError("professionalId or volunteerId is required", 400);
-
-    if (professionalId) {
-      const professional = await db.healthProfessional.findUnique({
-        where: { id: professionalId },
-      });
-      if (!professional) {
-        log.warn("camp_staff_professional_not_found", {
-          campId,
-          professionalId,
-          actor: session.userId,
-        });
-        throw new ApiError("Professional not found", 404);
-      }
-      if (CLINICAL_ROLES.includes(role)) {
-        if (professional.kind !== role) {
-          log.warn("camp_staff_kind_mismatch", {
-            campId,
-            professionalId,
-            role,
-            professionalKind: professional.kind,
-            actor: session.userId,
-          });
-          throw new ApiError(`This staff member is a ${professional.kind}, not a ${role}`, 400);
-        }
-        if (professional.verificationStatus !== "VERIFIED") {
-          log.warn("camp_staff_unverified", {
-            campId,
-            professionalId,
-            role,
-            verificationStatus: professional.verificationStatus,
-            actor: session.userId,
-          });
-          throw new ApiError(
-            "Only verified professionals can be assigned to clinical roles",
-            400
-          );
-        }
-      }
-    }
-    if (volunteerId) {
-      const volunteer = await db.volunteer.findUnique({ where: { id: volunteerId } });
-      if (!volunteer) {
-        log.warn("camp_staff_volunteer_not_found", {
-          campId,
-          volunteerId,
-          actor: session.userId,
-        });
-        throw new ApiError("Volunteer not found", 404);
-      }
-    }
-
-    const staff = await db.campStaff.create({
-      data: {
-        campId,
-        professionalId,
-        volunteerId,
-        role,
-        status: "ASSIGNED",
-        notes: body.notes ? String(body.notes).trim() : null,
-      },
-      include: {
-        professional: {
-          select: { id: true, name: true, kind: true, speciality: true, verificationStatus: true },
-        },
-      },
-    });
-
-    log.info("camp_staff_assigned", {
-      staffId: staff.id,
-      campId,
-      role,
-      ...(professionalId ? { professionalId } : {}),
-      ...(volunteerId ? { volunteerId } : {}),
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "CAMP_STAFF_ADD",
-      "CampStaff",
-      `${staff.professional?.name ?? "Volunteer"} assigned as ${role} for ${camp.title}`,
-      session.userId
-    );
-    return json(res, staff, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// POST /api/camp-staff (ADMIN | HOSPITAL) {campId, professionalId?, volunteerId?, role}
+router.post(
+  "/",
+  authorize("ADMIN", "HOSPITAL"),
+  validate({ body: createCampStaffBodySchema }),
+  campStaffController.create
+);
 
 // DELETE /api/camp-staff?id= (ADMIN) — remove from roster
-router.delete("/", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const id = new URL(req.url, "http://localhost").searchParams.get("id");
-    if (!id) throw new ApiError("id query parameter is required", 400);
-
-    const staff = await db.campStaff.findUnique({
-      where: { id },
-      include: { professional: { select: { name: true } } },
-    });
-    if (!staff) {
-      log.warn("camp_staff_delete_not_found", { staffId: id, actor: session.userId });
-      throw new ApiError("Camp staff record not found", 404);
-    }
-
-    await db.campStaff.delete({ where: { id } });
-
-    log.info("camp_staff_removed", {
-      staffId: id,
-      campId: staff.campId,
-      role: staff.role,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "CAMP_STAFF_REMOVE",
-      "CampStaff",
-      `${staff.professional?.name ?? staff.role} removed from camp roster`,
-      session.userId
-    );
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete(
+  "/",
+  authorize("ADMIN"),
+  validate({ query: deleteCampStaffQuerySchema }),
+  campStaffController.remove
+);
 
 // PATCH /api/camp-staff/:id — ADMIN advances an assignment through camp day.
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const body = req.body ?? {};
-    const status = String(body.status ?? "").trim().toUpperCase();
-    if (!VALID_STATUSES.includes(status))
-      throw new ApiError("Invalid camp staff status", 400);
-
-    const existing = await db.campStaff.findUnique({
-      where: { id },
-      include: {
-        professional: { select: { name: true } },
-        camp: { select: { title: true } },
-      },
-    });
-    if (!existing) {
-      log.warn("camp_staff_update_not_found", { staffId: id, actor: session.userId });
-      throw new ApiError("Camp staff record not found", 404);
-    }
-    if (existing.status !== status && !CAMP_STAFF_TRANSITIONS[existing.status]?.includes(status))
-      log.warn("camp_staff_invalid_transition", {
-        staffId: id,
-        from: existing.status,
-        to: status,
-        actor: session.userId,
-      });
-    assertTransition(CAMP_STAFF_TRANSITIONS, existing.status, status, "camp staff assignment");
-
-    const changed = await db.campStaff.updateMany({
-      where: { id, status: existing.status },
-      data: { status },
-    });
-    if (changed.count !== 1) {
-      log.warn("camp_staff_update_conflict", {
-        staffId: id,
-        expectedStatus: existing.status,
-        actor: session.userId,
-      });
-      throw new ApiError("Camp staff assignment changed while this action was being processed", 409);
-    }
-
-    const updated = await db.campStaff.findUniqueOrThrow({
-      where: { id },
-      include: {
-        professional: { select: { id: true, name: true, kind: true, speciality: true } },
-      },
-    });
-    log.info("camp_staff_status_changed", {
-      staffId: id,
-      from: existing.status,
-      to: status,
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "CAMP_STAFF_STATUS",
-      "CampStaff",
-      `${existing.professional?.name ?? "Staff member"} · ${existing.camp.title} → ${status}`,
-      session.userId
-    );
-    return json(res, updated);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.patch(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: stringIdParamSchema, body: updateCampStaffBodySchema }),
+  campStaffController.updateStatus
+);

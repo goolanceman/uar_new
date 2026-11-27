@@ -52,7 +52,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -83,7 +83,7 @@ async function cleanup() {
 /** Push every asset owned by the test users into a terminal state — keeps the
  *  5-concurrent-assets cap out of the way between test groups. */
 async function settleAssets() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.mediaAsset.updateMany({ where: { owner: { email: { startsWith: PREFIX } } }, data: { status: "ready" } });
 }
 
@@ -110,9 +110,9 @@ async function fullUpload(
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { UPLOAD_DIR } = await import("@/lib/files");
-  const { hashPassword, issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { UPLOAD_DIR } = await import("@/domains/files");
+  const { hashPassword, issueToken } = await import("@/infrastructure/auth/session");
   storeDir = path.join(UPLOAD_DIR, "media-store");
 
   const mk = (email: string, name: string) =>
@@ -141,7 +141,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -208,8 +208,8 @@ describe("local PUT receiver", () => {
   });
 
   it("rejects an expired token", async () => {
-    const { signUploadToken } = await import("@/lib/media/signing");
-    const { db } = await import("@/lib/db");
+    const { signUploadToken } = await import("@/infrastructure/storage/signing");
+    const { db } = await import("@/infrastructure/database/prisma");
     const asset = await db.mediaAsset.findFirst({ where: { owner: { email: { startsWith: PREFIX } } }, orderBy: { createdAt: "desc" } });
     expect(asset).toBeTruthy();
     const expired = signUploadToken({
@@ -241,7 +241,7 @@ describe("local PUT receiver", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const asset = await db.mediaAsset.findFirst({ where: { owner: { email: { startsWith: PREFIX } } }, orderBy: { createdAt: "desc" } });
     const onDisk = await fs.stat(path.join(storeDir, asset!.sourceKey));
     expect(onDisk.size).toBe(VID.length);
@@ -264,7 +264,7 @@ describe("complete + poll", () => {
   });
 
   it("refuses completion before the bytes exist", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const fresh = await request(app)
       .post("/api/media/uploads")
       .set("Authorization", `Bearer ${aToken}`)
@@ -429,7 +429,7 @@ describe("visibility of processing reels", () => {
 
   describe("hydration once the media is ready", () => {
     beforeAll(async () => {
-      const { db } = await import("@/lib/db");
+      const { db } = await import("@/infrastructure/database/prisma");
       await db.mediaAsset.update({
         where: { id: mediaId },
         data: {
@@ -467,7 +467,7 @@ describe("public playback serving (GET /api/media/files/*)", () => {
   const M3U8 = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=800000\n360.m3u8\n";
 
   beforeAll(async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     // the reel media from the previous group is ready — reuse it
     const reel = await db.communityReel.findFirst({ where: { user: { email: { startsWith: PREFIX } }, mediaId: { not: null } }, orderBy: { createdAt: "desc" } });
     mediaId = reel!.mediaId!;
@@ -518,7 +518,7 @@ describe("public playback serving (GET /api/media/files/*)", () => {
   });
 
   it("hides outputs of assets that are not ready", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const pending = await request(app)
       .post("/api/media/uploads")
       .set("Authorization", `Bearer ${bToken}`)
@@ -534,7 +534,7 @@ describe("public playback serving (GET /api/media/files/*)", () => {
 
 describe("GET /api/files/:id/file Range support", () => {
   it("streams 206 ranges and 200 full bodies", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const bytes = Buffer.from("0123456789abcdef");
     const storedName = `${randomUUID()}-range.mp4`;
     await fs.writeFile(path.join(storeDir, "..", storedName), bytes);
@@ -617,7 +617,7 @@ describe("post create with mediaIds", () => {
   });
 
   it("hydrates content when the media is ready and deletes media with the post", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     await db.mediaAsset.update({
       where: { id: mediaId },
       data: {
@@ -655,7 +655,7 @@ describe("post create with mediaIds", () => {
 
 describe("concurrent cap vs stale pending uploads", () => {
   it("ignores pending_upload rows older than the URL TTL for the cap", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
 
     // 5 fresh pending uploads → the 6th is capped
     const fresh: string[] = [];
@@ -691,8 +691,8 @@ describe("concurrent cap vs stale pending uploads", () => {
 
 describe("abandoned asset sweeper", () => {
   it("sweeps stale pending/unattached rows (store prefix included) and keeps attached ones", async () => {
-    const { db } = await import("@/lib/db");
-    const { sweepAbandonedAssets } = await import("@/lib/media/transcoder");
+    const { db } = await import("@/infrastructure/database/prisma");
+    const { sweepAbandonedAssets } = await import("@/jobs/workers/transcoder.worker");
     const old = new Date(Date.now() - 25 * 60 * 60 * 1000); // past the 24h sweep age
 
     const mk = (status: string) =>
@@ -727,7 +727,7 @@ describe("abandoned asset sweeper", () => {
 
 describe("storage config validation", () => {
   it("fail-fast names the missing S3 variables and passes a complete config", async () => {
-    const { assertStorageConfig } = await import("@/lib/storage");
+    const { assertStorageConfig } = await import("@/infrastructure/storage");
     const saved: Array<[string, string | undefined]> = [
       ["STORAGE_DRIVER", process.env.STORAGE_DRIVER],
       ["S3_BUCKET", process.env.S3_BUCKET],
@@ -786,8 +786,8 @@ describe("end-to-end transcode (ffmpeg)", () => {
   it.skipIf(!hasFfmpeg)(
     "transcodes a PORTRAIT clip: 3-rung HLS ladder with per-rung segments + poster",
     async () => {
-      const { db } = await import("@/lib/db");
-      const { processMediaAsset } = await import("@/lib/media/transcoder");
+      const { db } = await import("@/infrastructure/database/prisma");
+      const { processMediaAsset } = await import("@/jobs/workers/transcoder.worker");
 
       // 2s 720x1280 portrait clip (video + audio) via lavfi — short side 720
       // → the full ladder (360/540/720) is generated.
@@ -880,7 +880,7 @@ describe("end-to-end transcode (ffmpeg)", () => {
   it.skipIf(!hasFfmpeg)(
     "transcodes a ROTATED landscape clip (rotate metadata → portrait display dims)",
     async () => {
-      const { processMediaAsset } = await import("@/lib/media/transcoder");
+      const { processMediaAsset } = await import("@/jobs/workers/transcoder.worker");
 
       // 1280x720 landscape source, then stamp rotate-90 display metadata on a
       // stream copy (ffmpeg ≥6: -display_rotation is an input option) — the

@@ -38,7 +38,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -63,8 +63,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword, issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword, issueToken } = await import("@/infrastructure/auth/session");
 
   const mk = (email: string, name: string, username: string, extra: Record<string, unknown> = {}) =>
     db.user.create({
@@ -100,7 +100,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -117,7 +117,7 @@ describe("S4 room create + detail", () => {
   });
 
   it("creates a room with a photo, group conversation, admin row and participant", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app)
       .post("/api/rooms")
       .set("Authorization", `Bearer ${aToken}`)
@@ -233,7 +233,7 @@ describe("S4 room lists", () => {
 
 describe("S4 membership", () => {
   it("joins a direct-join room: member row, totalMember and conversation participant", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app).post(`/api/rooms/${roomIds[0]}/join`).set("Authorization", `Bearer ${bToken}`);
     expect(res.status).toBe(200);
     expect(res.body.type).toBe(2); // RU_MEMBER
@@ -292,7 +292,7 @@ describe("S4 membership", () => {
   });
 
   it("lets a member leave the room", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app).post(`/api/rooms/${roomIds[0]}/leave`).set("Authorization", `Bearer ${bToken}`);
     expect(res.status).toBe(200);
     const room = await db.communityRoom.findUnique({ where: { id: roomIds[0] } });
@@ -332,7 +332,7 @@ describe("S4 invitations", () => {
   });
 
   it("lists my invitations with the room and the inviter, then accepts", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const list = await request(app).get("/api/rooms/invitations").set("Authorization", `Bearer ${cToken}`);
     expect(list.status).toBe(200);
     const invite = list.body.items.find((i: { room: { id: string } }) => i.room.id === roomIds[0]);
@@ -371,7 +371,7 @@ describe("S4 invitations", () => {
 
     const res = await request(app).delete(`/api/rooms/${roomIds[0]}/members/${cId}`).set("Authorization", `Bearer ${aToken}`);
     expect(res.status).toBe(200);
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const room = await db.communityRoom.findUnique({ where: { id: roomIds[0] } });
     expect(room?.totalMember).toBe(1);
   });
@@ -379,7 +379,7 @@ describe("S4 invitations", () => {
 
 describe("S4 join requests", () => {
   it("requests, lists, rejects and accepts join requests", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     // carol requests to join room two (isJoinRequestEnable = 1)
     const req1 = await request(app).post(`/api/rooms/${roomIds[1]}/join`).set("Authorization", `Bearer ${cToken}`);
     expect(req1.status).toBe(200);
@@ -435,7 +435,7 @@ describe("S4 report + delete", () => {
   });
 
   it("deletes a room as the room admin, cascading dependents", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const forbidden = await request(app).delete(`/api/rooms/${roomIds[0]}`).set("Authorization", `Bearer ${bToken}`);
     expect(forbidden.status).toBe(403); // plain member
 
@@ -449,7 +449,7 @@ describe("S4 report + delete", () => {
   });
 
   it("deletes a room as a moderator (isModerator, no room row)", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const res = await request(app).delete(`/api/rooms/${roomIds[1]}`).set("Authorization", `Bearer ${cToken}`);
     expect(res.status).toBe(200);
     expect(await db.communityRoom.findUnique({ where: { id: roomIds[1] } })).toBeNull();

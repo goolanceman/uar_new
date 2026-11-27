@@ -1,240 +1,47 @@
 /**
  * Medical document routes — /api/medical-documents, /api/medical-documents/:id
- * Converted 1:1 from src/app/api/medical-documents/* (Next.js route handlers) to Express.
+ * Thin endpoint definitions; all logic lives in src/modules/medical-documents
+ * (routes → controllers → services → repositories).
+ * The historical export path (`@/routes/medical-documents`) is preserved.
  */
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { logger } from "@/lib/logger";
+import { authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
 import {
-  requireAuth,
-  requireRole,
-  ApiError,
-  json,
-  handleError,
-  logActivity,
-} from "@/lib/session";
+  listMedicalDocumentsQuerySchema,
+  medicalDocumentIdParamSchema,
+} from "@/modules/medical-documents/schemas/medical-document.schema";
+import { medicalDocumentController } from "@/modules/medical-documents";
 
 export const router = Router();
 
-const log = logger.child("medical-documents");
-
-const VALID_KINDS = ["PRESCRIPTION", "LAB_REPORT", "DISCHARGE_SUMMARY", "REFERRAL", "OTHER"];
-// File-manager assets (/api/files/:id/file) or absolute http(s) URLs only —
-// blocks javascript:/data: injection vectors.
-const URL_RE = /^(\/api\/files\/[\w-]+\/file)|^https?:\/\//;
-
-function pageParams(url: URL, defLimit = 50) {
-  const page = Math.max(1, Math.trunc(Number(url.searchParams.get("page")) || 1));
-  const limit = Math.min(200, Math.max(1, Math.trunc(Number(url.searchParams.get("limit")) || defLimit)));
-  return { page, limit, skip: (page - 1) * limit };
-}
-
-function optText(v: unknown): string | null {
-  if (v === undefined || v === null) return null;
-  const s = String(v).trim();
-  return s === "" ? null : s;
-}
-
 // GET /api/medical-documents?beneficiaryId= — ADMIN | DOCTOR | NURSE (all);
 // BENEFICIARY role sees documents of their own patient record only.
-router.get("/", async (req, res) => {
-  try {
-    const session = await requireAuth(req);
-    const staffRoles = ["ADMIN", "DOCTOR", "NURSE"];
-    if (!staffRoles.includes(session.role) && session.role !== "BENEFICIARY")
-      throw new ApiError("You do not have permission for this action", 403);
-
-    const url = new URL(req.url, "http://localhost");
-    const { page, limit, skip } = pageParams(url);
-
-    const where: Record<string, unknown> = {};
-    if (session.role === "BENEFICIARY") {
-      const own = await db.beneficiary.findUnique({
-        where: { userId: session.userId },
-        select: { id: true },
-      });
-      if (!own) return json(res, { items: [], total: 0, page: 1, pages: 1 });
-      where.beneficiaryId = own.id;
-    } else {
-      const beneficiaryId = url.searchParams.get("beneficiaryId");
-      if (beneficiaryId) where.beneficiaryId = beneficiaryId;
-    }
-
-    const [total, items] = await Promise.all([
-      db.medicalDocument.count({ where }),
-      db.medicalDocument.findMany({
-        where,
-        include: {
-          beneficiary: { select: { id: true, code: true, name: true } },
-          camp: { select: { id: true, code: true, title: true } },
-        },
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit,
-      }),
-    ]);
-
-    return json(res, { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/",
+  authorize("ADMIN", "DOCTOR", "NURSE", "BENEFICIARY"),
+  validate({ query: listMedicalDocumentsQuerySchema }),
+  medicalDocumentController.list
+);
 
 // POST /api/medical-documents — ADMIN | DOCTOR | NURSE; BENEFICIARY adds to
 // their own patient record only. { beneficiaryId, campId?, name, kind, url }
-router.post("/", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN", "DOCTOR", "NURSE", "BENEFICIARY");
-    const body = req.body ?? {};
-
-    let beneficiaryId = String(body?.beneficiaryId ?? "").trim();
-    if (session.role === "BENEFICIARY") {
-      const own = await db.beneficiary.findUnique({ where: { userId: session.userId }, select: { id: true } });
-      if (!own) {
-        log.warn("medical_document_no_patient_record", { actor: session.userId });
-        throw new ApiError("No patient record is linked to your account yet", 403);
-      }
-      beneficiaryId = own.id;
-    }
-    if (!beneficiaryId) throw new ApiError("beneficiaryId is required", 400);
-    const beneficiary = await db.beneficiary.findUnique({
-      where: { id: beneficiaryId },
-      select: { id: true, code: true },
-    });
-    if (!beneficiary) {
-      log.warn("medical_document_beneficiary_not_found", {
-        beneficiaryId,
-        actor: session.userId,
-      });
-      throw new ApiError("Beneficiary not found", 404);
-    }
-
-    const name = optText(body?.name);
-    if (!name) throw new ApiError("name is required", 400);
-
-    const urlStr = optText(body?.url);
-    if (!urlStr) throw new ApiError("url is required", 400);
-    if (!URL_RE.test(urlStr))
-      throw new ApiError("url must be a /api/files/:id/file URL or an http(s) URL", 400);
-
-    const kind = String(body?.kind ?? "OTHER").trim().toUpperCase();
-    if (!VALID_KINDS.includes(kind))
-      throw new ApiError(`kind must be one of: ${VALID_KINDS.join(", ")}`, 400);
-
-    const campId = optText(body?.campId);
-    if (campId) {
-      const camp = await db.medicalCamp.findUnique({ where: { id: campId }, select: { id: true } });
-      if (!camp) {
-        log.warn("medical_document_camp_not_found", { campId, actor: session.userId });
-        throw new ApiError("Camp not found", 404);
-      }
-    }
-
-    const document = await db.medicalDocument.create({
-      data: {
-        beneficiaryId,
-        campId,
-        name,
-        kind,
-        url: urlStr,
-        uploadedByName: session.name,
-      },
-      include: {
-        beneficiary: { select: { id: true, code: true, name: true } },
-        camp: { select: { id: true, code: true, title: true } },
-      },
-    });
-
-    log.info("medical_document_created", {
-      documentId: document.id,
-      beneficiaryId,
-      ...(campId ? { campId } : {}),
-      kind,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "DOCUMENT_ADD",
-      "MEDICAL_DOCUMENT",
-      `${kind} "${name}" added for ${beneficiary.code}`,
-      session.userId
-    );
-
-    return json(res, document, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// (no body schema: the legacy checks interleave with DB lookups in the service)
+router.post("/", authorize("ADMIN", "DOCTOR", "NURSE", "BENEFICIARY"), medicalDocumentController.create);
 
 // GET /api/medical-documents/:id — ADMIN | DOCTOR | NURSE, plus the
 // BENEFICIARY account linked to the patient record itself.
-router.get("/:id", async (req, res) => {
-  try {
-    const session = await requireAuth(req);
-    const allowed = ["ADMIN", "DOCTOR", "NURSE", "BENEFICIARY"];
-    if (!allowed.includes(session.role))
-      throw new ApiError("You do not have permission for this action", 403);
-
-    const { id } = req.params;
-    const document = await db.medicalDocument.findUnique({
-      where: { id },
-      include: {
-        beneficiary: { select: { id: true, code: true, name: true } },
-        camp: { select: { id: true, code: true, title: true } },
-      },
-    });
-    if (!document) throw new ApiError("Document not found", 404);
-
-    if (session.role === "BENEFICIARY") {
-      const own = await db.beneficiary.findUnique({
-        where: { userId: session.userId },
-        select: { id: true },
-      });
-      if (!own || own.id !== document.beneficiaryId)
-        throw new ApiError("You do not have permission for this action", 403);
-    }
-
-    return json(res, document);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/:id",
+  authorize("ADMIN", "DOCTOR", "NURSE", "BENEFICIARY"),
+  validate({ params: medicalDocumentIdParamSchema }),
+  medicalDocumentController.getById
+);
 
 // DELETE /api/medical-documents/:id — ADMIN only.
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-
-    const existing = await db.medicalDocument.findUnique({
-      where: { id },
-      include: { beneficiary: { select: { code: true } } },
-    });
-    if (!existing) {
-      log.warn("medical_document_delete_not_found", { documentId: id, actor: session.userId });
-      throw new ApiError("Document not found", 404);
-    }
-
-    await db.medicalDocument.delete({ where: { id } });
-
-    log.info("medical_document_deleted", {
-      documentId: id,
-      kind: existing.kind,
-      beneficiaryId: existing.beneficiaryId,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "DOCUMENT_DELETE",
-      "MEDICAL_DOCUMENT",
-      `"${existing.name}" (${existing.kind}) removed from ${existing.beneficiary.code}`,
-      session.userId
-    );
-
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: medicalDocumentIdParamSchema }),
+  medicalDocumentController.remove
+);

@@ -1,227 +1,38 @@
 /**
- * Ambulances routes — /api/ambulances, /api/ambulances/:id
- * Converted 1:1 from src/app/api/ambulances/* (Next.js route handlers) to Express.
+ * Ambulance routes — thin endpoint definitions; all logic lives in
+ * src/modules/ambulances (routes → controllers → services → repositories).
+ * The historical export path (`@/routes/ambulances`) is preserved: tests and
+ * the app entry import `router` from here.
+ *
+ * /api/ambulances, /api/ambulances/:id — converted 1:1 from
+ * src/app/api/ambulances/* (Next.js route handlers) to Express.
  */
-import { Prisma } from "@prisma/client";
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { logger } from "@/lib/logger";
+import { authenticate, authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
+import { stringIdParamSchema } from "@/shared/schemas/common";
 import {
-  requireAuth,
-  requireRole,
-  json,
-  handleError,
-  ApiError,
-  logActivity,
-} from "@/lib/session";
-import { AMBULANCE_STATUSES } from "@/lib/ambulances";
+  createAmbulanceBodySchema,
+  listAmbulancesQuerySchema,
+  updateAmbulanceBodySchema,
+} from "@/modules/ambulances/schemas/ambulance.schema";
+import { ambulanceController } from "@/modules/ambulances";
 
 export const router = Router();
 
-const log = logger.child("ambulances");
-
-const TYPES = ["BLS", "ALS", "PTV", "NEONATAL"];
-const STATUSES = ["AVAILABLE", "ON_MISSION", "MAINTENANCE"];
-/** Same rule as client phoneRule() — kept in sync per conventions. */
-const PHONE_RE = /^(\+91[\-\s]?)?[6-9]\d{9}$/;
-
 // GET /api/ambulances?status=&type=&q= (auth)
-router.get("/", async (req, res) => {
-  try {
-    await requireAuth(req);
-    const sp = new URL(req.url, "http://localhost").searchParams;
-    const status = sp.get("status") || undefined;
-    const type = sp.get("type") || undefined;
-    const q = sp.get("q")?.trim() || undefined;
-
-    const where: Prisma.AmbulanceWhereInput = {};
-    if (status) where.status = status;
-    if (type) where.type = type;
-    if (q)
-      where.OR = [
-        { code: { contains: q } },
-        { base: { contains: q } },
-        { driverName: { contains: q } },
-      ];
-
-    const ambulances = await db.ambulance.findMany({
-      where,
-      orderBy: { code: "asc" },
-    });
-    return json(res, ambulances);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/", authenticate, validate({ query: listAmbulancesQuerySchema }), ambulanceController.list);
 
 // POST /api/ambulances (ADMIN)
-router.post("/", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const body = (req.body ?? {}) as Record<string, unknown>;
-
-    const code = String(body.code ?? "").trim().toUpperCase();
-    const type = String(body.type ?? "").trim().toUpperCase() || "BLS";
-    const status = String(body.status ?? "AVAILABLE").trim().toUpperCase();
-    const base = String(body.base ?? "").trim();
-    const driverName = String(body.driverName ?? "").trim();
-    const driverPhone = body.driverPhone ? String(body.driverPhone).trim() : "";
-
-    if (!code) throw new ApiError("code is required", 400);
-    if (!TYPES.includes(type)) throw new ApiError("Invalid type", 400);
-    if (!STATUSES.includes(status)) throw new ApiError("Invalid status", 400);
-    if (!base) throw new ApiError("base is required", 400);
-    if (!driverName) throw new ApiError("driverName is required", 400);
-    if (driverPhone && !PHONE_RE.test(driverPhone.replace(/[\s-]/g, "")))
-      throw new ApiError("driverPhone must be a valid Indian mobile number", 400);
-
-    const clash = await db.ambulance.findUnique({ where: { code } });
-    if (clash) {
-      log.warn("ambulance_code_conflict", {
-        code,
-        actor: session.userId,
-        existingId: clash.id,
-      });
-      throw new ApiError("Ambulance code already exists", 409);
-    }
-
-    const ambulance = await db.ambulance.create({
-      data: {
-        code,
-        type,
-        status,
-        base,
-        driverName,
-        driverPhone: driverPhone || null,
-        crew: body.crew ? String(body.crew).trim() : null,
-        equipment: body.equipment ? String(body.equipment).trim() : null,
-      },
-    });
-
-    log.info("ambulance_created", {
-      ambulanceId: ambulance.id,
-      code,
-      type,
-      status,
-      actor: session.userId,
-    });
-
-    await logActivity(
-      session.name,
-      "AMBULANCE_ADD",
-      "Ambulance",
-      `${code} (${type})`,
-      session.userId
-    );
-    return json(res, ambulance, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post("/", authorize("ADMIN"), validate({ body: createAmbulanceBodySchema }), ambulanceController.create);
 
 // PATCH /api/ambulances/:id (ADMIN)
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-
-    const existing = await db.ambulance.findUnique({ where: { id } });
-    if (!existing) {
-      log.warn("ambulance_update_not_found", { ambulanceId: id, actor: session.userId });
-      throw new ApiError("Ambulance not found", 404);
-    }
-
-    const data: Prisma.AmbulanceUpdateInput = {};
-    if (body.code !== undefined) {
-      const code = String(body.code).trim().toUpperCase();
-      if (!code) throw new ApiError("code cannot be empty", 400);
-      if (code !== existing.code) {
-        const clash = await db.ambulance.findUnique({ where: { code } });
-        if (clash) {
-          log.warn("ambulance_code_conflict", {
-            code,
-            actor: session.userId,
-            existingId: clash.id,
-          });
-          throw new ApiError("Ambulance code already exists", 409);
-        }
-      }
-      data.code = code;
-    }
-    if (body.type !== undefined) {
-      const type = String(body.type).trim().toUpperCase();
-      if (!["BLS", "ALS", "PTV", "NEONATAL"].includes(type))
-        throw new ApiError("Invalid type", 400);
-      data.type = type;
-    }
-    if (body.status !== undefined) {
-      const status = String(body.status).trim().toUpperCase();
-      if (!AMBULANCE_STATUSES.includes(status))
-        throw new ApiError("Invalid status", 400);
-      data.status = status;
-    }
-    if (body.base !== undefined) data.base = String(body.base).trim();
-    if (body.driverName !== undefined)
-      data.driverName = String(body.driverName).trim();
-    if (body.driverPhone !== undefined)
-      data.driverPhone = body.driverPhone ? String(body.driverPhone).trim() : null;
-    if (body.crew !== undefined)
-      data.crew = body.crew ? String(body.crew).trim() : null;
-    if (body.equipment !== undefined)
-      data.equipment = body.equipment ? String(body.equipment).trim() : null;
-
-    const ambulance = await db.ambulance.update({ where: { id }, data });
-    log.info("ambulance_updated", {
-      ambulanceId: id,
-      code: ambulance.code,
-      fields: Object.keys(data),
-      ...(body.status !== undefined ? { newStatus: ambulance.status } : {}),
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "AMBULANCE_UPDATE",
-      "Ambulance",
-      `${ambulance.code}${body.status !== undefined ? ` → ${ambulance.status}` : ""}`,
-      session.userId
-    );
-    return json(res, ambulance);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.patch(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: stringIdParamSchema, body: updateAmbulanceBodySchema }),
+  ambulanceController.update
+);
 
 // DELETE /api/ambulances/:id (ADMIN) — blocked while ON_MISSION
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const existing = await db.ambulance.findUnique({ where: { id } });
-    if (!existing) {
-      log.warn("ambulance_delete_not_found", { ambulanceId: id, actor: session.userId });
-      throw new ApiError("Ambulance not found", 404);
-    }
-    if (existing.status === "ON_MISSION") {
-      log.warn("ambulance_delete_blocked_on_mission", {
-        ambulanceId: id,
-        code: existing.code,
-        actor: session.userId,
-      });
-      throw new ApiError("Ambulance is on a mission", 409);
-    }
-
-    await db.ambulance.delete({ where: { id } });
-    log.info("ambulance_deleted", { ambulanceId: id, code: existing.code, actor: session.userId });
-    await logActivity(
-      session.name,
-      "AMBULANCE_DELETE",
-      "Ambulance",
-      existing.code,
-      session.userId
-    );
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete("/:id", authorize("ADMIN"), validate({ params: stringIdParamSchema }), ambulanceController.remove);

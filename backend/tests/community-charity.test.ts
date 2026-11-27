@@ -60,7 +60,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) await db.activityLog.deleteMany({ where: { userId: { in: ids } } });
@@ -80,8 +80,8 @@ beforeAll(async () => {
   app = await buildApp();
   process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
-  const { db } = await import("@/lib/db");
-  const { hashPassword, issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword, issueToken } = await import("@/infrastructure/auth/session");
 
   const donor = await db.user.create({
     data: {
@@ -175,7 +175,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await cleanup();
   delete process.env.RAZORPAY_WEBHOOK_SECRET;
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -220,7 +220,7 @@ describe("GET /api/charity/card + /impact", () => {
 
 describe("webhook settlement → points + achievements + card", () => {
   it("settles a pending donation and awards points/card/achievements", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const donation = await db.donation.create({
       data: {
         donorId,
@@ -463,7 +463,7 @@ describe("charity events register/check-in/cancel", () => {
 
 describe("GET /api/donations?wall=1&campaignId=", () => {
   it("returns public-safe donor identities honouring isAnonymous", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const anon = await db.donation.create({
       data: {
         donorId,

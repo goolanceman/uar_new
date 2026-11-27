@@ -1,356 +1,137 @@
 /**
  * Posts routes — /api/posts (shared by web + mobile).
+ * Thin endpoint definitions; all logic lives in src/modules/posts
+ * (routes → controllers → services → repositories). The historical export
+ * path (`@/routes/posts`) is preserved: tests and the app entry import
+ * `router` from here.
  *
  * Generic REST port of the legacy mobile post endpoints
  * (src/routes/mobile/posts.ts + the post/comment Moderator handlers of
  * src/routes/mobile/auth-users.ts). The actor is ALWAYS the session user —
  * ids never come from the body.
  */
-import { Router, type Request } from "express";
-import { requireAuth, ApiError, json, handleError, body } from "@/lib/session";
-import { logger } from "@/lib/logger";
-import { paged, pageParams } from "@/lib/community/serializers";
-import { multipart } from "@/lib/multipart";
+import { Router } from "express";
+import { authenticate } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
+import { multipart } from "@/infrastructure/uploads/multipart";
 import {
-  addComment,
-  createPost,
-  deleteComment,
-  deletePost,
-  getPost,
-  likePost,
-  listComments,
-  listFeed,
-  listPostLikers,
-  listPostsByHashtag,
-  listPostsByInterest,
-  listSavedPosts,
-  listUserPosts,
-  reportPost,
-  searchHashtags,
-  searchPosts,
-  toggleCommentLike,
-  unlikePost,
-  updatePost,
-} from "@/lib/community/posts";
+  byHashtagQuerySchema,
+  byInterestQuerySchema,
+  commentIdParamSchema,
+  hashtagsQuerySchema,
+  listFeedQuerySchema,
+  postBodySchema,
+  postIdParamSchema,
+  savedPostsQuerySchema,
+  searchPostsQuerySchema,
+  userIdParamSchema,
+} from "@/modules/posts/schemas/post.schema";
+import { postController } from "@/modules/posts";
 
 export const router = Router();
 
-const log = logger.child("posts");
-
-/** :id path param — reject missing ids early. */
-function idParam(req: Request, name = "id"): string {
-  const id = String((req.params as Record<string, string>)[name] ?? "").trim();
-  if (!id) throw new ApiError("Id is required", 400);
-  return id;
-}
-
-/** Optional-session actor id — feeds/searches work signed-out? No: the app
- *  always sends the session (personalization: isLike, blocklists). */
-async function actor(req: Request) {
-  const session = await requireAuth(req);
-  return session;
-}
-
-/** Number field from a JSON/multipart body. */
-function numField(v: unknown): number | undefined {
-  if (v === undefined || v === null || v === "") return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-/** mediaIds arrives as a JSON array string (multipart text field), a CSV, or a
- *  real array (express.json) — normalize to trimmed non-empty strings. */
-function mediaIdsField(v: unknown): string[] {
-  if (v === undefined || v === null || v === "") return [];
-  let raw: unknown[];
-  if (Array.isArray(v)) {
-    raw = v;
-  } else {
-    const s = String(v).trim();
-    try {
-      const parsed: unknown = JSON.parse(s);
-      raw = Array.isArray(parsed) ? (parsed as unknown[]) : [parsed];
-    } catch {
-      raw = s.split(",");
-    }
-  }
-  return raw.map((x) => String(x ?? "").trim()).filter(Boolean);
-}
-
 // GET /api/posts?type=latest|random&page=&limit= — the main feed.
 // (Suggested rooms live at GET /api/rooms/suggested — S4.)
-router.get("/", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const type = String(req.query.type ?? "latest");
-    const { items, total } = await listFeed(session.userId, { type, skip, take: limit });
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/", authenticate, validate({ query: listFeedQuerySchema }), postController.list);
 
 // GET /api/posts/saved — the session user's saved posts (ids edited via
 // PATCH /api/profile savedPostIds).
-router.get("/saved", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const { items, total } = await listSavedPosts(session.userId, skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/saved", authenticate, validate({ query: savedPostsQuerySchema }), postController.saved);
 
 // GET /api/posts/search?q= (legacy searchPost).
-router.get("/search", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const { items, total } = await searchPosts(session.userId, String(req.query.q ?? ""), skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/search", authenticate, validate({ query: searchPostsQuerySchema }), postController.search);
 
 // GET /api/posts/by-interest?ids=1,2&q= (legacy searchPostByInterestId).
-router.get("/by-interest", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    const { items, total } = await listPostsByInterest(session.userId, ids, skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/by-interest", authenticate, validate({ query: byInterestQuerySchema }), postController.byInterest);
 
 // GET /api/posts/by-hashtag?tags=a,b (legacy fetchPostsByHashtag).
-router.get("/by-hashtag", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const tags = String(req.query.tags ?? req.query.tag ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    const { items, total } = await listPostsByHashtag(session.userId, tags, skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/by-hashtag", authenticate, validate({ query: byHashtagQuerySchema }), postController.byHashtag);
 
 // GET /api/posts/hashtags?q= → [{tag, postCount}] (legacy searchHashtag).
-router.get("/hashtags", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const items = await searchHashtags(session.userId, String(req.query.q ?? ""));
-    return json(res, { items });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/hashtags", authenticate, validate({ query: hashtagsQuerySchema }), postController.hashtags);
 
 // GET /api/posts/user/:userId — a user's posts (legacy fetchPostByUser).
-router.get("/user/:userId", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const { items, total } = await listUserPosts(
-      session.userId,
-      idParam(req, "userId"),
-      skip,
-      limit
-    );
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/user/:userId",
+  authenticate,
+  validate({ query: listFeedQuerySchema, params: userIdParamSchema }),
+  postController.byUser
+);
 
 // DELETE /api/posts/comments/:commentId — owner OR moderator
 // (deleteComment + Moderator/deleteCommentByModerator).
-router.delete("/comments/:commentId", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const comment = await deleteComment(session.userId, session.role, idParam(req, "commentId"));
-    log.info("comment_deleted", { commentId: comment.id, actor: session.userId });
-    return json(res, { ok: true, comment });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete(
+  "/comments/:commentId",
+  authenticate,
+  validate({ params: commentIdParamSchema }),
+  postController.deleteComment
+);
 
 // POST /api/posts/comments/:commentId/like — toggle (likeDislikeComment).
-router.post("/comments/:commentId/like", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const commentId = idParam(req, "commentId");
-    const result = await toggleCommentLike(session.userId, commentId);
-    log.info("comment_like_toggled", { commentId, actor: session.userId, liked: result.liked });
-    return json(res, result);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post(
+  "/comments/:commentId/like",
+  authenticate,
+  validate({ params: commentIdParamSchema }),
+  postController.toggleCommentLike
+);
 
 // POST /api/posts — multipart media + text fields (legacy addPost).
-router.post("/", multipart, async (req, res) => {
-  try {
-    const session = await actor(req);
-    const b = { ...(req.body ?? {}) } as Record<string, unknown>;
-    const post = await createPost(req, { id: session.userId, name: session.name }, {
-      desc: b.desc != null && b.desc !== "" ? String(b.desc) : null,
-      tags: b.tags != null && b.tags !== "" ? String(b.tags) : null,
-      linkPreviewJson: b.linkPreviewJson != null && b.linkPreviewJson !== "" ? String(b.linkPreviewJson) : null,
-      interestIds: b.interestIds != null && b.interestIds !== "" ? String(b.interestIds) : null,
-      isEmergency: b.isEmergency === true || b.isEmergency === 1 || b.isEmergency === "1" || b.isEmergency === "true",
-      contextLabel: b.contextLabel != null && b.contextLabel !== "" ? String(b.contextLabel) : null,
-      impactLabel: b.impactLabel != null && b.impactLabel !== "" ? String(b.impactLabel) : null,
-      communityLabel: b.communityLabel != null && b.communityLabel !== "" ? String(b.communityLabel) : null,
-      contentType: numField(b.contentType),
-      audioWaves: b.audioWaves != null && b.audioWaves !== "" ? String(b.audioWaves) : null,
-      mediaIds: mediaIdsField(b.mediaIds),
-    });
-    if (post) {
-      log.info("post_created", {
-        postId: post.id,
-        actor: session.userId,
-        contentType: numField(b.contentType) ?? null,
-        isEmergency: b.isEmergency === true || b.isEmergency === 1 || b.isEmergency === "1" || b.isEmergency === "true",
-      });
-    }
-    return json(res, post, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post("/", multipart, authenticate, validate({ body: postBodySchema }), postController.create);
 
 // GET /api/posts/:id — single feed post (legacy fetchPostByPostId).
-router.get("/:id", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const post = await getPost(session.userId, idParam(req));
-    return json(res, post);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/:id", authenticate, validate({ params: postIdParamSchema }), postController.get);
 
 // DELETE /api/posts/:id — owner OR moderator (deleteMyPost + deletePostByModerator).
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const post = await deletePost(session.userId, session.role, idParam(req));
-    log.info("post_deleted", { postId: post.id, actor: session.userId });
-    return json(res, { ok: true, post });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete("/:id", authenticate, validate({ params: postIdParamSchema }), postController.remove);
 
 // PATCH /api/posts/:id — edit desc/tags/interests/restriction. The owner may
 // always edit; a moderator may edit anyone's (legacy feed/update).
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const b = (req.body ?? {}) as Record<string, unknown>;
-    const postId = idParam(req);
-    const post = await updatePost(session.userId, session.role, postId, {
-      desc: b.desc !== undefined ? String(b.desc) : b.description !== undefined ? String(b.description) : undefined,
-      tags: b.tags !== undefined ? String(b.tags) : undefined,
-      interestIds:
-        b.interestIds !== undefined ? String(b.interestIds) : b.interest_ids !== undefined ? String(b.interest_ids) : undefined,
-      isRestricted: b.isRestricted !== undefined ? (Number(b.isRestricted) ? 1 : 0) : undefined,
-    });
-    log.info("post_updated", {
-      postId,
-      actor: session.userId,
-      ...(b.isRestricted !== undefined ? { isRestricted: Number(b.isRestricted) ? 1 : 0 } : {}),
-    });
-    return json(res, { ok: true, post });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.patch(
+  "/:id",
+  authenticate,
+  validate({ params: postIdParamSchema, body: postBodySchema }),
+  postController.update
+);
 
 // POST /api/posts/:id/report { reason, desc } (legacy reportPost).
-router.post("/:id/report", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const b = body<{ reason?: string; desc?: string }>(req);
-    const postId = idParam(req);
-    const report = await reportPost(session.userId, postId, String(b.reason ?? ""), String(b.desc ?? ""));
-    log.info("post_reported", { postId, actor: session.userId, reason: String(b.reason ?? "") });
-    return json(res, { ok: true, report });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post(
+  "/:id/report",
+  authenticate,
+  validate({ params: postIdParamSchema, body: postBodySchema }),
+  postController.report
+);
 
 // POST /api/posts/:id/like { reaction } (legacy likePost).
-router.post("/:id/like", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const b = body<{ reaction?: string }>(req);
-    const postId = idParam(req);
-    const { like, post, message } = await likePost(session.userId, postId, b.reaction ?? null);
-    log.info("post_liked", { postId, actor: session.userId, reaction: b.reaction ?? null, message });
-    return json(res, { ok: true, message, like, ...(post ? { post } : {}) });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post(
+  "/:id/like",
+  authenticate,
+  validate({ params: postIdParamSchema, body: postBodySchema }),
+  postController.like
+);
 
 // DELETE /api/posts/:id/like (legacy dislikePost).
-router.delete("/:id/like", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const postId = idParam(req);
-    const like = await unlikePost(session.userId, postId);
-    log.info("post_unliked", { postId, actor: session.userId });
-    return json(res, { ok: true, like });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete("/:id/like", authenticate, validate({ params: postIdParamSchema }), postController.unlike);
 
 // GET /api/posts/:id/likes — users who liked the post (fetchUsersWhoLikedPost).
-router.get("/:id/likes", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const { items, total } = await listPostLikers(session.userId, idParam(req), skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/:id/likes",
+  authenticate,
+  validate({ query: listFeedQuerySchema, params: postIdParamSchema }),
+  postController.likers
+);
 
 // GET /api/posts/:id/comments (legacy fetchComments).
-router.get("/:id/comments", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const { page, limit, skip } = pageParams(req.query);
-    const { items, total } = await listComments(session.userId, idParam(req), skip, limit);
-    return json(res, paged(items, page, limit, total));
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get(
+  "/:id/comments",
+  authenticate,
+  validate({ query: listFeedQuerySchema, params: postIdParamSchema }),
+  postController.comments
+);
 
 // POST /api/posts/:id/comments { desc } (legacy addComment).
-router.post("/:id/comments", async (req, res) => {
-  try {
-    const session = await actor(req);
-    const b = body<{ desc?: string }>(req);
-    const postId = idParam(req);
-    const comment = await addComment(session.userId, postId, String(b.desc ?? ""));
-    log.info("comment_added", { postId, commentId: comment.id, actor: session.userId });
-    return json(res, comment, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.post(
+  "/:id/comments",
+  authenticate,
+  validate({ params: postIdParamSchema, body: postBodySchema }),
+  postController.addComment
+);

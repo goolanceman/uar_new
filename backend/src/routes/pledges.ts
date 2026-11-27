@@ -1,192 +1,51 @@
 /**
  * Pledges routes — /api/pledges, /api/pledges/:id
- * Converted 1:1 from src/app/api/pledges/* (Next.js route handlers) to Express.
+ * Thin endpoint definitions; all logic lives in src/modules/pledges
+ * (routes → controllers → services → repositories). The historical export
+ * path (`@/routes/pledges`) is preserved: tests and the app entry import
+ * `router` from here.
  */
 import { Router } from "express";
-import { db } from "@/lib/db";
-import { logger } from "@/lib/logger";
+import { authenticate, authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
 import {
-  requireAuth,
-  requireRole,
-  json,
-  handleError,
-  ApiError,
-  logActivity,
-} from "@/lib/session";
-import { recomputeCause } from "@/lib/causes";
-import { invalidateCauses } from "@/lib/cache";
-import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
+  listPledgesQuerySchema,
+  pledgeIdParamSchema,
+  updatePledgeBodySchema,
+} from "@/modules/pledges/schemas/pledge.schema";
+import { pledgeController } from "@/modules/pledges";
 
 export const router = Router();
 
-const log = logger.child("pledges");
-
-const STATUSES = ["ACTIVE", "COMPLETED", "CANCELLED"];
-
 // GET /api/pledges?status=&q= — admin list of all medicine pledges
-router.get("/", async (req, res) => {
-  try {
-    await requireRole(req, "ADMIN");
-    const sp = new URL(req.url, "http://localhost").searchParams;
-    const status = sp.get("status") ?? undefined;
-    const q = sp.get("q") ?? undefined;
-    const rows = await db.pledge.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(q ? { donorName: { contains: q } } : {}),
-      },
-      include: {
-        cause: { select: { code: true, patientName: true, condition: true, monthlyCost: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
-    return json(res, rows);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// (legacy gate: `await requireRole(req, "ADMIN")` as the handler's first step).
+router.get(
+  "/",
+  authorize("ADMIN"),
+  validate({ query: listPledgesQuerySchema }),
+  pledgeController.list
+);
 
-// GET /api/pledges/mine — the signed-in donor's pledges with the full
-// payment schedule: months × amountPerMonth from startDate, payments made
-// (linked donations), remaining commitment and next due date. Owner-scoped.
-// NOTE: declared before "/:id".
-router.get("/mine", async (req, res) => {
-  try {
-    const s = await requireAuth(req);
-    const pledges = await db.pledge.findMany({
-      where: { donorId: s.userId },
-      orderBy: { createdAt: "desc" },
-      include: {
-        cause: {
-          select: { code: true, patientName: true, condition: true, monthlyCost: true },
-        },
-      },
-    });
-    const ids = pledges.map((p) => p.id);
-    const payments = ids.length
-      ? await db.donation.findMany({ where: { pledgeId: { in: ids } } })
-      : [];
-    return json(
-      res,
-      pledges.map((p) => {
-        const mine = payments.filter((d) => d.pledgeId === p.id);
-        return {
-          ...p,
-          ...pledgeSchedule(p, mine),
-          installments: pledgeInstallments(mine),
-        };
-      })
-    );
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// GET /api/pledges/mine — the signed-in donor's pledges with the full payment
+// schedule. Owner-scoped. NOTE: declared before "/:id".
+router.get("/mine", authenticate, pledgeController.mine);
 
 // GET /api/pledges/:id — one pledge + schedule + payments (owner or ADMIN)
-router.get("/:id", async (req, res) => {
-  try {
-    const s = await requireAuth(req);
-    const { id } = req.params;
-    const pledge = await db.pledge.findUnique({
-      where: { id },
-      include: {
-        cause: {
-          select: { code: true, patientName: true, condition: true, monthlyCost: true },
-        },
-      },
-    });
-    if (!pledge) throw new ApiError("Pledge not found", 404);
-    if (pledge.donorId !== s.userId && s.role !== "ADMIN")
-      throw new ApiError("You can only view your own pledges", 403);
-    const payments = await db.donation.findMany({ where: { pledgeId: pledge.id } });
-    return json(res, {
-      ...pledge,
-      ...pledgeSchedule(pledge, payments),
-      installments: pledgeInstallments(payments),
-    });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.get("/:id", authenticate, validate({ params: pledgeIdParamSchema }), pledgeController.get);
 
 // PATCH /api/pledges/:id — ADMIN or the pledge's own donor → {pledge}
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await requireAuth(req);
-    const { id } = req.params;
-    const body = (req.body ?? {}) as Record<string, unknown>;
-
-    const pledge = await db.pledge.findUnique({ where: { id } });
-    if (!pledge) {
-      log.warn("pledge_update_not_found", { pledgeId: id, actor: session.userId });
-      throw new ApiError("Pledge not found", 404);
-    }
-
-    const isOwner = Boolean(pledge.donorId) && pledge.donorId === session.userId;
-    if (session.role !== "ADMIN" && !isOwner) {
-      log.warn("pledge_update_forbidden", { pledgeId: id, actor: session.userId });
-      throw new ApiError("You can only manage your own pledges", 403);
-    }
-
-    const status = String(body.status ?? "").trim().toUpperCase();
-    if (!STATUSES.includes(status))
-      throw new ApiError("status must be ACTIVE, COMPLETED or CANCELLED", 400);
-
-    const updated = await db.pledge.update({
-      where: { id },
-      data: { status },
-    });
-    await recomputeCause(updated.causeId);
-    await invalidateCauses();
-    log.info("pledge_updated", {
-      pledgeId: id,
-      causeId: updated.causeId,
-      status,
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "PLEDGE_UPDATE",
-      "Pledge",
-      `${id} → ${status}`,
-      session.userId
-    );
-
-    return json(res, updated);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// (status field check runs in the service, after the legacy lookup/gates).
+router.patch(
+  "/:id",
+  authenticate,
+  validate({ params: pledgeIdParamSchema, body: updatePledgeBodySchema }),
+  pledgeController.update
+);
 
 // DELETE /api/pledges/:id (ADMIN)
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const pledge = await db.pledge.findUnique({ where: { id } });
-    if (!pledge) {
-      log.warn("pledge_delete_not_found", { pledgeId: id, actor: session.userId });
-      throw new ApiError("Pledge not found", 404);
-    }
-
-    await db.pledge.delete({ where: { id } });
-    log.info("pledge_deleted", {
-      pledgeId: id,
-      causeId: pledge.causeId,
-      actor: session.userId,
-    });
-    await recomputeCause(pledge.causeId);
-    await invalidateCauses();
-    await logActivity(
-      session.name,
-      "PLEDGE_DELETE",
-      "Pledge",
-      id,
-      session.userId
-    );
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: pledgeIdParamSchema }),
+  pledgeController.remove
+);

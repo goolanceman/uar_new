@@ -56,7 +56,7 @@ async function loginAs(email: string): Promise<string> {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.campaign.deleteMany({ where: { code: { startsWith: PREFIX } } });
   await db.activityLog.deleteMany({ where: { details: { contains: PREFIX } } });
   await db.user.deleteMany({ where: { email: { startsWith: PREFIX } } });
@@ -83,7 +83,7 @@ function campaignRow(
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
 
   await db.user.create({
     data: {
@@ -188,7 +188,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
