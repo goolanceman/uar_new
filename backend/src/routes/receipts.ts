@@ -6,6 +6,7 @@ import { Router } from "express";
 import { db } from "@/lib/db";
 import { requireAuth, ApiError, json, handleError } from "@/lib/session";
 import { orgProfile, esc, printDocument } from "@/lib/api-org";
+import { BRAND_MARK_DATA_URI } from "@/lib/brand-mark";
 import {
   formatMoney,
   amountInWords,
@@ -178,9 +179,7 @@ router.get("/:receiptNumber/html", async (req, res) => {
   .brand { display: flex; gap: 13px; align-items: center; }
   .mono {
     width: 54px; height: 54px; border-radius: 14px; flex-shrink: 0;
-    background: linear-gradient(150deg, #064e3b, #059669);
-    color: #fff; display: flex; align-items: center; justify-content: center;
-    font: 800 17px Georgia, serif; letter-spacing: 1px;
+    object-fit: contain;
     box-shadow: 0 2px 8px rgba(6, 78, 59, .28);
   }
   .brand-name { font: 700 20px Georgia, serif; color: var(--ink); letter-spacing: .2px; }
@@ -263,8 +262,7 @@ router.get("/:receiptNumber/html", async (req, res) => {
     text-align: center; color: var(--ink-2); transform: rotate(-6deg); flex-shrink: 0; }
   .seal::before { content: ""; position: absolute; inset: 7px; border-radius: 50%;
     border: 1.5px solid var(--gold); opacity: .8; }
-  .seal b { font: 800 15px Georgia, serif; letter-spacing: 1.5px; color: var(--ink); }
-  .seal i { font: italic 7.5px Georgia, serif; letter-spacing: 1.6px; color: var(--ink-3); margin-top: 2px; }
+  .seal img { width: 50px; height: 50px; object-fit: contain; }
   .seal span { font-size: 7px; letter-spacing: 2.2px; color: var(--gold); font-weight: 700; margin-top: 4px; }
 
   /* ── footer strip ──────────────────────────────────────────── */
@@ -286,7 +284,7 @@ router.get("/:receiptNumber/html", async (req, res) => {
 
     <div class="head">
       <div class="brand">
-        <div class="mono">UAR</div>
+        <img class="mono" src="${BRAND_MARK_DATA_URI}" alt="${esc(org.name)}" />
         <div>
           <div class="brand-name">${esc(org.name)}</div>
           <div class="brand-tag">Service · Dignity · Transparency · Technology-for-Good</div>
@@ -366,8 +364,7 @@ router.get("/:receiptNumber/html", async (req, res) => {
         </div>
       </div>
       <div class="seal">
-        <b>UAR</b>
-        <i>SEVA · DIGNITY</i>
+        <img src="${BRAND_MARK_DATA_URI}" alt="${esc(org.name)}" />
         <span>TRUST SEAL</span>
       </div>
     </div>

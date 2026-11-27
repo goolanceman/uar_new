@@ -7,6 +7,7 @@ import { PublicSite } from "@/components/public/public-site";
 import AdminApp from "@/components/admin/admin-app";
 import PortalRouter from "@/components/portal/portal-router";
 import { DonationBroadcasts } from "@/components/shared/donation-broadcasts";
+import { BrandLoader } from "@/components/shared/brand-loader";
 import { Button } from "@/components/ui/button";
 import { LogIn } from "lucide-react";
 
@@ -28,7 +29,7 @@ function Splash() {
         <img src={logoUrl} alt={name} className="size-8 object-contain" />
       </span>
       <p className="text-sm font-medium text-muted-foreground">{name}…</p>
-      <span className="size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <BrandLoader className="size-5" />
     </div>
   );
 }

@@ -3,13 +3,14 @@
  * Converted 1:1 from src/app/api/files/* (Next.js route handlers) to Express.
  * Multipart uploads use the `multipart` middleware + readForm (see @/lib/multipart).
  */
-import { promises as fs } from "node:fs";
+import { promises as fs, createReadStream } from "node:fs";
 import { Router } from "express";
 import { Prisma, type FileAsset } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireAuth, requireRole, validateSession, json, handleError, ApiError, logActivity } from "@/lib/session";
 import { saveUpload, sanitizeFolder, deleteStored, validFolder, resolveStoredPath } from "@/lib/files";
 import { multipart, readForm } from "@/lib/multipart";
+import { getCachedFile, setCachedFile, invalidateFile, type CachedFileAsset } from "@/lib/cache";
 
 export const router = Router();
 
@@ -206,6 +207,7 @@ router.delete("/:id", async (req, res) => {
     if (!existing) throw new ApiError("File not found", 404);
 
     await db.fileAsset.delete({ where: { id } });
+    await invalidateFile(id);
     // A missing disk file must not fail the request (deleteStored ignores ENOENT).
     await deleteStored(existing.storedName).catch(() => {});
 
@@ -225,13 +227,26 @@ router.delete("/:id", async (req, res) => {
 // GET /api/files/:id/file — see the download-access policy above:
 // image/*, audio/*, video/* are public; document mimes require ADMIN or the
 // uploader. Serves the stored bytes with the recorded mime type and immutable
-// caching; ?download=1 forces a download with the original filename.
+// caching, streamed from disk (never buffered whole) with HTTP Range support
+// so legacy MP4 reels can seek; ?download=1 forces a download with the
+// original filename.
 router.get("/:id/file", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const asset = await db.fileAsset.findUnique({ where: { id } });
-    if (!asset) throw new ApiError("File not found", 404);
+    // Images and videos are immutable by id, so the row (mime, stored path,
+    // owner) is cached. A miss — or Redis being down — falls through to
+    // Postgres exactly as before.
+    let asset: CachedFileAsset | null = await getCachedFile(id);
+    if (!asset) {
+      const row = await db.fileAsset.findUnique({
+        where: { id },
+        select: { id: true, name: true, storedName: true, mime: true, uploadedById: true },
+      });
+      if (!row) throw new ApiError("File not found", 404);
+      asset = row;
+      if (isPublicReadMime(row.mime)) await setCachedFile(row);
+    }
 
     if (!isPublicReadMime(asset.mime)) {
       const session = await validateSession(req);
@@ -241,15 +256,16 @@ router.get("/:id/file", async (req, res) => {
         throw new ApiError("You do not have permission to access this document", 403);
     }
 
-    let bytes: Buffer;
+    const filePath = resolveStoredPath(asset.storedName);
+    let stat;
     try {
-      bytes = await fs.readFile(resolveStoredPath(asset.storedName));
+      stat = await fs.stat(filePath);
     } catch {
       throw new ApiError("File content is missing", 404);
     }
 
     res.status(200).setHeader("Content-Type", asset.mime);
-    res.setHeader("Content-Length", String(bytes.byteLength));
+    res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.setHeader("X-Content-Type-Options", "nosniff");
     if (new URL(req.url, "http://localhost").searchParams.get("download")) {
@@ -257,7 +273,42 @@ router.get("/:id/file", async (req, res) => {
       res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
     }
 
-    return res.send(bytes);
+    const range = String(req.headers.range ?? "");
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (range && !match) {
+      res.status(416).setHeader("Content-Range", `bytes */${stat.size}`);
+      return res.end();
+    }
+
+    if (match && (match[1] !== "" || match[2] !== "")) {
+      let start: number;
+      let end: number;
+      if (match[1] === "") {
+        // suffix range: bytes=-N → the last N bytes
+        start = Math.max(0, stat.size - Number(match[2]));
+        end = stat.size - 1;
+      } else {
+        start = Number(match[1]);
+        end = match[2] === "" ? stat.size - 1 : Number(match[2]);
+      }
+      if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= stat.size) {
+        res.status(416).setHeader("Content-Range", `bytes */${stat.size}`);
+        return res.end();
+      }
+      end = Math.min(end, stat.size - 1);
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+      res.setHeader("Content-Length", String(end - start + 1));
+      const stream = createReadStream(filePath, { start, end });
+      stream.on("error", () => res.end());
+      return stream.pipe(res);
+    }
+
+    res.status(200);
+    res.setHeader("Content-Length", String(stat.size));
+    const stream = createReadStream(filePath);
+    stream.on("error", () => res.end());
+    return stream.pipe(res);
   } catch (e) {
     return handleError(e, res);
   }

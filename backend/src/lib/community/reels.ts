@@ -14,6 +14,9 @@ import { db } from "@/lib/db";
 import { ApiError } from "@/lib/session";
 import { communityAuthor } from "@/lib/community/serializers";
 import { deleteStored } from "@/lib/files";
+import { mediaWire } from "@/lib/media/media-asset";
+import { storage } from "@/lib/storage";
+import { invalidateMedia } from "@/lib/cache";
 import { sendPush, feedEvent } from "@/lib/community/push";
 
 // ─── Legacy constants (app/Models/Constants.php + SavedNotification types) ────
@@ -34,8 +37,12 @@ const PUSH_TITLE = process.env.APP_NAME || "Chatter.";
 export const reelInclude = {
   user: true,
   music: true,
+  media: true,
 } satisfies Prisma.CommunityReelInclude;
 export type ReelRow = Prisma.CommunityReelGetPayload<{ include: typeof reelInclude }>;
+
+/** Public-list visibility: legacy reels (no media) or a fully transcoded one. */
+const MEDIA_READY_OR_NONE = { OR: [{ mediaId: null }, { media: { status: "ready" } }] } satisfies Prisma.CommunityReelWhereInput;
 type CauseRow = Prisma.CommunityPostGetPayload<{ include: { category: true } }>; // fetched manually (no FK relation on CommunityReel.causeId)
 
 // ─── Moved helpers (were local to the legacy reels-rooms compat router) ──────
@@ -163,8 +170,11 @@ function causeJson(p: CauseRow) {
   };
 }
 
-/** Plain reel row (camelCase attributes). */
-export function reelJson(r: ReelRow) {
+/** Plain reel row (camelCase attributes + media playback hydration — status
+ *  "ready" for legacy reels without media; content/thumbnail swap to the
+ *  transcoded MP4/poster when available). */
+export async function reelJson(r: ReelRow) {
+  const media = await mediaWire(r.media);
   return {
     id: r.id,
     userId: r.userId,
@@ -172,9 +182,17 @@ export function reelJson(r: ReelRow) {
     interestIds: r.interestIds,
     musicId: r.musicId,
     description: r.description,
-    content: r.content,
-    thumbnail: r.thumbnail,
+    content: r.media?.status === "ready" && media.mp4Url ? media.mp4Url : r.content,
+    thumbnail: r.thumbnail ?? media.posterUrl,
     hashtags: r.hashtags,
+    status: media.status,
+    durationMs: media.durationMs,
+    width: media.width,
+    height: media.height,
+    aspectRatio: media.aspectRatio,
+    hlsUrl: media.hlsUrl,
+    mp4Url: media.mp4Url,
+    posterUrl: media.posterUrl,
     commentsCount: r.commentsCount,
     likesCount: r.likesCount,
     viewsCount: r.viewsCount,
@@ -208,10 +226,10 @@ async function processReels(reels: ReelRow[], myUserId: string): Promise<unknown
   const followedSet = new Set(myFollows.map((f) => f.userId));
   const causeById = new Map(causes.map((c) => [c.id, c]));
 
-  return reels.map((reel) => {
+  return Promise.all(reels.map(async (reel) => {
     const cause = reel.causeId ? causeById.get(reel.causeId) : undefined;
     return {
-      ...reelJson(reel),
+      ...(await reelJson(reel)),
       isLike: likedSet.has(reel.id) ? 1 : 0,
       commentsCount: commentCounts.get(reel.id) ?? 0,
       likesCount: likeCounts.get(reel.id) ?? 0,
@@ -221,7 +239,7 @@ async function processReels(reels: ReelRow[], myUserId: string): Promise<unknown
         : null,
       cause: cause ? causeJson(cause) : null,
     };
-  });
+  }));
 }
 
 /** Fetch one reel (or many by ids) with the standard includes. */
@@ -256,11 +274,16 @@ export interface CreateReelInput {
   interestIds?: string | null;
   musicId?: number | null;
   causeId?: string | null;
-  contentUrl: string;
-  thumbnailUrl: string;
+  /** Legacy multipart path — both uploaded-file URLs. */
+  contentUrl?: string | null;
+  thumbnailUrl?: string | null;
+  /** Direct-upload path — a MediaAsset id instead of a content file. */
+  mediaId?: string | null;
 }
 
-/** POST /api/reels — create a reel from multipart uploads (legacy uploadReel). */
+/** POST /api/reels — create a reel from multipart uploads (legacy uploadReel)
+ *  or from a presigned-upload mediaId (content/thumbnail left null — the
+ *  transcoder fills the playback URLs once the asset is ready). */
 export async function createReel(userId: string, input: CreateReelInput) {
   const reel = await db.communityReel.create({
     data: {
@@ -269,8 +292,9 @@ export async function createReel(userId: string, input: CreateReelInput) {
       description: input.description ?? null,
       interestIds: input.interestIds ?? null,
       hashtags: input.hashtags ?? null,
-      content: input.contentUrl,
-      thumbnail: input.thumbnailUrl,
+      content: input.contentUrl ?? null,
+      thumbnail: input.thumbnailUrl ?? null,
+      mediaId: input.mediaId ?? null,
       musicId: input.musicId ?? null,
     },
   });
@@ -302,6 +326,10 @@ export async function getReel(myUserId: string, reelId: string) {
     include: reelInclude,
   });
   if (!reel) throw new ApiError("Reel not found", 404);
+  // Still-processing direct uploads stay visible to the owner only.
+  if (reel.media && reel.media.status !== "ready" && reel.userId !== myUserId) {
+    throw new ApiError("Reel not found", 404);
+  }
   return serializeReel(reel, myUserId);
 }
 
@@ -327,11 +355,17 @@ export async function deleteReel(actorId: string, actorRole: string | undefined,
   await db.communityReport.deleteMany({ where: { reelId } }); // moderator path (legacy deleteReelByModerator)
   await deleteFileByUrl(reel.content); // owner path file cleanup (legacy deleteReel)
   await deleteFileByUrl(reel.thumbnail);
+  // Direct-upload cleanup: the media store prefix + the MediaAsset row.
+  if (reel.mediaId) {
+    await storage.deletePrefix(`media/${reel.mediaId}/`).catch(() => {});
+    await db.mediaAsset.delete({ where: { id: reel.mediaId } }).catch(() => {});
+    await invalidateMedia(reel.mediaId);
+  }
   await db.savedNotification.deleteMany({ where: { reelId, type: { in: commentTypes } } });
   await db.communityReel.delete({ where: { id: reel.id } });
 
   feedEvent("community.reel.deleted", { reelId, userId: actorId });
-  return reelJson(reel);
+  return await reelJson(reel);
 }
 
 // ─── Listing ──────────────────────────────────────────────────────────────────
@@ -352,6 +386,7 @@ export async function listExploreReels(
   const baseWhere: Prisma.CommunityReelWhereInput = {
     ...(blockUserIds.length ? { userId: { notIn: blockUserIds } } : {}),
     user: { isBlock: UNBLOCKED },
+    ...MEDIA_READY_OR_NONE,
   };
 
   let reelIds: string[];
@@ -404,6 +439,8 @@ export async function listReelsByUser(myUserId: string, targetUserId: string, sk
   const where: Prisma.CommunityReelWhereInput = {
     userId: targetUserId,
     user: { isBlock: UNBLOCKED },
+    // the owner always sees their own processing uploads
+    ...(myUserId === targetUserId ? {} : MEDIA_READY_OR_NONE),
   };
   // legacy whereNotIn('user_id', blockUserIds) — a self-blocked author yields no rows
   if (blockUserIds.length) {
@@ -440,6 +477,7 @@ export async function searchReelsByInterest(
   const where: Prisma.CommunityReelWhereInput = {
     user: { isBlock: UNBLOCKED },
     ...(blockUserIds.length ? { userId: { notIn: blockUserIds } } : {}),
+    ...MEDIA_READY_OR_NONE,
   };
   if (interestIds.length) {
     const matches = await Promise.all(interestIds.map((id) => csvMatchIds("app_reels", "interest_ids", id)));
@@ -468,6 +506,7 @@ export async function listReelsByHashtag(myUserId: string, tags: string[], skip:
     id: { in: [...new Set(matching.flat())] },
     user: { isBlock: UNBLOCKED },
     ...(blockUserIds.length ? { userId: { notIn: blockUserIds } } : {}),
+    ...MEDIA_READY_OR_NONE,
   };
   const [reels, total] = await Promise.all([
     db.communityReel.findMany({ where, include: reelInclude, orderBy: { createdAt: "desc" }, skip, take }),
@@ -482,8 +521,8 @@ export async function listReelsByMusic(myUserId: string, musicId: number, skip: 
   if (!music) throw new ApiError("Music not found", 404);
 
   const [reels, total] = await Promise.all([
-    db.communityReel.findMany({ where: { musicId }, include: reelInclude, orderBy: { createdAt: "desc" }, skip, take }),
-    db.communityReel.count({ where: { musicId } }),
+    db.communityReel.findMany({ where: { musicId, ...MEDIA_READY_OR_NONE }, include: reelInclude, orderBy: { createdAt: "desc" }, skip, take }),
+    db.communityReel.count({ where: { musicId, ...MEDIA_READY_OR_NONE } }),
   ]);
   return { rows: await processReels(reels, myUserId), total };
 }
@@ -501,6 +540,7 @@ export async function listSavedReels(myUserId: string, skip: number, take: numbe
     id: { in: savedReelIds },
     user: { isBlock: UNBLOCKED },
     ...(blockUserIds.length ? { userId: { notIn: blockUserIds } } : {}),
+    ...MEDIA_READY_OR_NONE,
   };
   const [reels, total] = await Promise.all([
     db.communityReel.findMany({ where, include: reelInclude, orderBy: { createdAt: "desc" }, skip, take }),
@@ -531,7 +571,7 @@ export async function toggleReelLike(userId: string, reelId: string) {
     await db.communityLike.delete({ where: { id: likeRecord.id } });
 
     return {
-      ...reelJson(reel),
+      ...(await reelJson(reel)),
       isLike: 0,
       likesCount: newCount,
       user: reel.user ? communityAuthor(reel.user) : null,
@@ -564,7 +604,7 @@ export async function toggleReelLike(userId: string, reelId: string) {
 
   feedEvent("community.reel.liked", { reelId: reel.id, userId });
   return {
-    ...reelJson(reel),
+    ...(await reelJson(reel)),
     isLike: 1,
     likesCount: newCount,
     user: reel.user ? communityAuthor(reel.user) : null,

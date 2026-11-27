@@ -16,6 +16,7 @@
 import nodemailer from "nodemailer";
 import { db } from "@/lib/db";
 import { isFlagOn, type SettingsMap } from "@/lib/settings-core";
+import { cached, cacheTtl, settingsKey } from "@/lib/cache";
 
 export interface ChannelResult {
   ok: boolean;
@@ -28,10 +29,13 @@ const HTTP_TIMEOUT_MS = 10_000;
 
 /* ─────────────────────────── settings loading ──────────────────────────── */
 
-/** Reads the whole Setting table once into a flat map (raw values incl. secrets). */
+/** Reads the whole Setting table once into a flat map (raw values incl. secrets).
+ *  Cached — settings change only when an admin saves, which drops this key. */
 export async function loadSettings(): Promise<SettingsMap> {
-  const rows = await db.setting.findMany();
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return cached(settingsKey("map"), cacheTtl.settings, async () => {
+    const rows = await db.setting.findMany();
+    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  });
 }
 
 /* ──────────────────────────────── email ────────────────────────────────── */

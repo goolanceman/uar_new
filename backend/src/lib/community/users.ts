@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { ApiError } from "@/lib/session";
 import { sendPush } from "@/lib/community/push";
 import { communityUser, communityUserSelect, csvList, type CommunityUserRow } from "@/lib/community/serializers";
+import { invalidateCatalog } from "@/lib/cache";
 
 /** SavedNotification type for "user followed you" (legacy type 1). */
 const NOTIFICATION_TYPE_FOLLOW = 1;
@@ -71,6 +72,7 @@ export async function deleteUserCascade(userId: string): Promise<void> {
     await db.savedNotification.deleteMany({ where: { roomId: room.id } });
     await db.communityRoom.delete({ where: { id: room.id } });
   }
+  if (rooms.length) await invalidateCatalog("interests");
 
   // Reels — comments, likes, reports and their saved notifications.
   const reels = await db.communityReel.findMany({ where: { userId } });

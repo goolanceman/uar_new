@@ -16,6 +16,7 @@ import {
 } from "@/lib/session";
 import { nextRxCode } from "@/lib/health-codes";
 import { orgProfile, esc, printDocument } from "@/lib/api-org";
+import { BRAND_MARK_DATA_URI } from "@/lib/brand-mark";
 import { formatDateLong, formatDateTime } from "@/lib/format";
 
 export const router = Router();
@@ -643,9 +644,7 @@ router.get("/:id/print", async (req, res) => {
   .head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-top:14px; }
   .brand { display:flex; gap:13px; align-items:center; }
   .mono { width:54px; height:54px; border-radius:14px; flex-shrink:0;
-    background:linear-gradient(150deg,#064e3b,#059669); color:#fff; display:flex;
-    align-items:center; justify-content:center; font:800 17px Georgia,serif;
-    letter-spacing:1px; box-shadow:0 2px 8px rgba(6,78,59,.28); }
+    object-fit:contain; box-shadow:0 2px 8px rgba(6,78,59,.28); }
   .brand-name { font:700 20px Georgia,serif; }
   .brand-tag { font-size:10.5px; color:var(--ink-3); margin-top:2px; letter-spacing:.4px; }
   .brand-addr { font-size:10.5px; color:var(--ink-4); margin-top:3px; line-height:1.5; }
@@ -705,7 +704,7 @@ router.get("/:id/print", async (req, res) => {
   <div class="accent-bar"></div>
   <div class="head">
     <div class="brand">
-      <div class="mono">UAR</div>
+      <img class="mono" src="${BRAND_MARK_DATA_URI}" alt="${esc(org.name)}" />
       <div>
         <div class="brand-name">${esc(org.name)}</div>
         <div class="brand-tag">Service · Dignity · Transparency · Technology-for-Good</div>

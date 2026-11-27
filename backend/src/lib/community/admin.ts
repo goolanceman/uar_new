@@ -10,6 +10,7 @@ import { ApiError, requireAuth, type Session } from "@/lib/session";
 import { communityAuthor, communityAuthorSelect, communityUser } from "@/lib/community/serializers";
 import { feedEvent } from "@/lib/community/push";
 import { syncPostCommentCounts } from "@/lib/community/counters";
+import { getCachedMediaMany } from "@/lib/cache";
 
 /**
  * Moderator/admin gate — the session role must be ADMIN/MODERATOR, with the
@@ -330,4 +331,68 @@ export async function adminDonations(causePostId: string | null, skip: number, l
     });
   }
   return { items, total, totalRaised: agg._sum.amount ?? 0 };
+}
+
+const MEDIA_STATUSES = ["pending_upload", "uploaded", "processing", "ready", "failed"];
+
+/** GET /api/community/admin/reels — every reel with its transcode state.
+ *  Status comes from Redis where the worker cached it; only the misses hit
+ *  app_media_assets, and those are cached for the next page. */
+export async function adminReels(q: string, status: string | null, skip: number, limit: number) {
+  if (status && !MEDIA_STATUSES.includes(status)) throw new ApiError("Invalid transcode status", 400);
+
+  const where: Prisma.CommunityReelWhereInput = {
+    ...(q
+      ? {
+          OR: [
+            { description: { contains: q, mode: "insensitive" } },
+            { user: { name: { contains: q, mode: "insensitive" } } },
+          ],
+        }
+      : {}),
+    ...(status ? { media: { status } } : {}),
+  };
+
+  const [rows, total] = await Promise.all([
+    db.communityReel.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
+      include: {
+        user: { select: communityAuthorSelect },
+        media: { select: { id: true, status: true, attempts: true, error: true, durationMs: true, readyAt: true } },
+        _count: { select: { likes: true, comments: true, reports: true } },
+      },
+    }),
+    db.communityReel.count({ where }),
+  ]);
+
+  // Prefer the cached status — it's what the worker last wrote, and it
+  // saves a join's worth of staleness when a video just changed state.
+  const cached = await getCachedMediaMany(rows.flatMap((r) => (r.media ? [r.media.id] : [])));
+
+  const items = rows.map((r) => ({
+    id: r.id,
+    description: r.description,
+    thumbnail: r.thumbnail,
+    hashtags: r.hashtags,
+    viewsCount: r.viewsCount,
+    likesCount: r._count.likes,
+    commentsCount: r._count.comments,
+    reportsCount: r._count.reports,
+    createdAt: r.createdAt.toISOString(),
+    author: communityAuthor(r.user),
+    transcode: r.media
+      ? {
+          mediaId: r.media.id,
+          status: cached.get(r.media.id)?.status ?? r.media.status,
+          attempts: r.media.attempts,
+          error: r.media.error,
+          durationMs: r.media.durationMs,
+          readyAt: r.media.readyAt ? r.media.readyAt.toISOString() : null,
+        }
+      : null,
+  }));
+  return { items, total };
 }

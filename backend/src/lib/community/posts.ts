@@ -12,6 +12,9 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { ApiError } from "@/lib/session";
 import { saveUpload } from "@/lib/files";
+import { assertAttachableMedia, mediaWire } from "@/lib/media/media-asset";
+import { storage } from "@/lib/storage";
+import { invalidateMedia } from "@/lib/cache";
 import { csvList, communityAuthor, type CommunityAuthorRow } from "@/lib/community/serializers";
 import { sendPush, feedEvent } from "@/lib/community/push";
 import { syncPostCommentCounts } from "@/lib/community/counters";
@@ -30,12 +33,20 @@ type CommentRow = Prisma.CommunityCommentGetPayload<{
 }>;
 
 const POST_INCLUDE = {
-  content: { orderBy: { createdAt: "asc" } },
+  content: { orderBy: { createdAt: "asc" }, include: { media: true } },
   user: true,
   category: true,
   _count: { select: { comments: { where: { user: { isBlock: 0 } } } } },
 } satisfies Prisma.CommunityPostInclude;
 type PostRow = Prisma.CommunityPostGetPayload<{ include: typeof POST_INCLUDE }>;
+
+/** Feed visibility for direct uploads: a post with any still-processing media
+ *  stays visible to its owner only. */
+function mediaReadyOrOwner(meId: string): Prisma.CommunityPostWhereInput {
+  return {
+    OR: [{ userId: meId }, { content: { none: { media: { status: { not: "ready" } } } } }],
+  };
+}
 
 // ─── Actor helpers ────────────────────────────────────────────────────────────
 
@@ -108,14 +119,23 @@ function serializeCategory(c: NonNullable<PostRow["category"]>) {
   };
 }
 
-function serializeContent(c: PostRow["content"][number]) {
+async function serializeContent(c: PostRow["content"][number]) {
+  const media = await mediaWire(c.media);
   return {
     id: c.id,
     postId: c.postId,
     contentType: c.contentType,
-    content: c.content,
-    thumbnail: c.thumbnail,
+    content: c.media?.status === "ready" && media.mp4Url ? media.mp4Url : c.content,
+    thumbnail: c.thumbnail ?? media.posterUrl,
     audioWaves: c.audioWaves,
+    status: media.status,
+    durationMs: media.durationMs,
+    width: media.width,
+    height: media.height,
+    aspectRatio: media.aspectRatio,
+    hlsUrl: media.hlsUrl,
+    mp4Url: media.mp4Url,
+    posterUrl: media.posterUrl,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   };
@@ -129,7 +149,7 @@ type PostExtra = {
   likesCount?: number;
 };
 
-function serializePost(p: PostRow, extra: PostExtra = {}) {
+async function serializePost(p: PostRow, extra: PostExtra = {}) {
   const counts = extra.counts ?? {};
   const support = counts.support ?? 0;
   const prayers = counts.prayers ?? 0;
@@ -159,7 +179,7 @@ function serializePost(p: PostRow, extra: PostExtra = {}) {
     isRestricted: p.isRestricted,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
-    content: p.content.map(serializeContent),
+    content: await Promise.all(p.content.map(serializeContent)),
     user: communityAuthor(p.user),
     category: p.category ? serializeCategory(p.category) : null,
     isLike: extra.isLike ?? 0,
@@ -241,18 +261,18 @@ async function processPosts(posts: PostRow[], myUserId: string) {
     countsByPost.set(g.postId, per);
   }
 
-  return posts.map((p) => {
+  return Promise.all(posts.map((p) => {
     const like = mineByPost.get(p.id);
     return serializePost(p, {
       isLike: like ? 1 : 0,
       reactionType: like ? like.reactionType : null,
       counts: countsByPost.get(p.id) ?? {},
     });
-  });
+  }));
 }
 
 /** Cause posts get progressPercentage (Post::getProgressPercentage). */
-function withCauseProgress(posts: PostRow[], wires: ReturnType<typeof serializePost>[]) {
+function withCauseProgress(posts: PostRow[], wires: Awaited<ReturnType<typeof serializePost>>[]) {
   for (const [i, post] of posts.entries()) {
     if (post.type === "cause") {
       wires[i].progressPercentage =
@@ -265,14 +285,17 @@ function withCauseProgress(posts: PostRow[], wires: ReturnType<typeof serializeP
 }
 
 /** Random page of feed post ids — Postgres port of Eloquent inRandomOrder(). */
-async function randomPostIds(where: Prisma.CommunityPostWhereInput, limit: number): Promise<string[]> {
+async function randomPostIds(meId: string, where: Prisma.CommunityPostWhereInput, limit: number): Promise<string[]> {
   const blockedIds = Array.isArray(where.userId && (where.userId as { notIn?: string[] }).notIn)
     ? ((where.userId as { notIn: string[] }).notIn as string[])
     : [];
   const blockedSql = blockedIds.length > 0 ? Prisma.sql` AND p.user_id NOT IN (${Prisma.join(blockedIds)})` : Prisma.empty;
   const rows = await db.$queryRaw<Array<{ id: string }>>(
     Prisma.sql`SELECT p.id FROM "app_posts" p INNER JOIN "users" u ON u."id" = p."user_id"
-               WHERE u."isBlock" = 0 AND p."is_restricted" = 0${blockedSql}
+               WHERE u."isBlock" = 0 AND p."is_restricted" = 0
+                 AND (p."user_id" = ${meId} OR NOT EXISTS (
+                   SELECT 1 FROM "app_post_contents" c INNER JOIN "app_media_assets" m ON m."id" = c."media_id"
+                   WHERE c."post_id" = p."id" AND m."status" <> 'ready'))${blockedSql}
                ORDER BY random() LIMIT ${limit}`
   );
   return rows.map((r) => r.id);
@@ -289,12 +312,13 @@ export async function listFeed(meId: string, opts: { type?: string; skip: number
     user: { isBlock: 0 },
     userId: { notIn: csvList(me.blockUserIds) },
     isRestricted: 0,
+    ...mediaReadyOrOwner(me.id),
   };
 
   let posts: PostRow[];
   let total: number | undefined;
   if (opts.type === "random") {
-    const ids = await randomPostIds(where, opts.take);
+    const ids = await randomPostIds(me.id, where, opts.take);
     posts = ids.length
       ? await db.communityPost.findMany({ where: { id: { in: ids } }, include: POST_INCLUDE })
       : [];
@@ -338,6 +362,7 @@ export async function listSavedPosts(meId: string, skip: number, take: number) {
     user: { isBlock: 0 },
     isRestricted: 0,
     ...(blockedIds.length ? { userId: { notIn: blockedIds } } : {}),
+    ...mediaReadyOrOwner(me.id),
   };
   const [rows, total] = await Promise.all([
     db.communityPost.findMany({ where, include: POST_INCLUDE, orderBy: { createdAt: "desc" }, skip, take }),
@@ -369,13 +394,22 @@ export async function listUserPosts(meId: string, userId: string, skip: number, 
 
   const [posts, total] = await Promise.all([
     db.communityPost.findMany({
-      where: { userId: user.id },
+      where: {
+        userId: user.id,
+        // the owner always sees their own posts with processing media
+        ...(meId === user.id ? {} : mediaReadyOrOwner(meId)),
+      },
       include: POST_INCLUDE,
       orderBy: { createdAt: "desc" },
       skip,
       take,
     }),
-    db.communityPost.count({ where: { userId: user.id } }),
+    db.communityPost.count({
+      where: {
+        userId: user.id,
+        ...(meId === user.id ? {} : mediaReadyOrOwner(meId)),
+      },
+    }),
   ]);
 
   // Recount comments/likes excluding blocked users (PHP loops per post).
@@ -397,12 +431,12 @@ export async function listUserPosts(meId: string, userId: string, skip: number, 
   const likeByPost = new Map(likeCounts.map((c) => [c.postId, c._count._all]));
   const likedPostIds = new Set(mine.map((l) => l.postId));
 
-  const wires = posts.map((post) => {
-    const wire = serializePost(post, { isLike: likedPostIds.has(post.id) ? 1 : 0 });
+  const wires = await Promise.all(posts.map(async (post) => {
+    const wire = await serializePost(post, { isLike: likedPostIds.has(post.id) ? 1 : 0 });
     wire.commentsCount = commentByPost.get(post.id) ?? 0;
     wire.likesCount = likeByPost.get(post.id) ?? 0;
     return wire;
-  });
+  }));
 
   return { items: wires, total };
 }
@@ -420,9 +454,15 @@ export type CreatePostInput = {
   communityLabel?: string | null;
   contentType?: number;
   audioWaves?: string | null;
+  /** Direct-upload video ids (contentType 1) — used instead of content files. */
+  mediaIds?: string[];
 };
 
-/** POST /api/posts — multipart media + text (legacy addPost). */
+const MAX_CONTENT_FILES = 20; // matches the /api/files per-request cap
+
+/** POST /api/posts — multipart media + text (legacy addPost), or direct-upload
+ *  videos via `mediaIds` (validated like content files: owner, purpose, status,
+ *  not already attached). */
 export async function createPost(
   req: Request,
   me: { id: string; name: string },
@@ -430,8 +470,29 @@ export async function createPost(
 ) {
   const contentFiles = collectFiles(req, "content");
   const thumbnails = collectFiles(req, "thumbnail");
+  const mediaIds = input.mediaIds ?? [];
   if (contentFiles.length > 0 && input.contentType === undefined) {
     throw new ApiError("The content type field is required when content is not null", 400);
+  }
+  if (contentFiles.length > 0 && mediaIds.length > 0) {
+    throw new ApiError("Send either content files or mediaIds, not both", 400);
+  }
+  if (mediaIds.length > MAX_CONTENT_FILES) {
+    throw new ApiError(`Too many mediaIds — max ${MAX_CONTENT_FILES} per post`, 400);
+  }
+  if (mediaIds.length > 0) {
+    if (input.contentType === undefined) {
+      throw new ApiError("The content type field is required when content is not null", 400);
+    }
+    if (Math.trunc(input.contentType) !== 1) {
+      throw new ApiError("mediaIds are only supported for video posts (contentType 1)", 400);
+    }
+  }
+  // Validate every media asset BEFORE creating the post row (owner/purpose/
+  // status/not-attached) — a 400 after the post row would orphan it.
+  const assets = [];
+  for (const id of mediaIds) {
+    assets.push(await assertAttachableMedia(me.id, id, "post"));
   }
 
   const post = await db.communityPost.create({
@@ -457,6 +518,23 @@ export async function createPost(
     });
   }
 
+  // Direct-upload videos: content stays "" (the MP4/HLS URLs hydrate on read
+  // once the asset is ready); thumbnail from the uploaded file, else null.
+  for (let i = 0; i < assets.length; i++) {
+    const asset = assets[i];
+    const thumbnail = thumbnails[i] ? await saveCommunityUpload(req, thumbnails[i], me) : null;
+    await db.communityPostContent.create({
+      data: {
+        postId: post.id,
+        contentType: 1,
+        content: "",
+        thumbnail,
+        audioWaves: input.audioWaves ?? null,
+        mediaId: asset!.id,
+      },
+    });
+  }
+
   const full = await db.communityPost.findUnique({ where: { id: post.id }, include: POST_INCLUDE });
   feedEvent("post.created", { id: post.id, user_id: post.userId });
   return full ? (await processPosts([full], me.id))[0] : null;
@@ -470,6 +548,14 @@ export async function deletePost(meId: string, role: string | undefined, postId:
 
   await db.communityReport.deleteMany({ where: { postId: post.id, type: 1 } });
   await db.savedNotification.deleteMany({ where: { postId: post.id } });
+  // Direct-upload media: store prefix + MediaAsset rows (contents cascade).
+  for (const c of post.content) {
+    if (c.mediaId) {
+      await storage.deletePrefix(`media/${c.mediaId}/`).catch(() => {});
+      await db.mediaAsset.delete({ where: { id: c.mediaId } }).catch(() => {});
+      await invalidateMedia(c.mediaId);
+    }
+  }
   // Comments (→ their LikeComments), contents and likes cascade with the post.
   await db.communityPost.delete({ where: { id: post.id } });
 
@@ -499,7 +585,7 @@ export async function searchPosts(meId: string, keyword: string, skip: number, t
   const likedIds = new Set(mine.map((l) => l.postId));
 
   return {
-    items: posts.map((post) => serializePost(post, { isLike: likedIds.has(post.id) ? 1 : 0 })),
+    items: await Promise.all(posts.map((post) => serializePost(post, { isLike: likedIds.has(post.id) ? 1 : 0 }))),
     total: undefined as number | undefined,
   };
 }
@@ -516,6 +602,7 @@ export async function listPostsByInterest(meId: string, interestIds: string[], s
     where: {
       user: { isBlock: 0 },
       userId: { notIn: csvList(me.blockUserIds) },
+      ...mediaReadyOrOwner(me.id),
     },
     include: POST_INCLUDE,
     orderBy: { createdAt: "desc" },
@@ -524,7 +611,7 @@ export async function listPostsByInterest(meId: string, interestIds: string[], s
   const items = posts
     .filter((post) => interestIds.some((id) => csvHas(post.interestIds, id)))
     .slice(skip, skip + take);
-  return { items: items.map((post) => serializePost(post)), total: undefined as number | undefined };
+  return { items: await Promise.all(items.map((post) => serializePost(post))), total: undefined as number | undefined };
 }
 
 /** GET /api/posts/by-hashtag?tags= (legacy fetchPostsByHashtag — CSV match). */
@@ -536,6 +623,7 @@ export async function listPostsByHashtag(meId: string, tags: string[], skip: num
     where: {
       user: { isBlock: 0 },
       userId: { notIn: csvList(me.blockUserIds) },
+      ...mediaReadyOrOwner(me.id),
     },
     include: POST_INCLUDE,
     orderBy: { createdAt: "desc" },
@@ -544,7 +632,7 @@ export async function listPostsByHashtag(meId: string, tags: string[], skip: num
   const items = posts
     .filter((post) => tags.some((tag) => csvHas(post.tags, tag)))
     .slice(skip, skip + take);
-  return { items: items.map((post) => serializePost(post)), total: undefined as number | undefined };
+  return { items: await Promise.all(items.map((post) => serializePost(post))), total: undefined as number | undefined };
 }
 
 /** GET /api/posts/hashtags?q= → [{tag, postCount}] (legacy searchHashtag). */
@@ -637,7 +725,7 @@ export async function likePost(meId: string, postId: string, reaction?: string |
   const fullLike = await db.communityLike.findUnique({ where: { id: like.id }, include: { user: true } });
   return {
     like: serializeLike(fullLike ?? { ...like, user: user as LikeRow["user"] }),
-    post: { ...serializePost(post), likesCount: post.likesCount + 1 },
+    post: { ...(await serializePost(post)), likesCount: post.likesCount + 1 },
     message: "Post Liked",
   };
 }

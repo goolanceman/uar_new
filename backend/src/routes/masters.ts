@@ -12,6 +12,7 @@ import {
   ApiError,
   logActivity,
 } from "@/lib/session";
+import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
 
 export const router = Router();
 
@@ -24,30 +25,36 @@ router.get("/", async (req, res) => {
     const sp = new URL(req.url, "http://localhost").searchParams;
 
     if (sp.get("categories")) {
-      const rows = await db.master.findMany({
-        distinct: ["category"],
-        select: { category: true },
-        orderBy: { category: "asc" },
-      });
+      const rows = await cached(catalogKey("masters", "categories"), cacheTtl.catalog, () =>
+        db.master.findMany({
+          distinct: ["category"],
+          select: { category: true },
+          orderBy: { category: "asc" },
+        })
+      );
       return json(res, rows.map((r) => r.category));
     }
 
     if (sp.get("all")) {
       await requireRole(req, "ADMIN");
-      const rows = await db.master.findMany({
-        orderBy: [{ category: "asc" }, { sortOrder: "asc" }],
-      });
+      const rows = await cached(catalogKey("masters", "all"), cacheTtl.catalog, () =>
+        db.master.findMany({
+          orderBy: [{ category: "asc" }, { sortOrder: "asc" }],
+        })
+      );
       return json(res, rows);
     }
 
     const category = sp.get("category");
     if (!category) return json(res, []);
 
-    const rows = await db.master.findMany({
-      where: { category, active: true },
-      orderBy: { sortOrder: "asc" },
-      select: { value: true, label: true },
-    });
+    const rows = await cached(catalogKey("masters", cacheKeyPart({ category })), cacheTtl.catalog, () =>
+      db.master.findMany({
+        where: { category, active: true },
+        orderBy: { sortOrder: "asc" },
+        select: { value: true, label: true },
+      })
+    );
     return json(res, rows);
   } catch (e) {
     return handleError(e, res);
@@ -86,6 +93,7 @@ router.post("/", async (req, res) => {
       `${category}/${value}`,
       session.userId
     );
+    await invalidateCatalog("masters");
     return json(res, row, 201);
   } catch (e) {
     return handleError(e, res);
@@ -131,6 +139,7 @@ router.patch("/:id", async (req, res) => {
       `${row.category}/${row.value}`,
       session.userId
     );
+    await invalidateCatalog("masters");
     return json(res, row);
   } catch (e) {
     return handleError(e, res);
@@ -153,6 +162,7 @@ router.delete("/:id", async (req, res) => {
       `${row.category}/${row.value}`,
       session.userId
     );
+    await invalidateCatalog("masters");
     return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);

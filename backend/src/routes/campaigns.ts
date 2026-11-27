@@ -14,6 +14,14 @@ import {
 } from "@/lib/session";
 import { nextCampaignCode } from "@/lib/codes";
 import { CAMPAIGN_STATUSES } from "@/lib/campaigns";
+import {
+  cached,
+  cacheKeyPart,
+  cacheTtl,
+  campaignDetailKey,
+  campaignListKey,
+  invalidateCampaigns,
+} from "@/lib/cache";
 
 export const router = Router();
 
@@ -179,6 +187,57 @@ router.get("/", async (req, res) => {
     const limit = Math.min(100, Math.max(1, Number(sp.get("limit")) || 20));
     const page = Math.max(1, Number(pageParam) || 1);
 
+    // Admin "all" includes drafts, so it is a different cache entry from the
+    // public list. Search and filters are part of the key.
+    const listKey = campaignListKey(
+      cacheKeyPart({
+        admin: isAdmin && all ? 1 : 0,
+        category,
+        status,
+        q,
+        featured: featured ? 1 : 0,
+        urgent: urgentOnly ? 1 : 0,
+        sort,
+        page: pageParam !== null ? page : 0,
+        limit: pageParam !== null ? limit : 0,
+      })
+    );
+
+    const payload = await cached(listKey, cacheTtl.campaign, () =>
+      loadCampaignList({
+        isAdmin,
+        all,
+        category,
+        status,
+        q,
+        featured,
+        urgentOnly,
+        sort,
+        pageParam,
+        limit,
+        page,
+      })
+    );
+    return json(res, payload);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+async function loadCampaignList(opts: {
+  isAdmin: boolean;
+  all: boolean;
+  category: string | null;
+  status: string | null;
+  q: string | undefined;
+  featured: boolean;
+  urgentOnly: boolean;
+  sort: string;
+  pageParam: string | null;
+  limit: number;
+  page: number;
+}) {
+  const { isAdmin, all, category, status, q, featured, urgentOnly, sort, pageParam, limit, page } = opts;
     const where: Record<string, unknown> = {};
     if (!isAdmin || !all) where.status = { not: "DRAFT" };
     if (status) where.status = status;
@@ -287,19 +346,16 @@ router.get("/", async (req, res) => {
     if (pageParam !== null) {
       const total = rows.length;
       const pages = Math.max(1, Math.ceil(total / limit));
-      return json(res, {
+      return {
         items: rows.slice((page - 1) * limit, page * limit),
         total,
         page,
         pages,
-      });
+      };
     }
 
-    return json(res, rows);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+    return rows;
+}
 
 // POST /api/campaigns — admin creates a campaign
 router.post("/", async (req, res) => {
@@ -377,6 +433,7 @@ router.post("/", async (req, res) => {
       `${campaign.title} (₹${campaign.targetAmount})`,
       session.userId
     );
+    await invalidateCampaigns();
 
     return json(res, campaign, 201);
   } catch (e) {
@@ -389,23 +446,29 @@ router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    let campaign = await db.campaign.findUnique({ where: { id } });
-    if (!campaign) {
-      campaign = await db.campaign.findUnique({ where: { slug: id } });
-    }
-    if (!campaign) throw new ApiError("Campaign not found", 404);
+    // Detail is cached by the path param (id or slug). A miss on a deleted
+    // id is not cached, so a typo never occupies a slot until TTL.
+    const payload = await cached(campaignDetailKey(id), cacheTtl.campaign, async () => {
+      let campaign = await db.campaign.findUnique({ where: { id } });
+      if (!campaign) {
+        campaign = await db.campaign.findUnique({ where: { slug: id } });
+      }
+      if (!campaign) return null;
 
-    // Same projection as the list: auto-expired appeals read as non-urgent and
-    // the computed fields every client gets.
-    const donorCount = await db.donation.count({
-      where: { paymentStatus: "COMPLETED", campaignId: campaign.id },
+      // Same projection as the list: auto-expired appeals read as non-urgent and
+      // the computed fields every client gets.
+      const donorCount = await db.donation.count({
+        where: { paymentStatus: "COMPLETED", campaignId: campaign.id },
+      });
+      return {
+        ...expireUrgency(campaign),
+        donorCount,
+        progressPct: progressPctOf(campaign.raisedAmount, campaign.targetAmount),
+        daysLeft: daysLeftOf(campaign.endDate),
+      };
     });
-    return json(res, {
-      ...expireUrgency(campaign),
-      donorCount,
-      progressPct: progressPctOf(campaign.raisedAmount, campaign.targetAmount),
-      daysLeft: daysLeftOf(campaign.endDate),
-    });
+    if (!payload) throw new ApiError("Campaign not found", 404);
+    return json(res, payload);
   } catch (e) {
     return handleError(e, res);
   }
@@ -436,6 +499,7 @@ router.patch("/:id/urgency", async (req, res) => {
       `${campaign.title} → urgent=${campaign.urgent}${campaign.urgencyLevel ? `, level=${campaign.urgencyLevel}` : ""}${campaign.urgentUntil ? `, until=${campaign.urgentUntil.toISOString()}` : ""}`,
       session.userId
     );
+    await invalidateCampaigns();
 
     return json(res, campaign);
   } catch (e) {
@@ -552,6 +616,7 @@ router.patch("/:id", async (req, res) => {
       `${campaign.title} → ${Object.keys(data).join(", ")}`,
       session.userId
     );
+    await invalidateCampaigns();
 
     return json(res, campaign);
   } catch (e) {
@@ -581,6 +646,7 @@ router.delete("/:id", async (req, res) => {
       existing.title,
       session.userId
     );
+    await invalidateCampaigns();
 
     return json(res, { ok: true });
   } catch (e) {

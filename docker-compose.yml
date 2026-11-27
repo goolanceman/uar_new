@@ -17,6 +17,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # File and ready-video lookups are cached here so image and HLS segment
+  # requests don't each hit Postgres. The API degrades to the database if
+  # this service is down (REDIS_URL unset has the same effect).
+  redis:
+    image: redis:7-alpine
+    container_name: uar-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ─── UAR standalone backend API (Express + Prisma → postgres service) ────
   # Data (schema push / seed / migration) lives in the uar_pgdata volume, so
   # the API container only needs to connect and serve.
@@ -29,17 +45,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - ./backend/.env
     environment:
       # Inside the compose network the DB hostname is the service name
       # (`postgres`), NOT localhost — overrides the value in backend/.env.
       DATABASE_URL: postgresql://uar:uar_dev_password@postgres:5432/uar?schema=public
+      # Inside the compose network the cache hostname is the service name.
+      REDIS_URL: redis://redis:6379
       PORT: 3005
       # Uploaded files: bind-mounted host dir so files uploaded before
       # containerisation keep working (files/[id]/file serves from here).
       UPLOAD_DIR: /app/uploads
       CORS_ORIGINS: "http://localhost:3000,http://localhost:3001,http://localhost:8090,http://127.0.0.1:8090,http://localhost:9090,http://127.0.0.1:9090,http://192.168.1.8:9090"
+      # Media pipeline (all optional — defaults in code; set via backend/.env):
+      #   STORAGE_DRIVER (local|s3), PUBLIC_BASE_URL, MEDIA_SIGNING_SECRET,
+      #   S3_BUCKET, S3_REGION, S3_ENDPOINT, S3_ACCESS_KEY_ID,
+      #   S3_SECRET_ACCESS_KEY, S3_FORCE_PATH_STYLE, S3_PUBLIC_BASE_URL,
+      #   MAX_VIDEO_UPLOAD_BYTES, MAX_VIDEO_DURATION_SEC, KEEP_MEDIA_SOURCE,
+      #   TRANSCODER_ENABLED, TRANSCODER_POLL_MS, TRANSCODE_CONCURRENCY,
+      #   FFMPEG_PATH, FFPROBE_PATH
     ports:
       - "3005:3005"
       - "6001:6001" # Pusher-protocol WebSocket (mobile chat real-time)
@@ -52,5 +79,53 @@ services:
       retries: 6
       start_period: 15s
 
+  # S3-compatible object store for media (reels, post videos, music).
+  # RustFS speaks the S3 API, so the backend's s3 driver talks to it unchanged.
+  # The bucket stays private; the API hands out presigned GET URLs for playback.
+  # Console: http://localhost:9001
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: uar-rustfs
+    restart: unless-stopped
+    command: /data
+    environment:
+      RUSTFS_ACCESS_KEY: "uarrustfs"
+      RUSTFS_SECRET_KEY: "uar_rustfs_dev_password"
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - uar_rustfs:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # Creates the media bucket once RustFS answers. Exits; safe to re-run.
+  rustfs-init:
+    image: amazon/aws-cli:latest
+    container_name: uar-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: "uarrustfs"
+      AWS_SECRET_ACCESS_KEY: "uar_rustfs_dev_password"
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - /bin/sh
+      - -c
+      - aws --endpoint-url http://rustfs:9000 s3 mb s3://uar-media || true
+    restart: "no"
 volumes:
   uar_pgdata:
+  uar_rustfs:

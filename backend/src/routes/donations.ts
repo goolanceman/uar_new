@@ -18,6 +18,7 @@ import { CURRENCY_CODES } from "@/lib/settings-core";
 import { assertTransition } from "@/lib/workflow";
 import { loadSettings, notifyDonation, emailShell, sendEmail } from "@/lib/notify";
 import { broadcastEvent } from "@/lib/events";
+import { invalidateCampaigns, invalidateStats } from "@/lib/cache";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
   VALID_FREQUENCIES,
@@ -113,6 +114,8 @@ async function recomputeCampaign(campaignId: string | null | undefined) {
     where: { id: campaignId },
     data: { raisedAmount: agg._sum.amount ?? 0 },
   });
+  await invalidateCampaigns();
+  await invalidateStats();
 }
 
 function parseDate(v: unknown): Date | null {
@@ -451,6 +454,8 @@ router.post("/", async (req, res) => {
         where: { id: campaignId },
         data: { raisedAmount: { increment: amount } },
       });
+      await invalidateCampaigns();
+      await invalidateStats();
     }
 
     // Instant (non-gateway) settlement of a linked donation — advance the

@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { db } from "@/lib/db";
 import { json, handleError } from "@/lib/session";
+import { cached, cacheKeyPart, cacheTtl, statsKey } from "@/lib/cache";
 
 export const router = Router();
 
@@ -27,6 +28,16 @@ router.get("/", async (req, res) => {
     const sp = new URL(req.url, "http://localhost").searchParams;
     const fromRaw = sp.get("from");
     const toRaw = sp.get("to");
+    const payload = await cached(statsKey(cacheKeyPart({ from: fromRaw, to: toRaw }) || "all"), cacheTtl.stats, () =>
+      loadStats(fromRaw, toRaw)
+    );
+    return json(res, payload);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+async function loadStats(fromRaw: string | null, toRaw: string | null) {
     const from = fromRaw ? new Date(fromRaw) : null;
     const to = toRaw ? new Date(toRaw) : null;
     const hasRange =
@@ -203,7 +214,7 @@ router.get("/", async (req, res) => {
         }
       : null;
 
-    return json(res, {
+    return {
       ...(hasRange
         ? {
             range: {
@@ -256,8 +267,5 @@ router.get("/", async (req, res) => {
         campaign: d.campaign?.title ?? null,
         createdAt: d.createdAt,
       })),
-    });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+    };
+}

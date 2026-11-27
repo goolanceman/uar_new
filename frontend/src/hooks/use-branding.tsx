@@ -19,8 +19,8 @@ export interface Branding {
 
 export const DEFAULT_BRANDING: Branding = {
   name: "United Angel Reach",
-  logoUrl: "/logo_uar_final_emerald.svg",
-  faviconUrl: "/logo_uar_final_emerald.svg",
+  logoUrl: "/brand/logo.svg",
+  faviconUrl: "/brand/logo.svg",
 };
 
 const BrandingContext = createContext<Branding>(DEFAULT_BRANDING);

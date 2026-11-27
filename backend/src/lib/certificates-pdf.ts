@@ -4,6 +4,7 @@
  * print-ready A4 award-certificate HTML builder.
  */
 import { esc, printDocument, type OrgProfile } from "./api-org";
+import { BRAND_MARK_DATA_URI } from "./brand-mark";
 import { formatDateLong, titleCase } from "@/lib/format";
 
 export const CERTIFICATE_TYPES = [
@@ -137,10 +138,7 @@ export function certificateHtml(cert: CertRecord, org: OrgProfile): string {
   /* ── letterhead ────────────────────────────────────────── */
   .lh { display: flex; align-items: center; gap: 13px; }
   .lh-mono { width: 50px; height: 50px; border-radius: 13px; flex-shrink: 0;
-    background: linear-gradient(150deg, #064e3b, #059669); color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font: 800 15px Georgia, serif; letter-spacing: 1px;
-    box-shadow: 0 2px 8px rgba(6, 78, 59, .25); }
+    object-fit: contain; box-shadow: 0 2px 8px rgba(6, 78, 59, .25); }
   .lh-name { font: 700 19px Georgia, 'Times New Roman', serif; color: var(--ink); letter-spacing: .5px; }
   .lh-tag { font: italic 10px Georgia, serif; color: var(--ink-3); margin-top: 1px; }
   .lh-addr { font-size: 9px; color: var(--ink-4); margin-top: 2px; letter-spacing: .3px; }
@@ -175,9 +173,8 @@ export function certificateHtml(cert: CertRecord, org: OrgProfile): string {
     color: var(--ink-2); border: 1.5px solid var(--line); }
   .seal::before { content: ""; position: absolute; inset: 7px; border-radius: 50%;
     border: 1.5px solid var(--gold); opacity: .85; }
-  .seal b { font: 800 16px Georgia, serif; letter-spacing: 1.5px; color: var(--ink); }
-  .seal i { font: italic 7.5px Georgia, serif; letter-spacing: 1.6px; color: var(--ink-3); margin-top: 2px; }
-  .seal span { font-size: 7px; letter-spacing: 2.2px; color: var(--gold); font-weight: 700; margin-top: 3px; }
+  .seal img { width: 52px; height: 52px; object-fit: contain; }
+  .seal span { font-size: 7px; letter-spacing: 2.2px; color: var(--gold); font-weight: 700; margin-top: 4px; }
   .sig-block { text-align: right; min-width: 58mm; }
   .sig-for { font-size: 10.5px; color: var(--ink-3); }
   .sig-for b { color: var(--ink); }
@@ -196,7 +193,7 @@ export function certificateHtml(cert: CertRecord, org: OrgProfile): string {
     </div>
     <div class="inner">
       <div class="lh">
-        <div class="lh-mono">UAR</div>
+        <img class="lh-mono" src="${BRAND_MARK_DATA_URI}" alt="${esc(org.name)}" />
         <div>
           <div class="lh-name">${esc(org.name)}</div>
           <div class="lh-tag">Service · Dignity · Transparency · Technology-for-Good</div>
@@ -221,8 +218,7 @@ export function certificateHtml(cert: CertRecord, org: OrgProfile): string {
           <div style="margin-top:6px;"><div class="k">Certificate No.</div><b>${esc(cert.code)}</b></div>
         </div>
         <div class="seal">
-          <b>UAR</b>
-          <i>SEVA · DIGNITY</i>
+          <img src="${BRAND_MARK_DATA_URI}" alt="${esc(org.name)}" />
           <span>TRUST SEAL</span>
         </div>
         <div class="sig-block">

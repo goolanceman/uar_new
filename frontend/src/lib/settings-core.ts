@@ -28,8 +28,8 @@ export const SETTING_DEFAULTS: SettingsMap = {
   "org.website": "",
   "org.vision": "To scale our service model to serve all of India.",
   // Branding
-  "brand.logoUrl": "/logo_uar_final_emerald.svg",
-  "brand.faviconUrl": "/logo_uar_final_emerald.svg",
+  "brand.logoUrl": "/brand/logo.svg",
+  "brand.faviconUrl": "/brand/logo.svg",
   // Finance & payments
   "finance.fyStartMonth": "4",
   "finance.upiId": "",

@@ -17,6 +17,7 @@ import { ApiError, requireAuth, type Session } from "@/lib/session";
 import { communityAuthor, communityAuthorSelect, communityUser, communityUserSelect, csvList } from "@/lib/community/serializers";
 import { sendPush } from "@/lib/community/push";
 import { deleteFileByUrl } from "@/lib/community/reels";
+import { invalidateCatalog } from "@/lib/cache";
 
 // ─── Legacy constants (app/Models/Constants.php) ─────────────────────────────
 
@@ -444,6 +445,7 @@ export async function createRoom(session: Session, input: CreateRoomInput, photo
       totalMember: 1,
     },
   });
+  await invalidateCatalog("interests");
 
   await db.communityRoomUser.create({
     data: { roomId: room.id, userId: session.userId, type: RU_ADMIN },
@@ -501,6 +503,7 @@ export async function deleteRoom(session: Session, roomId: string) {
   await db.savedNotification.deleteMany({ where: { roomId: room.id } });
   await db.communityReport.deleteMany({ where: { roomId: room.id, type: 0 } });
   await db.communityRoom.delete({ where: { id: room.id } });
+  await invalidateCatalog("interests");
 
   return roomWire(room);
 }

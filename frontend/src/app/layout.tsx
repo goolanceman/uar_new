@@ -17,9 +17,9 @@ async function fetchFaviconUrl(): Promise<string> {
     });
     if (!res.ok) throw new Error(`settings/public ${res.status}`);
     const data = (await res.json()) as { faviconUrl?: string | null };
-    return data.faviconUrl || "/logo_uar_final_emerald.svg";
+    return data.faviconUrl || "/brand/logo.svg";
   } catch {
-    return "/logo_uar_final_emerald.svg";
+    return "/brand/logo.svg";
   }
 }
 

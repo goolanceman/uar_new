@@ -11,6 +11,7 @@ import { Router, type Request, type Response } from "express";
 import { requireAuth, ApiError, json, handleError } from "@/lib/session";
 import { multipart, multipartErrorHandler } from "@/lib/multipart";
 import { saveUpload } from "@/lib/files";
+import { assertAttachableMedia } from "@/lib/media/media-asset";
 import { paged, pageParams } from "@/lib/community/serializers";
 import {
   createReel,
@@ -81,16 +82,22 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/reels — multipart video (content) + thumbnail + caption/hashtags/
-// interests/musicId (legacy uploadReel).
+// interests/musicId (legacy uploadReel). Direct-upload mode: application/json
+// (or multipart text fields) with `mediaId` and NO content file — the video
+// was uploaded through POST /api/media/uploads; the transcoder fills the
+// playback URLs once the asset is ready. thumbnail file / thumbnailUrl stay
+// optional in that mode.
 router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Response) => {
   try {
     const session = await requireAuth(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const content = fieldFile(req, "content");
-    if (!content) throw new ApiError("The content field is required", 400);
     const thumbnail = fieldFile(req, "thumbnail");
-    if (!thumbnail) throw new ApiError("The thumbnail field is required", 400);
+    const mediaId = typeof body.mediaId === "string" && body.mediaId.trim() ? body.mediaId.trim() : null;
+
+    if (content && mediaId) throw new ApiError("Send either a content file or a mediaId, not both", 400);
+    if (!content && !mediaId) throw new ApiError("The content field is required", 400);
 
     const musicIdRaw = body.musicId === undefined || body.musicId === null || body.musicId === "" ? null : Number(body.musicId);
     if (musicIdRaw !== null && !Number.isFinite(musicIdRaw)) throw new ApiError("Invalid musicId provided", 400);
@@ -102,8 +109,28 @@ router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Res
         ? body.interestIds.trim() || null
         : null;
 
-    const contentUrl = await saveFieldFile(req, "content", session.userId, session.name);
-    const thumbnailUrl = await saveFieldFile(req, "thumbnail", session.userId, session.name);
+    let contentUrl: string | null = null;
+    let thumbnailUrl: string | null = null;
+    if (content) {
+      // legacy multipart path — both files required
+      if (!thumbnail) throw new ApiError("The thumbnail field is required", 400);
+      contentUrl = await saveFieldFile(req, "content", session.userId, session.name);
+      thumbnailUrl = await saveFieldFile(req, "thumbnail", session.userId, session.name);
+    } else {
+      // direct-upload mode — thumbnailUrl validated first (input format),
+      // then the media asset (owner/purpose/status/attach)
+      if (thumbnail) {
+        thumbnailUrl = await saveFieldFile(req, "thumbnail", session.userId, session.name);
+      } else if (body.thumbnailUrl !== undefined && body.thumbnailUrl !== null && body.thumbnailUrl !== "") {
+        // validated like parseUrlList does for a single entry
+        const u = String(body.thumbnailUrl).trim();
+        if (u.length > 500 || !/^(\/(api\/files\/|public\/|uploads?\/)|https?:\/\/)/i.test(u)) {
+          throw new ApiError("thumbnailUrl contains an unsupported url", 400);
+        }
+        thumbnailUrl = u;
+      }
+      await assertAttachableMedia(session.userId, mediaId, "reel");
+    }
 
     const reel = await createReel(session.userId, {
       description: typeof body.description === "string" ? body.description : null,
@@ -113,6 +140,7 @@ router.post("/", multipart, multipartErrorHandler, async (req: Request, res: Res
       causeId: typeof body.causeId === "string" && body.causeId ? body.causeId : null,
       contentUrl,
       thumbnailUrl,
+      mediaId,
     });
     return json(res, reel, 201); // POST /api/posts parity
   } catch (e) {

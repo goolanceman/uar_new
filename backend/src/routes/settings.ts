@@ -13,6 +13,7 @@ import {
 } from "@/lib/settings-core";
 import { loadSettings, verifyEmail, verifySms, verifyWhatsApp, verifyGateway } from "@/lib/notify";
 import { publicOrgSettings } from "@/lib/api-org";
+import { cached, cacheTtl, invalidateSettings, settingsKey } from "@/lib/cache";
 
 export const router = Router();
 
@@ -80,6 +81,7 @@ router.patch("/", async (req, res) => {
         update: { value, isSecret: secret },
       });
     }
+    await invalidateSettings();
 
     await logActivity(
       session.name,
@@ -147,7 +149,7 @@ router.post("/test", async (req, res) => {
 // consumed by public pages (letterheads, footers, UPI, vision).
 router.get("/public", async (_req, res) => {
   try {
-    return json(res, await publicOrgSettings());
+    return json(res, await cached(settingsKey("public"), cacheTtl.settings, () => publicOrgSettings()));
   } catch (e) {
     return handleError(e, res);
   }
@@ -161,16 +163,27 @@ router.get("/public", async (_req, res) => {
 const APP_SECRET_KEY_RE = /secret|password|token|privatekey/i;
 router.get("/app", async (_req, res) => {
   try {
+    const payload = await cached(settingsKey("app"), cacheTtl.settings, () => loadAppSettings());
+    if (!payload) throw new ApiError("Settings not configured", 404);
+    return json(res, payload);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+/** Mobile app configuration. Returns null when the KV blob is missing or
+ *  corrupt — that 404 is not cached, so a later save is visible immediately. */
+async function loadAppSettings() {
     const row = await db.setting.findUnique({ where: { key: "mobile.app" } });
-    if (!row) throw new ApiError("Settings not configured", 404);
+    if (!row) return null;
 
     let settings: Record<string, unknown>;
     try {
       const parsed = JSON.parse(row.value);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
       settings = parsed;
     } catch {
-      throw new ApiError("Settings not configured", 404);
+      return null;
     }
     for (const key of Object.keys(settings)) {
       if (APP_SECRET_KEY_RE.test(key)) delete settings[key];
@@ -198,7 +211,7 @@ router.get("/app", async (_req, res) => {
       updatedAt: r.updatedAt,
     });
 
-    return json(res, {
+    return {
       ...settings,
       id: row.id,
       createdAt: row.createdAt,
@@ -208,8 +221,5 @@ router.get("/app", async (_req, res) => {
       documentType: documentTypes, // legacy alias kept for older clients
       reportReasons: reasons.map(commonRow),
       restrictedUsernames: restrictions.map(commonRow),
-    });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+    };
+}

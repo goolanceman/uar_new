@@ -35,6 +35,7 @@ import {
   ShieldCheck,
   Trash2,
   Users,
+  Clapperboard,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -261,6 +262,7 @@ export default function CommunityView() {
               </Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="reels">Reels</TabsTrigger>
           <TabsTrigger value="causes">Causes</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
           <TabsTrigger value="volunteers">Volunteer applications</TabsTrigger>
@@ -271,6 +273,9 @@ export default function CommunityView() {
         </TabsContent>
         <TabsContent value="posts" className="mt-4">
           <PostsTab onChanged={loadTotals} />
+        </TabsContent>
+        <TabsContent value="reels" className="mt-4">
+          <ReelsTab />
         </TabsContent>
         <TabsContent value="causes" className="mt-4">
           <CausesTab onChanged={loadTotals} />
@@ -634,6 +639,201 @@ function PostsTab({ onChanged }: { onChanged: () => void }) {
           setDeleteTarget(null);
         }}
       />
+    </SectionCard>
+  );
+}
+
+// ── Reels — every reel with its server-side transcode state ──────────────────
+
+interface ReelTranscode {
+  mediaId: string;
+  status: "pending_upload" | "uploaded" | "processing" | "ready" | "failed";
+  attempts: number;
+  error: string | null;
+  durationMs: number | null;
+  readyAt: string | null;
+}
+
+interface AdminReel {
+  id: string;
+  description: string | null;
+  thumbnail: string | null;
+  viewsCount: number;
+  likesCount: number;
+  commentsCount: number;
+  reportsCount: number;
+  createdAt: string;
+  author: { id: string; name: string | null } | null;
+  transcode: ReelTranscode | null;
+}
+
+const TRANSCODE_LABEL: Record<ReelTranscode["status"], string> = {
+  pending_upload: "Awaiting upload",
+  uploaded: "Queued",
+  processing: "Optimising",
+  ready: "Ready",
+  failed: "Failed",
+};
+
+const TRANSCODE_TONE: Record<ReelTranscode["status"], string> = {
+  pending_upload: "border-muted-foreground/30 text-muted-foreground",
+  uploaded: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  processing: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  ready: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  failed: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+};
+
+const STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: "ALL", label: "All states" },
+  { value: "processing", label: "Optimising" },
+  { value: "uploaded", label: "Queued" },
+  { value: "failed", label: "Failed" },
+  { value: "ready", label: "Ready" },
+];
+
+const REELS_PAGE_SIZE = 20;
+
+function ReelsTab() {
+  const [reels, setReels] = useState<AdminReel[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("ALL");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(REELS_PAGE_SIZE),
+        ...(query ? { q: query } : {}),
+        ...(status !== "ALL" ? { status } : {}),
+      });
+      const res = await get<Paged<AdminReel>>(`/api/community/admin/reels?${params}`);
+      setReels(res.items ?? []);
+      setTotal(res.total ?? 0);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load reels");
+    } finally {
+      setLoading(false);
+    }
+  }, [page, query, status]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Transcode state changes on the server, so the list refreshes itself
+  // while anything is still being optimised.
+  const hasActive = reels.some((r) => r.transcode && r.transcode.status !== "ready" && r.transcode.status !== "failed");
+  useEffect(() => {
+    if (!hasActive) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [hasActive, load]);
+
+  const pages = Math.max(1, Math.ceil(total / REELS_PAGE_SIZE));
+
+  return (
+    <SectionCard
+      title="Reels"
+      icon={<Clapperboard className="size-4" aria-hidden="true" />}
+      description={loading ? "Loading reels…" : `${total} reels`}
+      bodyClassName="space-y-4"
+      actions={
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} aria-label="Refresh reels">
+          <RefreshCw className="size-4" /> Refresh
+        </Button>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <form
+          className="relative min-w-[200px] flex-1 sm:max-w-xs"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPage(1);
+            setQuery(search.trim());
+          }}
+        >
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search caption or author…"
+            className="h-8 pl-8 text-sm"
+            aria-label="Search reels"
+          />
+        </form>
+        <Select value={status} onValueChange={(v) => { setStatus(v); setPage(1); }}>
+          <SelectTrigger className="h-8 w-[150px] text-sm" aria-label="Filter by transcode state">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_FILTERS.map((f) => (
+              <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-14 w-full" />
+          ))}
+        </div>
+      ) : reels.length === 0 ? (
+        <EmptyState icon={<Clapperboard className="size-6" aria-hidden="true" />} title="No reels" hint="Reels published from the app appear here with their transcode state." />
+      ) : (
+        <ul className="divide-y rounded-xl border">
+          {reels.map((r) => (
+            <li key={r.id} className="flex items-start gap-3 px-3 py-3 sm:px-4">
+              <Avatar className="size-8 shrink-0">
+                <AvatarFallback className="text-xs">{(r.author?.name ?? "?").slice(0, 1).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-medium">{r.author?.name ?? "Unknown"}</span>
+                  {r.transcode ? (
+                    <Badge variant="outline" className={`text-[10px] ${TRANSCODE_TONE[r.transcode.status]}`}>
+                      {TRANSCODE_LABEL[r.transcode.status]}
+                      {r.transcode.status === "failed" && r.transcode.attempts > 0 ? ` · ${r.transcode.attempts} tries` : ""}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] text-muted-foreground">No video</Badge>
+                  )}
+                  {r.reportsCount > 0 && (
+                    <Badge variant="outline" className="gap-0.5 border-red-500/30 bg-red-500/10 text-[10px] text-red-600 dark:text-red-400">
+                      <Flag className="size-3" aria-hidden="true" /> {r.reportsCount}
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{r.description ?? "—"}</p>
+                {r.transcode?.status === "failed" && r.transcode.error && (
+                  <p className="mt-0.5 line-clamp-1 text-[11px] text-red-600 dark:text-red-400" title={r.transcode.error}>
+                    {r.transcode.error}
+                  </p>
+                )}
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {r.viewsCount} views · {r.likesCount} likes · {r.commentsCount} comments · {formatDate(r.createdAt)}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {pages > 1 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Page {page} of {pages}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</Button>
+            <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(pages, p + 1))} disabled={page >= pages}>Next</Button>
+          </div>
+        </div>
+      )}
     </SectionCard>
   );
 }

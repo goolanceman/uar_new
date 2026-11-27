@@ -13,6 +13,7 @@ import {
   logActivity,
 } from "@/lib/session";
 import { recomputeCause } from "@/lib/causes";
+import { invalidateCauses } from "@/lib/cache";
 import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
 
 export const router = Router();
@@ -129,6 +130,7 @@ router.patch("/:id", async (req, res) => {
       data: { status },
     });
     await recomputeCause(updated.causeId);
+    await invalidateCauses();
     await logActivity(
       session.name,
       "PLEDGE_UPDATE",
@@ -153,6 +155,7 @@ router.delete("/:id", async (req, res) => {
 
     await db.pledge.delete({ where: { id } });
     await recomputeCause(pledge.causeId);
+    await invalidateCauses();
     await logActivity(
       session.name,
       "PLEDGE_DELETE",

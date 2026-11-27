@@ -23,6 +23,7 @@ import {
   requireElevated,
   adminUsers,
   adminPosts,
+  adminReels,
   moderatePost,
   adminReports,
   resolveReport,
@@ -54,6 +55,21 @@ router.get("/posts", async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     const type = req.query.type ? String(req.query.type) : null;
     const { items, total } = await adminPosts(q, type, skip, limit);
+    return json(res, paged(items, page, limit, total));
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+// GET /api/community/admin/reels — every reel with its transcode state.
+// ?status= filters by pending_upload|uploaded|processing|ready|failed.
+router.get("/reels", async (req, res) => {
+  try {
+    await requireElevated(req);
+    const { page, limit, skip } = pageParams(req.query as Record<string, unknown>, 30);
+    const q = String(req.query.q ?? "").trim();
+    const status = req.query.status ? String(req.query.status) : null;
+    const { items, total } = await adminReels(q, status, skip, limit);
     return json(res, paged(items, page, limit, total));
   } catch (e) {
     return handleError(e, res);

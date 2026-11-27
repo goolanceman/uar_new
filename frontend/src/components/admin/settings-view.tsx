@@ -953,7 +953,7 @@ export default function SettingsView() {
                   id="s-brand-logo"
                   value={values["brand.logoUrl"] ?? ""}
                   onChange={(e) => set("brand.logoUrl", e.target.value)}
-                  placeholder="/logo_uar_final_emerald.svg"
+                  placeholder="/brand/logo.svg"
                 />
               </Field>
               <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/40">
@@ -974,7 +974,7 @@ export default function SettingsView() {
                   id="s-brand-favicon"
                   value={values["brand.faviconUrl"] ?? ""}
                   onChange={(e) => set("brand.faviconUrl", e.target.value)}
-                  placeholder="/logo_uar_final_emerald.svg"
+                  placeholder="/brand/logo.svg"
                 />
               </Field>
               <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted/40">

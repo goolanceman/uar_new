@@ -4,15 +4,15 @@
  * receipts and certificates. Every value has a hard-coded fallback so
  * public pages and print documents never render blank.
  */
-import { db } from "@/lib/db";
 import { SETTING_DEFAULTS, isFlagOn, publicFeatures, getCurrency } from "@/lib/settings-core";
 import { isTestingMode } from "@/lib/testing-mode";
+import { loadSettings } from "@/lib/notify";
 
 export type SettingsMap = Record<string, string>;
 
 export async function settingsMap(): Promise<SettingsMap> {
-  const rows = await db.setting.findMany();
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  // Same cached map notify.ts uses, so a settings save invalidates both.
+  return loadSettings();
 }
 
 function pick(map: SettingsMap, key: string, fallback: string): string {
@@ -74,8 +74,8 @@ export async function orgProfile(): Promise<OrgProfile> {
     signatoryRole: pick(map, "receipts.signatoryRole", "Managing Trustee"),
     footer: pick(map, "receipts.footer", DEFAULT_FOOTER),
     defaultLanguage: pick(map, "app.language", "en"),
-    logoUrl: pick(map, "brand.logoUrl", "/logo_uar_final_emerald.svg"),
-    faviconUrl: pick(map, "brand.faviconUrl", "/logo_uar_final_emerald.svg"),
+    logoUrl: pick(map, "brand.logoUrl", "/brand/logo.svg"),
+    faviconUrl: pick(map, "brand.faviconUrl", "/brand/logo.svg"),
     // Razorpay key ids / Stripe publishable keys are public identifiers
     // (they appear in checkout.js), so they may be published when enabled.
     gatewayKeyId: isFlagOn(map["finance.gatewayEnabled"])

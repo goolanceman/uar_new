@@ -11,16 +11,19 @@ import {
   handleError,
   logActivity,
 } from "@/lib/session";
+import { cached, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
 
 export const router = Router();
 
 // GET /api/testimonials — public wall
 router.get("/", async (_req, res) => {
   try {
-    const testimonials = await db.testimonial.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 12,
-    });
+    const testimonials = await cached(catalogKey("testimonials", "wall"), cacheTtl.catalog, () =>
+      db.testimonial.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 12,
+      })
+    );
     return json(res, testimonials);
   } catch (e) {
     return handleError(e, res);
@@ -54,6 +57,7 @@ router.post("/", async (req, res) => {
       `${name} (${rating}★)`,
       session.userId
     );
+    await invalidateCatalog("testimonials");
 
     return json(res, testimonial, 201);
   } catch (e) {
@@ -93,6 +97,7 @@ router.patch("/:id", async (req, res) => {
       testimonial.name,
       session.userId
     );
+    await invalidateCatalog("testimonials");
 
     return json(res, testimonial);
   } catch (e) {
@@ -118,6 +123,7 @@ router.delete("/:id", async (req, res) => {
       existing.name,
       session.userId
     );
+    await invalidateCatalog("testimonials");
 
     return json(res, { ok: true });
   } catch (e) {

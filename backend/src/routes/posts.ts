@@ -54,6 +54,25 @@ function numField(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** mediaIds arrives as a JSON array string (multipart text field), a CSV, or a
+ *  real array (express.json) — normalize to trimmed non-empty strings. */
+function mediaIdsField(v: unknown): string[] {
+  if (v === undefined || v === null || v === "") return [];
+  let raw: unknown[];
+  if (Array.isArray(v)) {
+    raw = v;
+  } else {
+    const s = String(v).trim();
+    try {
+      const parsed: unknown = JSON.parse(s);
+      raw = Array.isArray(parsed) ? (parsed as unknown[]) : [parsed];
+    } catch {
+      raw = s.split(",");
+    }
+  }
+  return raw.map((x) => String(x ?? "").trim()).filter(Boolean);
+}
+
 // GET /api/posts?type=latest|random&page=&limit= — the main feed.
 // (Suggested rooms live at GET /api/rooms/suggested — S4.)
 router.get("/", async (req, res) => {
@@ -186,6 +205,7 @@ router.post("/", multipart, async (req, res) => {
       communityLabel: b.communityLabel != null && b.communityLabel !== "" ? String(b.communityLabel) : null,
       contentType: numField(b.contentType),
       audioWaves: b.audioWaves != null && b.audioWaves !== "" ? String(b.audioWaves) : null,
+      mediaIds: mediaIdsField(b.mediaIds),
     });
     return json(res, post, 201);
   } catch (e) {

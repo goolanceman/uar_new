@@ -10,6 +10,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { ApiError } from "@/lib/session";
 import { musicJson } from "@/lib/community/reels";
+import { cached, cacheKeyPart, cacheTtl, catalogKey } from "@/lib/cache";
 
 const DELETED_NO = 0;
 
@@ -21,6 +22,17 @@ export { musicJson };
 /** GET /api/music?q=&categoryId= (legacy fetchMusicWithSearch + fetchMusicByCategory). */
 export async function listMusic(q: string, categoryId: number | null, skip: number, take: number) {
   const keyword = q.trim();
+  // Search results are per-query and short-lived relative to the catalog;
+  // an empty browse (the home screen) is the repeated call worth caching.
+  if (keyword) return loadMusic(keyword, categoryId, skip, take);
+  return cached(
+    catalogKey("music", cacheKeyPart({ categoryId, skip, take })),
+    cacheTtl.catalog,
+    () => loadMusic("", categoryId, skip, take)
+  );
+}
+
+async function loadMusic(keyword: string, categoryId: number | null, skip: number, take: number) {
   const where: Prisma.CommunityMusicWhereInput = {
     isDeleted: DELETED_NO,
     ...(categoryId !== null ? { categoryId } : {}),
@@ -38,6 +50,12 @@ export async function listMusic(q: string, categoryId: number | null, skip: numb
 /** GET /api/music/categories (legacy fetchMusicCategories — newest first, with
  *  the count of non-deleted musics attached). */
 export async function listMusicCategories(skip: number, take: number) {
+  return cached(catalogKey("music-categories", cacheKeyPart({ skip, take })), cacheTtl.catalog, () =>
+    loadMusicCategories(skip, take)
+  );
+}
+
+async function loadMusicCategories(skip: number, take: number) {
   const [rows, total] = await Promise.all([
     db.musicCategory.findMany({
       where: { isDeleted: DELETED_NO },

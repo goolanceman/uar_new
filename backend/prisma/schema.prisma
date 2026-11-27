@@ -79,6 +79,7 @@ model User {
   notifications            Notification[]
   activities               ActivityLog[]
   posts                    CommunityPost[]
+  mediaAssets              MediaAsset[]
   comments                 CommunityComment[]
   likes                    CommunityLike[]
   stories                  CommunityStory[]
@@ -1923,6 +1924,7 @@ model CommunityPost {
   causeFollowers CauseFollower[]
   donations      Donation[]             @relation("CausePostDonations")
   category       CauseCategory?         @relation(fields: [categoryId], references: [id])
+  mediaId        String?   @map("media_id")
 
   @@index([userId])
   @@index([type])
@@ -1937,10 +1939,12 @@ model CommunityPostContent {
   content     String
   thumbnail   String?
   audioWaves  String?  @map("audio_waves") @db.Text
+  mediaId     String?  @map("media_id")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  post CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post  CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  media MediaAsset?   @relation(fields: [mediaId], references: [id], onDelete: SetNull)
 
   @@index([postId])
   @@map("app_post_contents")
@@ -2021,6 +2025,7 @@ model CommunityReel {
   causeId       String?  @map("cause_id")
   interestIds   String?  @map("interest_ids") // CSV
   musicId       Int?     @map("music_id")
+  mediaId       String?  @map("media_id")
   description   String?  @db.Text
   content       String?
   thumbnail     String?
@@ -2033,6 +2038,7 @@ model CommunityReel {
 
   user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   music    CommunityMusic?        @relation(fields: [musicId], references: [id])
+  media    MediaAsset?            @relation(fields: [mediaId], references: [id], onDelete: SetNull)
   comments CommunityReelComment[]
   likes    CommunityLike[]
   reports  CommunityReport[]
@@ -2057,6 +2063,41 @@ model CommunityReelComment {
   @@index([reelId])
   @@index([userId])
   @@map("app_reel_comments")
+}
+
+// ==================== MEDIA ASSETS (presigned direct video uploads) ====================
+// Server-generated storage keys (media/<id>/source.<ext>, …/hls/…, …/video.mp4,
+// …/poster.jpg). Rows move pending_upload → uploaded → processing → ready (or
+// failed); the transcoder worker claims rows stuck in processing.
+
+model MediaAsset {
+  id         String    @id @default(cuid())
+  ownerId    String    @map("owner_id")
+  purpose    String // reel | post
+  status     String    @default("pending_upload") // pending_upload | uploaded | processing | ready | failed
+  sourceKey  String    @map("source_key")
+  sourceMime String    @map("source_mime")
+  sourceSize Int       @map("source_size")
+  durationMs Int?      @map("duration_ms")
+  width      Int?
+  height     Int?
+  hlsKey     String?   @map("hls_key")
+  mp4Key     String?   @map("mp4_key")
+  posterKey  String?   @map("poster_key")
+  error      String?
+  attempts   Int       @default(0)
+  lockedAt   DateTime? @map("locked_at")
+  readyAt    DateTime? @map("ready_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  owner        User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  reels        CommunityReel[]
+  postContents CommunityPostContent[]
+
+  @@index([status, updatedAt])
+  @@index([ownerId])
+  @@map("app_media_assets")
 }
 
 model MusicCategory {

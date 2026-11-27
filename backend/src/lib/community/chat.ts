@@ -19,6 +19,34 @@ import { ApiError } from "@/lib/session";
 import { communityAuthor } from "@/lib/community/serializers";
 import { sendPush, feedEvent } from "@/lib/community/push";
 import { broadcastToChannel } from "@/lib/realtime/pusher";
+import {
+  cached,
+  cacheTtl,
+  chatListKey,
+  chatMessagesKey,
+  invalidateChatConversation,
+  invalidateChatUser,
+} from "@/lib/cache";
+
+/** Drop the conversation list of every participant, plus every cached
+ *  message page of this conversation. Group membership is loaded so a
+ *  message doesn't leave a stale unread count on another member's list. */
+async function invalidateChat(
+  conv: { id: string; type: number; user1Id: string | null; user2Id: string | null }
+): Promise<void> {
+  const userIds = [conv.user1Id, conv.user2Id].filter((id): id is string => Boolean(id));
+  if (conv.type !== 1) {
+    const members = await db.conversationParticipant.findMany({
+      where: { conversationId: conv.id, isActive: true },
+      select: { userId: true },
+    });
+    for (const m of members) userIds.push(m.userId);
+  }
+  await Promise.all([
+    ...userIds.map((id) => invalidateChatUser(id)),
+    invalidateChatConversation(conv.id),
+  ]);
+}
 
 // ─── Legacy column helpers ────────────────────────────────────────────────────
 
@@ -167,6 +195,10 @@ export function messageWire(m: MessageRow) {
  * mute/block flags and the embedded other user / room link.
  */
 export async function listConversations(me: string) {
+  return cached(chatListKey(me), cacheTtl.chat, () => loadConversations(me));
+}
+
+async function loadConversations(me: string) {
   const meUser = await db.user.findUnique({ where: { id: me }, select: { blockUserIds: true } });
 
   const [oneToOne, groups] = await Promise.all([
@@ -273,6 +305,7 @@ export async function createOrGetConversation(me: string, otherUserId: string) {
   const conv = await db.conversation.create({
     data: { type: 1, user1Id: me, user2Id: otherUserId },
   });
+  await invalidateChat(conv);
   return { id: conv.id, type: 1, createdAt: conv.createdAt.toISOString(), created: true };
 }
 
@@ -289,7 +322,25 @@ export async function getMessagesPage(
   beforeId: string | null,
   limit: number
 ) {
+  // Access is checked before the cache so a non-member never receives
+  // another user's page, and a 404 is never stored.
   const conv = await requireConversationAccess(conversationId, me);
+  const page = await cached(chatMessagesKey(conv.id, me, beforeId ?? "", limit), cacheTtl.chat, () =>
+    loadMessagesPage(me, conv, beforeId, limit)
+  );
+  // Opening the thread marks it read even when the page itself was cached.
+  // The list cache is dropped so the unread badge doesn't linger.
+  await markConversationRead(conv, me);
+  await invalidateChatUser(me);
+  return page;
+}
+
+async function loadMessagesPage(
+  me: string,
+  conv: NonNullable<Awaited<ReturnType<typeof findConversation>>>,
+  beforeId: string | null,
+  limit: number
+) {
 
   // Messages older than the caller's clear/delete timestamp stay hidden.
   const clearedRaw = String(jsonMap(conv.clearedAt)[me] ?? "").replace("d", "");
@@ -317,8 +368,6 @@ export async function getMessagesPage(
     take: limit,
   });
   rows.reverse(); // oldest-first, like the legacy ->get()->reverse()->values()
-
-  await markConversationRead(conv, me);
 
   return {
     conversationId: conv.id,
@@ -468,6 +517,7 @@ export async function sendChatMessage(
 
   // Admin live feed (existing SSE infra).
   feedEvent("chat.message", { conversation_id: conv.id, sender_id: me, type: message.type });
+  await invalidateChat(conv);
 
   return messageWire(message);
 }
@@ -476,6 +526,7 @@ export async function sendChatMessage(
 export async function markRead(me: string, conversationId: string) {
   const conv = await requireConversationAccess(conversationId, me);
   await markConversationRead(conv, me);
+  await invalidateChatUser(me);
   return { ok: true };
 }
 
@@ -485,6 +536,7 @@ export async function muteConversation(me: string, conversationId: string) {
   const mutedBy = jsonMap(conv.mutedBy);
   mutedBy[me] = true;
   await db.conversation.update({ where: { id: conv.id }, data: { mutedBy: JSON.stringify(mutedBy) } });
+  await invalidateChatUser(me);
   return { ok: true, isMuted: true };
 }
 
@@ -499,6 +551,7 @@ export async function unmuteConversation(me: string, conversationId: string) {
     delete mutedBy[me];
     await db.conversation.update({ where: { id: conv.id }, data: { mutedBy: JSON.stringify(mutedBy) } });
   }
+  await invalidateChatUser(me);
   return { ok: true, isMuted: false };
 }
 
@@ -508,6 +561,7 @@ export async function clearConversation(me: string, conversationId: string) {
   const clearedAt = jsonMap(conv.clearedAt);
   clearedAt[me] = legacyTimestamp();
   await db.conversation.update({ where: { id: conv.id }, data: { clearedAt: JSON.stringify(clearedAt) } });
+  await invalidateChat(conv);
   return { ok: true };
 }
 
@@ -526,6 +580,7 @@ export async function deleteConversation(me: string, conversationId: string) {
     const clearedAt = jsonMap(conv.clearedAt);
     clearedAt[me] = `d${legacyTimestamp()}`;
     await db.conversation.update({ where: { id: conv.id }, data: { clearedAt: JSON.stringify(clearedAt) } });
+    await invalidateChat(conv);
   } else {
     const participant = await db.conversationParticipant.findFirst({
       where: { conversationId: conv.id, userId: me },
@@ -535,6 +590,7 @@ export async function deleteConversation(me: string, conversationId: string) {
       where: { id: participant.id },
       data: { isActive: false, leftAt: new Date() },
     });
+    await invalidateChat(conv);
   }
 
   return { ok: true };

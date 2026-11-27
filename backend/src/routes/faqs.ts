@@ -7,6 +7,7 @@ import { Router } from "express";
 import { db } from "@/lib/db";
 import { json, handleError } from "@/lib/session";
 import { paged, pageParams } from "@/lib/community/serializers";
+import { cached, cacheKeyPart, cacheTtl, catalogKey } from "@/lib/cache";
 
 export const router = Router();
 
@@ -14,6 +15,16 @@ export const router = Router();
 router.get("/", async (req, res) => {
   try {
     const { page, limit, skip } = pageParams(req.query);
+    const payload = await cached(catalogKey("faqs", cacheKeyPart({ page, limit })), cacheTtl.catalog, () =>
+      loadFaqs(skip, page, limit)
+    );
+    return json(res, payload);
+  } catch (e) {
+    return handleError(e, res);
+  }
+});
+
+async function loadFaqs(skip: number, page: number, limit: number) {
     const where = { isDeleted: 0 };
     const [types, total] = await Promise.all([
       db.faqType.findMany({
@@ -25,9 +36,7 @@ router.get("/", async (req, res) => {
       }),
       db.faqType.count({ where }),
     ]);
-    return json(
-      res,
-      paged(
+    return paged(
         types.map((t) => ({
           id: t.id,
           title: t.title,
@@ -46,9 +55,5 @@ router.get("/", async (req, res) => {
         page,
         limit,
         total
-      )
     );
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+}

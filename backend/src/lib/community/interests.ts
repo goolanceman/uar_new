@@ -5,9 +5,16 @@
  * Port of InterestController::fetchInterests (src/routes/mobile/posts.ts).
  */
 import { db } from "@/lib/db";
+import { cached, cacheKeyPart, cacheTtl, catalogKey } from "@/lib/cache";
 
 /** GET /api/interests — interests + totalRoomOfInterest. */
 export async function listInterests(skip: number, take: number) {
+  return cached(catalogKey("interests", cacheKeyPart({ skip, take })), cacheTtl.catalog, () =>
+    loadInterests(skip, take)
+  );
+}
+
+async function loadInterests(skip: number, take: number) {
   const [interests, total] = await Promise.all([
     db.communityInterest.findMany({ orderBy: { id: "asc" }, skip, take }),
     db.communityInterest.count(),

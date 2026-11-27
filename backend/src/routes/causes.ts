@@ -17,6 +17,14 @@ import {
 import { recomputeCause, CAUSE_STATUSES, CAUSE_TRANSITIONS } from "@/lib/causes";
 import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
 import { assertTransition } from "@/lib/workflow";
+import {
+  cached,
+  cacheKeyPart,
+  cacheTtl,
+  causeDetailKey,
+  causesListKey,
+  invalidateCauses,
+} from "@/lib/cache";
 
 export const router = Router();
 
@@ -40,23 +48,28 @@ router.get("/", async (req, res) => {
         { code: { contains: q } },
       ];
 
-    const causes = await db.cause.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      include: {
-        pledges: {
-          where: { status: "ACTIVE" },
-          select: {
-            id: true,
-            donorName: true,
-            amountPerMonth: true,
-            months: true,
-            status: true,
+    const causes = await cached(
+      causesListKey(cacheKeyPart({ condition, status, q })),
+      cacheTtl.causes,
+      () =>
+        db.cause.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          include: {
+            pledges: {
+              where: { status: "ACTIVE" },
+              select: {
+                id: true,
+                donorName: true,
+                amountPerMonth: true,
+                months: true,
+                status: true,
+              },
+              orderBy: { createdAt: "asc" },
+            },
           },
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
+        })
+    );
     return json(res, causes);
   } catch (e) {
     return handleError(e, res);
@@ -167,6 +180,7 @@ router.post("/", async (req, res) => {
       `${cause.code} · ${patientName}`,
       session.userId
     );
+    await invalidateCauses();
     return json(res, cause, 201);
   } catch (e) {
     return handleError(e, res);
@@ -177,10 +191,12 @@ router.post("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const cause = await db.cause.findUnique({
-      where: { id },
-      include: { pledges: { orderBy: { createdAt: "desc" } } },
-    });
+    const cause = await cached(causeDetailKey(id), cacheTtl.causes, () =>
+      db.cause.findUnique({
+        where: { id },
+        include: { pledges: { orderBy: { createdAt: "desc" } } },
+      })
+    );
     if (!cause) throw new ApiError("Cause not found", 404);
     return json(res, cause);
   } catch (e) {
@@ -235,6 +251,7 @@ router.patch("/:id", async (req, res) => {
       `${existing.code}${statusProvided ? ` → ${String(body.status).toUpperCase()}` : ""}`,
       session.userId
     );
+    await invalidateCauses();
     return json(res, cause);
   } catch (e) {
     return handleError(e, res);
@@ -259,6 +276,7 @@ router.delete("/:id", async (req, res) => {
       existing.code,
       session.userId
     );
+    await invalidateCauses();
     return json(res, { ok: true });
   } catch (e) {
     return handleError(e, res);
@@ -316,6 +334,7 @@ router.post("/:id/pledges", async (req, res) => {
       session?.userId
     );
 
+    await invalidateCauses();
     return json(res, { pledge, cause: updatedCause }, 201);
   } catch (e) {
     return handleError(e, res);

@@ -22,6 +22,7 @@ import { getCurrency } from "@/lib/settings-core";
 import { broadcastEvent } from "@/lib/events";
 import { settleDonationSideEffects } from "@/lib/charity/settlement";
 import { settleDonationCommitments } from "@/lib/recurring";
+import { invalidateCampaigns, invalidateStats } from "@/lib/cache";
 
 export const router = Router();
 
@@ -299,6 +300,8 @@ async function settleCompleted(
           where: { id: donation.campaignId },
           data: { raisedAmount: { increment: donation.amount } },
         });
+        await invalidateCampaigns();
+        await invalidateStats();
       } catch {
         // campaign totals must never fail settlement
       }

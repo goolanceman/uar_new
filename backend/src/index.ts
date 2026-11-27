@@ -281,6 +281,10 @@ import { router as musicRouter } from "./routes/music";
 app.use("/api/reels", reelsRouter);
 app.use("/api/music", musicRouter);
 
+// Presigned direct video uploads + the transcoder polling/playback API.
+import { router as mediaRouter } from "./routes/media";
+app.use("/api/media", mediaRouter);
+
 // ─── 404 + error handling ────────────────────────────────────────────────────
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
@@ -301,6 +305,20 @@ app.listen(PORT, () => {
 });
 
 syncPostCommentCounts().catch((e) => console.error("[mobile] comment count sync failed", e));
+
+// Background video transcoder (DB-backed queue — see lib/media/transcoder.ts).
+// No-ops when TRANSCODER_ENABLED === "false" or under NODE_ENV=test.
+import { startTranscoder } from "@/lib/media/transcoder";
+import { assertStorageConfig } from "@/lib/storage";
+
+// Crash boot on a misconfigured storage driver (names the missing variables).
+assertStorageConfig();
+
+try {
+  startTranscoder();
+} catch (e) {
+  console.error("[media] transcoder failed to start", e);
+}
 
 // Pusher-protocol WebSocket server for the mobile app (Laravel Reverb wire
 // format, ws://host:6001/app/chatter-key). Starts after the HTTP listener.
