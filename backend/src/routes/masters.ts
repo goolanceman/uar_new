@@ -1,209 +1,46 @@
 /**
  * Masters routes — /api/masters, /api/masters/:id
- * Converted 1:1 from src/app/api/masters/* (Next.js route handlers) to Express.
+ * Thin endpoint definitions; all logic lives in src/modules/masters
+ * (routes → controllers → services → repositories). The historical export
+ * path (`@/routes/masters`) is preserved: tests and the app entry import
+ * `router` from here.
  */
 import { Router } from "express";
-import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
+import { authorize } from "@/shared/middleware/auth";
+import { validate } from "@/shared/middleware/validate";
 import {
-  requireRole,
-  json,
-  handleError,
-  ApiError,
-  logActivity,
-} from "@/lib/session";
-import { logger } from "@/lib/logger";
-import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
+  listMastersQuerySchema,
+  masterIdParamSchema,
+} from "@/modules/masters/schemas/master.schema";
+import { masterController } from "@/modules/masters";
 
 export const router = Router();
-
-const log = logger.child("masters");
 
 // GET /api/masters
 //   ?categories=1  → distinct category strings (orderBy category)
 //   ?all=1 (ADMIN) → every master row
 //   ?category=X    → active {value,label}[] ordered by sortOrder
-router.get("/", async (req, res) => {
-  try {
-    const sp = new URL(req.url, "http://localhost").searchParams;
+// (the role gate is branch-dependent, so it stays a mid-handler lib call).
+router.get("/", validate({ query: listMastersQuerySchema }), masterController.list);
 
-    if (sp.get("categories")) {
-      const rows = await cached(catalogKey("masters", "categories"), cacheTtl.catalog, () =>
-        db.master.findMany({
-          distinct: ["category"],
-          select: { category: true },
-          orderBy: { category: "asc" },
-        })
-      );
-      return json(res, rows.map((r) => r.category));
-    }
+// POST /api/masters (ADMIN) — upsert by (category, value). Body coercion and
+// the "category and value are required" check run in the service with the
+// exact legacy messages.
+router.post("/", authorize("ADMIN"), masterController.create);
 
-    if (sp.get("all")) {
-      await requireRole(req, "ADMIN");
-      const rows = await cached(catalogKey("masters", "all"), cacheTtl.catalog, () =>
-        db.master.findMany({
-          orderBy: [{ category: "asc" }, { sortOrder: "asc" }],
-        })
-      );
-      return json(res, rows);
-    }
-
-    const category = sp.get("category");
-    if (!category) return json(res, []);
-
-    const rows = await cached(catalogKey("masters", cacheKeyPart({ category })), cacheTtl.catalog, () =>
-      db.master.findMany({
-        where: { category, active: true },
-        orderBy: { sortOrder: "asc" },
-        select: { value: true, label: true },
-      })
-    );
-    return json(res, rows);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
-
-// POST /api/masters (ADMIN) — upsert by (category, value)
-router.post("/", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const body = req.body as Record<string, unknown>;
-
-    const category = String(body.category ?? "").trim();
-    const value = String(body.value ?? "").trim();
-    const label = String(body.label ?? "").trim() || value;
-    if (!category || !value)
-      throw new ApiError("category and value are required", 400);
-    const sortOrder = Number.isFinite(Number(body.sortOrder))
-      ? Math.trunc(Number(body.sortOrder))
-      : 0;
-
-    const row = await db.master.upsert({
-      where: { category_value: { category, value } },
-      update: {
-        label,
-        sortOrder,
-        ...(body.active !== undefined ? { active: Boolean(body.active) } : {}),
-      },
-      create: { category, value, label, sortOrder },
-    });
-
-    log.info("master_upserted", {
-      masterId: row.id,
-      category,
-      value,
-      label,
-      sortOrder,
-      active: row.active,
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "MASTER_UPSERT",
-      "Master",
-      `${category}/${value}`,
-      session.userId
-    );
-    await invalidateCatalog("masters");
-    return json(res, row, 201);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
-
-// PATCH /api/masters/:id (ADMIN) — {label?, active?, sortOrder?, value?}
-router.patch("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const body = req.body as Record<string, unknown>;
-
-    const existing = await db.master.findUnique({ where: { id } });
-    if (!existing) {
-      log.warn("master_update_not_found", { masterId: id, actor: session.userId });
-      throw new ApiError("Master entry not found", 404);
-    }
-
-    const data: Prisma.MasterUpdateInput = {};
-    if (body.label !== undefined) data.label = String(body.label).trim();
-    if (body.sortOrder !== undefined)
-      data.sortOrder = Number(body.sortOrder) || 0;
-    if (body.active !== undefined) data.active = Boolean(body.active);
-    if (body.value !== undefined) {
-      const value = String(body.value).trim();
-      if (!value) throw new ApiError("value cannot be empty", 400);
-      if (value !== existing.value) {
-        const clash = await db.master.findUnique({
-          where: { category_value: { category: existing.category, value } },
-        });
-        if (clash) {
-          log.warn("master_value_conflict", {
-            masterId: id,
-            category: existing.category,
-            value,
-            existingId: clash.id,
-            actor: session.userId,
-          });
-          throw new ApiError(
-            "A master entry with this value already exists in the category",
-            409
-          );
-        }
-      }
-      data.value = value;
-    }
-
-    const row = await db.master.update({ where: { id }, data });
-    log.info("master_updated", {
-      masterId: id,
-      category: row.category,
-      value: row.value,
-      fields: Object.keys(data),
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "MASTER_UPDATE",
-      "Master",
-      `${row.category}/${row.value}`,
-      session.userId
-    );
-    await invalidateCatalog("masters");
-    return json(res, row);
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+// PATCH /api/masters/:id (ADMIN) — {label?, active?, sortOrder?, value?};
+// field checks run in the service, after the legacy existence lookup.
+router.patch(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: masterIdParamSchema }),
+  masterController.update
+);
 
 // DELETE /api/masters/:id (ADMIN)
-router.delete("/:id", async (req, res) => {
-  try {
-    const session = await requireRole(req, "ADMIN");
-    const { id } = req.params;
-    const row = await db.master.findUnique({ where: { id } });
-    if (!row) {
-      log.warn("master_delete_not_found", { masterId: id, actor: session.userId });
-      throw new ApiError("Master entry not found", 404);
-    }
-
-    await db.master.delete({ where: { id } });
-    log.info("master_deleted", {
-      masterId: id,
-      category: row.category,
-      value: row.value,
-      actor: session.userId,
-    });
-    await logActivity(
-      session.name,
-      "MASTER_DELETE",
-      "Master",
-      `${row.category}/${row.value}`,
-      session.userId
-    );
-    await invalidateCatalog("masters");
-    return json(res, { ok: true });
-  } catch (e) {
-    return handleError(e, res);
-  }
-});
+router.delete(
+  "/:id",
+  authorize("ADMIN"),
+  validate({ params: masterIdParamSchema }),
+  masterController.remove
+);

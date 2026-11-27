@@ -50,7 +50,7 @@ export const createSchoolCoverageSchema = z.preprocess(
     contactPhone: z.preprocess((v) => (v ? String(v).trim() : null), z.string().nullable()),
     // Raw pass-through: legacy built `new Date(String(v))` lazily and let an
     // Invalid Date fail in Prisma — reproducing that needs the raw value.
-    lastVisited: z.unknown(),
+    lastVisited: z.unknown().optional(),
     isActive: z.preprocess((v) => (v === undefined ? true : Boolean(v)), z.boolean()),
   })
 );
