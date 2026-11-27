@@ -91,7 +91,7 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 /** Count Prisma queries issued while `run` executes. */
 async function queriesDuring(run: () => Promise<void>): Promise<number> {
-  const { queryCounter } = await import("@/lib/db");
+  const { queryCounter } = await import("@/infrastructure/database/prisma");
   queryCounter.count = 0;
   queryCounter.enabled = true;
   try {
@@ -103,7 +103,7 @@ async function queriesDuring(run: () => Promise<void>): Promise<number> {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.donation.deleteMany({ where: { donorName: { startsWith: PREFIX } } });
   await db.testimonial.deleteMany({ where: { name: { startsWith: PREFIX } } });
   await db.master.deleteMany({ where: { category: { startsWith: PREFIX } } });
@@ -137,8 +137,8 @@ beforeAll(async () => {
 
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { issueToken } = await import("@/infrastructure/auth/session");
   const password = "x";
   const mk = (tag: string, role: string) =>
     db.user.create({
@@ -158,7 +158,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!redisUp) return;
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -456,7 +456,7 @@ describe.skipIf(!redisUp)("stats", () => {
 describe.skipIf(!redisUp)("ttl config", () => {
   it("a TTL of 0 disables that bucket", async () => {
     process.env.CACHE_TTL_STATS = "0";
-    const { cacheTtl } = await import("@/lib/cache");
+    const { cacheTtl } = await import("@/infrastructure/cache");
     expect(cacheTtl.stats).toBe(0);
 
     await request(app).get("/api/stats");
@@ -469,7 +469,7 @@ describe.skipIf(!redisUp)("ttl config", () => {
 
   it("an invalid TTL falls back to the default", async () => {
     process.env.CACHE_TTL_CAMPAIGN = "nope";
-    const { ttl } = await import("@/lib/cache");
+    const { ttl } = await import("@/infrastructure/cache");
     expect(ttl("CACHE_TTL_CAMPAIGN", 60)).toBe(60);
     process.env.CACHE_TTL_CAMPAIGN = "-3";
     expect(ttl("CACHE_TTL_CAMPAIGN", 60)).toBe(60);

@@ -9,9 +9,9 @@
  * checks and their exact messages live here instead of in a route-level Zod
  * schema.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   KitBatchRepository,
   KitBatchRow,
@@ -173,7 +173,7 @@ export class KitBatchService {
       if (!STATUSES.includes(status))
         throw new ApiError("status must be READY, IN_PROGRESS or DEPLETED", 400);
       // KitBatch.status is DERIVED from scanned-unit counts (kitBatchStatus in
-      // @/lib/kit, written by /api/kit-scan) — manual moves would desync the
+      // @/modules/kit-scan/services/kit.domain, written by /api/kit-scan) — manual moves would desync the
       // roll-up. Only an explicit no-op (same status) passes.
       if (status !== existing.status) {
         log.warn("kit_batch_status_manual_blocked", {

@@ -7,9 +7,9 @@
  * the legacy per-route catch used, so response bodies are byte-identical.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
+import { handleError } from "@/infrastructure/auth/session";
 import { validatedBody } from "@/shared/middleware/validate";
-import { filePart } from "@/lib/multipart";
+import { filePart } from "@/infrastructure/uploads/multipart";
 import type {
   DeviceTokenBody,
   PasswordChangeBody,

@@ -8,8 +8,8 @@
  * transport helper and stays at the HTTP layer.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { logger } from "@/lib/logger";
-import { subscribeEvents } from "@/lib/events";
+import { logger } from "@/infrastructure/logging/logger";
+import { subscribeEvents } from "@/infrastructure/notifications/sse-hub";
 import type { EventService } from "../services/event.service";
 
 const log = logger.child("events");

@@ -14,10 +14,10 @@
  * deterministic offline plan built from the same aggregate stats.
  */
 import crypto from "crypto";
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { assertTransition } from "@/lib/workflow";
-import { logActivity, type Session } from "@/lib/session";
+import { assertTransition } from "@/shared/workflow";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   HealthAiRepository,
 } from "../repositories/health-ai.repository.interface";

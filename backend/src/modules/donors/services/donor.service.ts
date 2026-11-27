@@ -6,9 +6,9 @@
  * email-conflict lookup is interleaved between them and every wire message
  * (and audit-log field order) must stay verbatim.
  */
-import { logger } from "@/lib/logger";
-import { nextDonorCode } from "@/lib/codes";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { nextDonorCode } from "@/domains/codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import { PAN_REGEX, PHONE_REGEX, PIN_REGEX } from "@/shared/schemas/common";
 import type {

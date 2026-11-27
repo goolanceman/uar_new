@@ -8,9 +8,9 @@
  * moderation (delete reel / delete comment / edit anyone's) additionally
  * accepts ADMIN/MODERATOR roles and the DB user.isModerator flag.
  */
-import { logger } from "@/lib/logger";
-import { ApiError, type Session } from "@/lib/session";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { ApiError, type Session } from "@/infrastructure/auth/session";
+import { paged } from "@/domains/community/serializers";
 import type {
   CreateReelInput,
   CreateReelResult,

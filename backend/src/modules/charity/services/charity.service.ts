@@ -1,6 +1,6 @@
 /**
  * Charity service — card, impact, points, achievements, goals and events.
- * Depends on the repository contract (shared @/lib/charity/* domain modules
+ * Depends on the repository contract (shared @/domains/charity/* domain modules
  * + the four legacy in-route Prisma reads), throws application errors,
  * never touches HTTP.
  *
@@ -8,21 +8,21 @@
  * silent defaults, same check order, same bare error messages — and every
  * log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
 import { ApiError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import {
   CHARITY_TIERS,
   serializeCard,
-} from "@/lib/charity/card";
+} from "@/domains/charity/card";
 import {
   ACHIEVEMENT_CATEGORIES,
   ACHIEVEMENT_TIERS,
   achievementWire,
-} from "@/lib/charity/achievements";
-import { POINT_TYPES, serializePoint } from "@/lib/charity/points";
-import { goalWire } from "@/lib/charity/goals";
+} from "@/domains/charity/achievements";
+import { POINT_TYPES, serializePoint } from "@/domains/charity/points";
+import { goalWire } from "@/domains/charity/goals";
 import type { CharityRepository } from "../repositories/charity.repository.interface";
 
 const log = logger.child("charity");

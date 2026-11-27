@@ -5,8 +5,8 @@
  * POST/PATCH coercions replicate the legacy Math.trunc/Number/Boolean clamps
  * (invalid numbers become 0, bad dates fall back to now) — no new rejections.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import type {
   PadDistributionCreateData,

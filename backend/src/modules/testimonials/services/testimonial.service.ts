@@ -7,10 +7,10 @@
  * legacy routes did, and the legacy side-effect order (log → logActivity →
  * cache invalidation) is preserved.
  */
-import { logger } from "@/lib/logger";
-import { cached, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
+import { logger } from "@/infrastructure/logging/logger";
+import { cached, cacheTtl, catalogKey, invalidateCatalog } from "@/infrastructure/cache";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   TestimonialCreateData,
   TestimonialRepository,

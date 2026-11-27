@@ -58,7 +58,7 @@ function mpatch(path: string, body: Record<string, unknown>, token?: string) {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   await db.volunteerApplication.deleteMany({ where: { email: { startsWith: PREFIX } } });
@@ -70,7 +70,7 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
 
   // an app user with a phone on their profile (the mobile form never collects
   // one — the session profile must fill it in) and one without
@@ -138,7 +138,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -223,7 +223,7 @@ describe("PATCH /api/volunteer-applications/:id (admin review)", () => {
     );
     expect(res.status).toBe(200);
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const user = await db.user.findUnique({ where: { id: me.id } });
     expect(user?.volunteerStatus).toBe("approved");
     expect(user?.volunteerApprovedAt).toBeTruthy();
@@ -237,7 +237,7 @@ describe("PATCH /api/volunteer-applications/:id (admin review)", () => {
   });
 
   it("rejection records the reason and mirrors User.volunteerStatus", async () => {
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     // applicant two applied via the main module (motivation >= 20 chars)
     const apply = await mpost(
       "volunteer-applications",
@@ -346,7 +346,7 @@ describe("volunteer application review machine (phase 5)", () => {
     );
     expect(review.status).toBe(200);
     expect(review.body.application.status).toBe("UNDER_REVIEW");
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const afterReview = await db.user.findUnique({ where: { id: applicant3.id } });
     expect(afterReview?.volunteerStatus).toBe("pending");
 

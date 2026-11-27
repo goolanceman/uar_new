@@ -3,13 +3,13 @@
  * Depends on the repository contract and shared lib domain helpers, throws
  * application errors, never touches HTTP.
  */
-import { logger } from "@/lib/logger";
-import { channelAuth } from "@/lib/realtime/pusher";
-import { buildRtcToken } from "@/lib/realtime/agora";
-import { findConversation, hasConversationAccess } from "@/lib/community/chat";
-import { findSpace, getSpaceParticipant } from "@/lib/community/audio-spaces";
+import { logger } from "@/infrastructure/logging/logger";
+import { channelAuth } from "@/infrastructure/external-services/pusher-server";
+import { buildRtcToken } from "@/infrastructure/external-services/agora";
+import { findConversation, hasConversationAccess } from "@/domains/community/chat";
+import { findSpace, getSpaceParticipant } from "@/domains/community/audio-spaces";
 import { ApiError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { RealtimeRepository } from "../repositories/realtime.repository.interface";
 
 const log = logger.child("realtime");

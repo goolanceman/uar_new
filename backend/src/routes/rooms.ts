@@ -8,12 +8,12 @@
  * The actor is ALWAYS the session user (legacy-first-step `requireAuth` →
  * `authenticate` middleware); room admin checks read CommunityRoomUser rows
  * and moderators are role ADMIN/MODERATOR or User.isModerator — all inside
- * the shared domain layer @/lib/community/rooms.
+ * the shared domain layer @/domains/community/rooms.
  */
 import { Router } from "express";
 import { authenticate } from "@/shared/middleware/auth";
 import { validate } from "@/shared/middleware/validate";
-import { multipart } from "@/lib/multipart";
+import { multipart } from "@/infrastructure/uploads/multipart";
 import {
   defaultPageQuerySchema,
   invitableUsersQuerySchema,

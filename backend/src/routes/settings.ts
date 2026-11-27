@@ -29,7 +29,7 @@ router.patch("/", authorize("ADMIN"), validate({ body: updateSettingsBodySchema 
 // POST /api/settings/test — run a REAL connectivity check for one integration
 // channel (SMTP / SMS provider / WhatsApp / payment gateway) using the stored
 // settings. ADMIN only. Responses never contain credentials — the verify*
-// messages are operator-safe strings from @/lib/notify.
+// messages are operator-safe strings from @/infrastructure/notifications/notify.
 router.post("/test", authorize("ADMIN"), validate({ body: testSettingsBodySchema }), settingController.test);
 
 // GET /api/settings/public — no auth. Public org identity subset

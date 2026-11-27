@@ -1,11 +1,11 @@
 /**
  * Implementation of the room repository — delegates to the pinned shared
- * domain layer @/lib/community/rooms, which owns all Prisma access for
+ * domain layer @/domains/community/rooms, which owns all Prisma access for
  * community rooms (see the interface note). This module adds no Prisma calls
  * of its own.
  */
-import type { Session } from "@/lib/session";
-import * as rooms from "@/lib/community/rooms";
+import type { Session } from "@/infrastructure/auth/session";
+import * as rooms from "@/domains/community/rooms";
 import type { RoomRepository } from "./room.repository.interface";
 
 export class PrismaRoomRepository implements RoomRepository {

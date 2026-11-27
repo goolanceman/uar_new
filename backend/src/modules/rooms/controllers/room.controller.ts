@@ -9,11 +9,11 @@
  * legacy mid-handler `await requireAuth(req)` re-check.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { requireAuth } from "@/lib/session";
+import { requireAuth } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
-import { type MulterFile } from "@/lib/multipart";
-import { saveUpload } from "@/lib/files";
+import { type MulterFile } from "@/infrastructure/uploads/multipart";
+import { saveUpload } from "@/domains/files";
 import type {
   DefaultPageQuery,
   InterestIdParams,

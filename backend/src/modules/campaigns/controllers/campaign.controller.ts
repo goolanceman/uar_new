@@ -4,8 +4,8 @@
  * centralized error middleware via next(error).
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
-import { validateSession } from "@/lib/session";
+import { handleError } from "@/infrastructure/auth/session";
+import { validateSession } from "@/infrastructure/auth/session";
 import { validatedQuery } from "@/shared/middleware/validate";
 import type { CampaignService } from "../services/campaign.service";
 import type { ListCampaignsQuery } from "../schemas/campaign.schema";

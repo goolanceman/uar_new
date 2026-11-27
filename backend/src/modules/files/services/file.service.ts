@@ -2,7 +2,7 @@
  * File service — upload policy, file-manager rules and the download access
  * policy (gap A-5). Depends on the repository contract, throws application
  * errors, never touches HTTP. The on-disk bytes are handled by the shared
- * helpers in @/lib/files exactly like the legacy routes did.
+ * helpers in @/domains/files exactly like the legacy routes did.
  *
  * Download access policy (gap A-5):
  * - Media mimes (image/*, audio/*, video/*) stay PUBLICLY readable — the
@@ -13,10 +13,10 @@
  *   other authenticated users and guests get 401/403. This is what keeps
  *   beneficiary KYC documents private while reviewers can open them.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { saveUpload, sanitizeFolder, validFolder, deleteStored } from "@/lib/files";
-import { getCachedFile, setCachedFile, invalidateFile, type CachedFileAsset } from "@/lib/cache";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { saveUpload, sanitizeFolder, validFolder, deleteStored } from "@/domains/files";
+import { getCachedFile, setCachedFile, invalidateFile, type CachedFileAsset } from "@/infrastructure/cache";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type { FileRepository, FileStats, FileDownloadRow } from "../repositories/file.repository.interface";
 import type { ListFilesQuery } from "../schemas/file.schema";

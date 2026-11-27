@@ -8,10 +8,10 @@
  * validated fields mid-handler after the existence lookups, so those checks
  * and their exact messages live here in the original order.
  */
-import { logger } from "@/lib/logger";
-import { RECURRING_NEED_STATUSES } from "@/lib/recurring-needs";
+import { logger } from "@/infrastructure/logging/logger";
+import { RECURRING_NEED_STATUSES } from "@/modules/recurring-needs/services/recurring-needs.domain";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   CreateRecurringNeedData,
   RecurringNeedListFilter,

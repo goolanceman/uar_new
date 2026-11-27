@@ -13,7 +13,7 @@
  * app the centralized middleware renders through the identical handleError.
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError, requireAuth, validateSession } from "@/lib/session";
+import { handleError, requireAuth, validateSession } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
 import type { DonationService } from "../services/donation.service";
 import type {

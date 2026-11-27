@@ -39,7 +39,7 @@ async function buildApp() {
 
 // ─── DB helpers (test database only) ────────────────────────────────────────
 async function resetDb() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   // Order: children first. FK enforcement is not deferred here — the set is small.
   await db.activityLog.deleteMany();
   await db.donation.deleteMany();
@@ -58,7 +58,7 @@ async function resetDb() {
 }
 
 async function seedCampaign() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   return db.campaign.create({
     data: {
       code: `UAR-CMP-TEST-${Date.now()}`,
@@ -77,7 +77,7 @@ let campaignId: string;
 
 beforeAll(async () => {
   process.env.SESSION_SECRET = process.env.SESSION_SECRET || "test-secret-value-at-least-16ch";
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await resetDb();
   const c = await seedCampaign();
   campaignId = c.id;
@@ -85,7 +85,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await resetDb();
   await db.$disconnect();
 });
@@ -117,8 +117,8 @@ describe("auth", () => {
 
   it("rejects login with wrong password", async () => {
     // Create a real login first via seeded-style admin (register lacks ADMIN role — create directly)
-    const { db } = await import("@/lib/db");
-    const { hashPassword } = await import("@/lib/session");
+    const { db } = await import("@/infrastructure/database/prisma");
+    const { hashPassword } = await import("@/infrastructure/auth/session");
     await db.user.create({
       data: {
         name: "Test Admin",
@@ -253,7 +253,7 @@ describe("files policy", () => {
   beforeAll(async () => {
     // Look up the admin created in the auth suite directly (no brittle
     // email-string coupling between blocks).
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const admin = await db.user.findFirst({ where: { role: "ADMIN" } });
     const r2 = await request(app)
       .post("/api/auth/login")
@@ -263,8 +263,8 @@ describe("files policy", () => {
   });
 
   it("non-admin upload is forced into kyc/<userId> namespace", async () => {
-    const { db } = await import("@/lib/db");
-    const { hashPassword } = await import("@/lib/session");
+    const { db } = await import("@/infrastructure/database/prisma");
+    const { hashPassword } = await import("@/infrastructure/auth/session");
     const email = `kycuser-${Date.now()}@test.local`;
     await db.user.create({
       data: { name: "KYC User", email, phone: "+91 98860 33333", role: "BENEFICIARY", password: hashPassword("KycPass@123"), isActive: true },
@@ -355,8 +355,8 @@ describe("volunteer self-service", () => {
   let taskA = "";
 
   beforeAll(async () => {
-    const { db } = await import("@/lib/db");
-    const { issueToken } = await import("@/lib/session");
+    const { db } = await import("@/infrastructure/database/prisma");
+    const { issueToken } = await import("@/infrastructure/auth/session");
     const mk = async (tag: string) => {
       const user = await db.user.create({
         data: { name: `Vol ${tag}`, email: `vol-${tag}-${Date.now()}@test.local`, role: "VOLUNTEER", password: "x" },

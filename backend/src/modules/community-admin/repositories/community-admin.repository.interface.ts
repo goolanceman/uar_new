@@ -1,7 +1,7 @@
 /**
  * Community admin repository contract — persistence gateway for the
  * /api/community/admin surface. ALL Prisma access for community moderation
- * lives in the shared domain module @/lib/community/admin (read-only shared
+ * lives in the shared domain module @/domains/community/admin (read-only shared
  * code); this contract exposes exactly the operations the endpoints use so
  * the service stays decoupled from HTTP and Prisma alike.
  */
@@ -34,8 +34,8 @@ import type {
   updateDocumentType,
   updateReportReason,
   updateUsernameRestriction,
-} from "@/lib/community/admin";
-import type { Session } from "@/lib/session";
+} from "@/domains/community/admin";
+import type { Session } from "@/infrastructure/auth/session";
 
 export type AdminUsersResult = Awaited<ReturnType<typeof adminUsers>>;
 export type AdminPostsResult = Awaited<ReturnType<typeof adminPosts>>;

@@ -12,12 +12,12 @@
  * of side effects are byte-identical to the legacy route handlers.
  */
 import { randomInt, randomBytes } from "node:crypto";
-import { logger } from "@/lib/logger";
-import { hashPassword, issueToken, logActivity, verifyPassword, type Session } from "@/lib/session";
-import { checkRateLimit } from "@/lib/rate-limit";
-import { emailShell, loadSettings, sendEmail } from "@/lib/notify";
-import { DEMO_ACCOUNTS } from "@/lib/demo-accounts";
-import { isTestingMode } from "@/lib/testing-mode";
+import { logger } from "@/infrastructure/logging/logger";
+import { hashPassword, issueToken, logActivity, verifyPassword, type Session } from "@/infrastructure/auth/session";
+import { checkRateLimit } from "@/infrastructure/cache/rate-limit";
+import { emailShell, loadSettings, sendEmail } from "@/infrastructure/notifications/notify";
+import { DEMO_ACCOUNTS } from "@/shared/constants/demo-accounts";
+import { isTestingMode } from "@/shared/utils/testing-mode";
 import { ApiError } from "@/shared/errors";
 import type { User } from "@prisma/client";
 import type { AuthRepository, ProfilePatch } from "../repositories/auth.repository.interface";
@@ -229,7 +229,7 @@ export class AuthService {
 
   /**
    * The login-screen demo credential list. SINGLE SOURCE OF TRUTH:
-   * src/lib/demo-accounts.ts (same list prisma/seed.ts creates). Serving is
+   * src/shared/constants/demo-accounts.ts (same list prisma/seed.ts creates). Serving is
    * gated behind testing mode:
    *   OFF (default) → 404 { error: "Not found" } — indistinguishable from any
    *     other unknown route, so production leaks nothing (not even the

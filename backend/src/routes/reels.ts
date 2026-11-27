@@ -13,7 +13,7 @@
  */
 import { Router } from "express";
 import { authenticate } from "@/shared/middleware/auth";
-import { multipart, multipartErrorHandler } from "@/lib/multipart";
+import { multipart, multipartErrorHandler } from "@/infrastructure/uploads/multipart";
 import { reelController } from "@/modules/reels";
 
 export const router = Router();

@@ -4,7 +4,7 @@
  * centralized error middleware via next(error).
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { requireRole } from "@/lib/session";
+import { requireRole } from "@/infrastructure/auth/session";
 import { validatedParams, validatedQuery } from "@/shared/middleware/validate";
 import type { ListMastersQuery, MasterIdParams } from "../schemas/master.schema";
 import type { MasterService } from "../services/master.service";

@@ -1,26 +1,26 @@
 /**
  * Charity repository contract — persistence gateway for /api/charity/*.
  * ALL Prisma access for charity points/achievements/goals/events/card
- * settlement lives in the shared domain modules @/lib/charity/* (read-only
+ * settlement lives in the shared domain modules @/domains/charity/* (read-only
  * shared code); this contract exposes exactly the operations the endpoints
  * use — the four legacy in-route Prisma reads plus thin delegations to the
  * lib domain functions — so the service stays decoupled from HTTP and
  * Prisma alike.
  */
 import type { Achievement, CharityCard, User } from "@prisma/client";
-import type { buildImpactMetrics, syncCardStats } from "@/lib/charity/card";
+import type { buildImpactMetrics, syncCardStats } from "@/domains/charity/card";
 import type {
   achievementsSummary,
   achievementProgress,
   claimAchievement,
   myAchievements,
-} from "@/lib/charity/achievements";
+} from "@/domains/charity/achievements";
 import type {
   pointsExpiring,
   pointsHistory,
   pointsOverview,
   redeemPoints,
-} from "@/lib/charity/points";
+} from "@/domains/charity/points";
 import type {
   completeGoal,
   createGoal,
@@ -29,7 +29,7 @@ import type {
   goalsSummary,
   listGoals,
   updateGoal,
-} from "@/lib/charity/goals";
+} from "@/domains/charity/goals";
 import type {
   cancelRegistration,
   checkIn,
@@ -37,7 +37,7 @@ import type {
   listEvents,
   myEvents,
   registerForEvent,
-} from "@/lib/charity/events";
+} from "@/domains/charity/events";
 
 export type CardWithUser = CharityCard & { user: User };
 

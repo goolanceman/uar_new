@@ -5,8 +5,8 @@
  * model parameters, same degradation semantics), and falls back to the
  * knowledge base so the agent is ALWAYS available, even offline.
  */
-import { logger } from "@/lib/logger";
-import type { KnowledgeEntry } from "@/lib/assistant-knowledge";
+import { logger } from "@/infrastructure/logging/logger";
+import type { KnowledgeEntry } from "@/modules/assistant/services/assistant-knowledge.domain";
 import type { ChatMessage } from "../schemas/assistant.schema";
 import type { AssistantRepository, Helplines } from "../repositories/assistant.repository.interface";
 

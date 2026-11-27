@@ -1,7 +1,7 @@
 /**
  * Community admin service — moderation queues, config lists, profile
  * verifications and platform announcements. Depends on the repository
- * contract (which delegates to the shared @/lib/community/admin domain
+ * contract (which delegates to the shared @/domains/community/admin domain
  * module), throws application errors, never touches HTTP.
  *
  * The legacy handlers coerced/validated by hand mid-flow — the exact
@@ -10,10 +10,10 @@
  * through to Prisma exactly like before) and bare error messages are kept
  * here, and every log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
 import { ApiError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { CommunityAdminRepository } from "../repositories/community-admin.repository.interface";
 
 const log = logger.child("community:admin");

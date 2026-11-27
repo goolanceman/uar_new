@@ -6,13 +6,13 @@
  * need checks → amount validation on POST; existence → role/ownership gates →
  * field checks on PATCH) and every log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import {
   SPONSORSHIP_STATUSES,
   DONOR_ALLOWED_SPONSORSHIP_STATUSES,
-} from "@/lib/sponsorships";
-import { monthlyEquivalent } from "@/lib/distribution-stock";
+} from "@/modules/sponsorships/services/sponsorships.domain";
+import { monthlyEquivalent } from "@/domains/distribution-stock";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   MatchDonor,

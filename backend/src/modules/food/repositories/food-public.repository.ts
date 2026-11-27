@@ -5,7 +5,7 @@
  * handover count → cities + last update Promise.all) is reproduced verbatim.
  */
 import { db } from "@/infrastructure/database/prisma";
-import { FOOD_PUBLIC_EVENT_STATUSES } from "@/lib/food";
+import { FOOD_PUBLIC_EVENT_STATUSES } from "@/modules/food/services/food.domain";
 import type { FoodPublicRepository, PublicStatsRaw } from "./food-public.repository.interface";
 
 export class PrismaFoodPublicRepository implements FoodPublicRepository {

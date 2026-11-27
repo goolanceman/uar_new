@@ -13,7 +13,7 @@
  * centralized middleware renders through the identical handleError.
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
+import { handleError } from "@/infrastructure/auth/session";
 import { validatedBody } from "@/shared/middleware/validate";
 import type { PaymentService } from "../services/payment.service";
 import type { VerifyPaymentBody, WebhookBody } from "../schemas/payment.schema";

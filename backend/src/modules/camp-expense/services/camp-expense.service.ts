@@ -6,8 +6,8 @@
  * (campId → camp lookup → head → amount) including the warn log emitted
  * between the DB lookup and the 404, so wire behavior is byte-identical.
  */
-import { logger } from "@/lib/logger";
-import { ApiError, logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { ApiError, logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   CampExpenseRepository,
   CampExpenseRow,

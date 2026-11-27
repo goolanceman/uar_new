@@ -20,9 +20,18 @@ src/modules/<name>/schemas/     → Zod request schemas
 1. **Preserve behavior 100%.** Same routes, methods, paths, status codes,
    response bodies, error messages, log event names, cache keys, ordering of
    side effects. When in doubt, match the legacy code exactly.
-2. **NEVER modify anything under `src/lib/**`, `src/shared/**`,
-   `src/infrastructure/**`, `src/config/**`.** They are read-only for you.
-   Import from them freely. The ONLY files you may create/modify:
+2. **Respect the layer map.** The former `src/lib/**` has been dissolved:
+   - `src/infrastructure/**` — auth/session, logging, cache + rate-limit,
+     storage (+ upload-token signing), media serializers, external services
+     (Agora, Pusher WS server), uploads (multer), notifications (email/SMS/
+     WhatsApp/gateway + SSE hub), database (Prisma client, transactions)
+   - `src/jobs/workers/**` — background workers (video transcoder)
+   - `src/domains/**` — shared business logic used by multiple modules
+     (community/*, charity/*, codes, settings, recurring, files, …)
+   - `src/modules/<name>/services/*.domain.ts` — module-private domain logic
+   - `src/shared/**` — errors, middleware, validators, utils, constants
+   These are read-only for module refactors. Import from them freely. The
+   only files a module refactor may create/modify:
    - `src/routes/<your-module>.ts` (rewrite thin — keep `export const router`)
    - `src/modules/<your-module>/**` (create)
 3. **Route files must not contain:** `db.` calls, business logic, data

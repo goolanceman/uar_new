@@ -13,7 +13,7 @@
 import { Router } from "express";
 import { authenticate } from "@/shared/middleware/auth";
 import { validate } from "@/shared/middleware/validate";
-import { multipart } from "@/lib/multipart";
+import { multipart } from "@/infrastructure/uploads/multipart";
 import {
   byHashtagQuerySchema,
   byInterestQuerySchema,

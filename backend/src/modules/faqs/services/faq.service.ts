@@ -5,11 +5,11 @@
  * Every mutation drops the faqs catalog cache, exactly like the legacy
  * routes did (admin CRUD gate lives at the route/middleware layer).
  */
-import { logger } from "@/lib/logger";
-import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/infrastructure/cache";
+import { paged } from "@/domains/community/serializers";
 import { ApiError, NotFoundError, ConflictError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { FaqRepository, FaqTypeWithFaqs } from "../repositories/faq.repository.interface";
 
 const log = logger.child("faqs");

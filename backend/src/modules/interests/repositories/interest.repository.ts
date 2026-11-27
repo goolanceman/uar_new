@@ -4,7 +4,7 @@
  * own the Prisma access and caching for this module. Named Lib* because the
  * Prisma calls stay in the shared lib (read-only for this module).
  */
-import { addInterest, deleteInterest, listInterests, updateInterest } from "@/lib/community/interests";
+import { addInterest, deleteInterest, listInterests, updateInterest } from "@/domains/community/interests";
 import type { InterestRepository } from "./interest.repository.interface";
 
 export class LibInterestRepository implements InterestRepository {

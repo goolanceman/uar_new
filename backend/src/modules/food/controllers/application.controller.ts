@@ -6,7 +6,7 @@
  * catch).
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError, validateSession } from "@/lib/session";
+import { handleError, validateSession } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
 import type { FoodBody } from "../schemas/food.schema";
 import type { ApplicationService } from "../services/application.service";

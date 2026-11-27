@@ -7,8 +7,8 @@
  * to the centralized error middleware via next(error).
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { validateSession } from "@/lib/session";
-import { checkRateLimit, clientIp } from "@/lib/rate-limit";
+import { validateSession } from "@/infrastructure/auth/session";
+import { checkRateLimit, clientIp } from "@/infrastructure/cache/rate-limit";
 import type { ChatRequestBody } from "../schemas/assistant.schema";
 import type { AssistantService } from "../services/assistant.service";
 

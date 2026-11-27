@@ -4,10 +4,10 @@
  *
  * Screening observations only — these records never constitute a diagnosis.
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   ScreeningCreatedRow,
   ScreeningListFilters,

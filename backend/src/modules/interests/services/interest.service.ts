@@ -4,9 +4,9 @@
  * interest_deleted with the session actor — those domain events (and the
  * "interests" logger child) move here.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
-import type { Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
+import type { Session } from "@/infrastructure/auth/session";
 import type { InterestRepository } from "../repositories/interest.repository.interface";
 
 const log = logger.child("interests");

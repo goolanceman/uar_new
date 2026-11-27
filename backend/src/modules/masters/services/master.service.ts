@@ -5,9 +5,9 @@
  * mutation drops it, and the legacy side-effect order (log → logActivity →
  * cache invalidation) is preserved.
  */
-import { logger } from "@/lib/logger";
-import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/lib/cache";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { cached, cacheKeyPart, cacheTtl, catalogKey, invalidateCatalog } from "@/infrastructure/cache";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import type {
   MasterRepository,

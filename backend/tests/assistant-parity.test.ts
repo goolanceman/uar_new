@@ -45,7 +45,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -59,8 +59,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword, issueToken } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword, issueToken } = await import("@/infrastructure/auth/session");
   const admin = await db.user.create({
     data: {
       email: `${PREFIX}-admin@test.local`,
@@ -77,7 +77,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -96,7 +96,7 @@ describe("POST /api/health-ai {action:'camp-plan'} — offline fallback", () => 
     expect(String(res.body.plan)).toContain("Offline plan — AI service unavailable");
 
     // The interaction is still recorded for human review.
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const row = await db.aIInteraction.findUnique({ where: { id: res.body.id } });
     expect(row).not.toBeNull();
     expect(row?.action).toBe("CAMP_PLAN");

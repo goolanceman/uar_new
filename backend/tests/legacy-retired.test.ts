@@ -32,7 +32,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 

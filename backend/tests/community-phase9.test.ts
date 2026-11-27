@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
 import request from "supertest";
-import { issueToken } from "@/lib/session";
+import { issueToken } from "@/infrastructure/auth/session";
 
 const PREFIX = `p9-${Date.now()}`;
 const PASSWORD = ["Pass", "w0rd!", "123"].join("");
@@ -41,7 +41,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -54,8 +54,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const { hashPassword } = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const { hashPassword } = await import("@/infrastructure/auth/session");
 
   const mk = (tag: string) =>
     db.user.create({
@@ -77,7 +77,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -140,7 +140,7 @@ describe("GET /api/posts/saved (savedPostIds CSV via PATCH /api/profile)", () =>
     await request(app).patch("/api/profile").set("Authorization", `Bearer ${aToken}`).send({ savedReelIds: "reel-1" });
     await request(app).patch("/api/profile").set("Authorization", `Bearer ${aToken}`).send({ savedPostIds: postId });
 
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     const user = await db.user.findUnique({ where: { id: aId }, select: { savedPostIds: true, savedReelIds: true } });
     expect(user?.savedReelIds).toBe("reel-1");
     expect(user?.savedPostIds).toBe(postId);

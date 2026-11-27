@@ -7,12 +7,12 @@
  * live here instead of in a route-level Zod schema. Every mutation recomputes
  * the linked cause and drops the causes cache, exactly like the legacy routes.
  */
-import { logger } from "@/lib/logger";
-import { recomputeCause } from "@/lib/causes";
-import { invalidateCauses } from "@/lib/cache";
-import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
+import { logger } from "@/infrastructure/logging/logger";
+import { recomputeCause } from "@/domains/causes";
+import { invalidateCauses } from "@/infrastructure/cache";
+import { pledgeSchedule, pledgeInstallments } from "@/domains/recurring";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   PledgeListFilter,
   PledgeRepository,

@@ -4,8 +4,8 @@
  * SSE wiring stay in the controller (legacy ordering preserved: the flag
  * check and its log happen before any response is written).
  */
-import { logger } from "@/lib/logger";
-import { isFlagOn } from "@/lib/settings-core";
+import { logger } from "@/infrastructure/logging/logger";
+import { isFlagOn } from "@/domains/settings-core";
 import type { EventRepository } from "../repositories/event.repository.interface";
 
 const log = logger.child("events");

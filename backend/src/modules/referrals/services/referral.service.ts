@@ -1,14 +1,14 @@
 /**
  * Referral service — referral workflow rules (shared chain definition in
- * @/lib/referrals; any strictly-forward move plus the terminal side exits).
+ * @/modules/referrals/services/referrals.domain; any strictly-forward move plus the terminal side exits).
  * Depends on the repository contract, throws application errors, never
  * touches HTTP. Field checks keep their exact legacy messages and ordering
  * (404-before-400 interleaving with DB lookups preserved).
  */
-import { logger } from "@/lib/logger";
-import { REFERRAL_FLOW, REFERRAL_TERMINAL_STATUSES, referralTransitions } from "@/lib/referrals";
-import { nextRefCode } from "@/lib/health-codes";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { REFERRAL_FLOW, REFERRAL_TERMINAL_STATUSES, referralTransitions } from "@/modules/referrals/services/referrals.domain";
+import { nextRefCode } from "@/domains/health-codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError, ConflictError } from "@/shared/errors";
 import type {
   CreateReferralData,

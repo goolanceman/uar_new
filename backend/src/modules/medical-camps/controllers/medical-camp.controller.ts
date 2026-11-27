@@ -4,7 +4,7 @@
  * the centralized error middleware via next(error).
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { validateSession } from "@/lib/session";
+import { validateSession } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
 import type {
   CampIdParams,

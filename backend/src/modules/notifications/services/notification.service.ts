@@ -7,12 +7,12 @@
  * so those checks and their exact messages live here instead of in a
  * route-level Zod schema.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { paged } from "@/lib/community/serializers";
-import { communityNotificationFeed } from "@/lib/community/notifications";
-import { sendPush } from "@/lib/community/push";
-import type { Session } from "@/lib/session";
+import { paged } from "@/domains/community/serializers";
+import { communityNotificationFeed } from "@/domains/community/notifications";
+import { sendPush } from "@/domains/community/push";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   NotificationRepository,
   NotificationRow,

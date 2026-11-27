@@ -18,7 +18,7 @@ import {
   kickParticipant,
   getAudioSpaceMessages,
   sendAudioSpaceMessage,
-} from "@/lib/community/audio-spaces";
+} from "@/domains/community/audio-spaces";
 import type {
   AudioMessageWire,
   AudioSpaceRepository,

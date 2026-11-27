@@ -12,24 +12,24 @@
  * masked/anonymised projection only. Admin branches gate on the verified
  * session role exactly like the legacy handlers did.
  */
-import { logger } from "@/lib/logger";
-import type { Session } from "@/lib/session";
-import { logActivity } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import type { Session } from "@/infrastructure/auth/session";
+import { logActivity } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
-import { nextDonorCode } from "@/lib/codes";
-import { CURRENCY_CODES } from "@/lib/settings-core";
-import { assertTransition } from "@/lib/workflow";
-import { loadSettings, notifyDonation, emailShell, sendEmail } from "@/lib/notify";
-import { broadcastEvent } from "@/lib/events";
-import { invalidateCampaigns, invalidateStats } from "@/lib/cache";
-import { paged, pageParams } from "@/lib/community/serializers";
+import { nextDonorCode } from "@/domains/codes";
+import { CURRENCY_CODES } from "@/domains/settings-core";
+import { assertTransition } from "@/shared/workflow";
+import { loadSettings, notifyDonation, emailShell, sendEmail } from "@/infrastructure/notifications/notify";
+import { broadcastEvent } from "@/infrastructure/notifications/sse-hub";
+import { invalidateCampaigns, invalidateStats } from "@/infrastructure/cache";
+import { paged, pageParams } from "@/domains/community/serializers";
 import {
   VALID_FREQUENCIES,
   RECURRING_STATUSES,
   RECURRING_STATUS_TRANSITIONS,
   nextChargeAfter,
   settleDonationCommitments,
-} from "@/lib/recurring";
+} from "@/domains/recurring";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type {
   CreateDonationData,

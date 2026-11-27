@@ -5,7 +5,7 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
-import { validateSession } from "@/lib/session";
+import { validateSession } from "@/infrastructure/auth/session";
 import type { AnimalBody, AnimalIdParams } from "../schemas/animal.schema";
 import type { AnimalService } from "../services/animal.service";
 

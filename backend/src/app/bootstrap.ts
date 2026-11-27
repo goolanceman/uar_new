@@ -2,11 +2,11 @@
  * Background job bootstrap — starts the out-of-band workers once, after the
  * HTTP listener. Each starter is idempotent and logs its own failures.
  */
-import { logger } from "@/lib/logger";
-import { startPusherServer } from "@/lib/realtime/pusher";
-import { syncPostCommentCounts } from "@/lib/community/counters";
-import { startTranscoder } from "@/lib/media/transcoder";
-import { assertStorageConfig } from "@/lib/storage";
+import { logger } from "@/infrastructure/logging/logger";
+import { startPusherServer } from "@/infrastructure/external-services/pusher-server";
+import { syncPostCommentCounts } from "@/domains/community/counters";
+import { startTranscoder } from "@/jobs/workers/transcoder.worker";
+import { assertStorageConfig } from "@/infrastructure/storage";
 
 export function startBackgroundJobs(): void {
   syncPostCommentCounts().catch((e) =>

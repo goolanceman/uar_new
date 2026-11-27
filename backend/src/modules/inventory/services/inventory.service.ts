@@ -7,11 +7,11 @@
  * dates flow to Prisma as Invalid Date), the 404 firing before any body
  * processing, and the bare "name is required" message.
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
-import { nextInventoryItemCode } from "@/lib/codes";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
+import { nextInventoryItemCode } from "@/domains/codes";
 import { ApiError, NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { InventoryItem } from "@prisma/client";
 import type {
   InventoryItemDetailRow,

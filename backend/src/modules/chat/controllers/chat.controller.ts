@@ -5,8 +5,8 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
-import { type MulterFile } from "@/lib/multipart";
-import type { Session } from "@/lib/session";
+import { type MulterFile } from "@/infrastructure/uploads/multipart";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   ConversationIdParams,
   JsonBody,
@@ -34,7 +34,7 @@ export class ChatController {
 
   /** Store an uploaded file and return its absolute public URL (routes/files.ts). */
   private async storeUpload(req: Request, session: Session, file: File): Promise<string> {
-    const { saveUpload } = await import("@/lib/files");
+    const { saveUpload } = await import("@/domains/files");
     const asset = await saveUpload(file, { folder: "chat", uploadedBy: { id: session.userId, name: session.name } });
     const host = req.get("host") ?? "localhost";
     const proto =

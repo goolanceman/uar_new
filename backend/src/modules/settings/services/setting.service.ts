@@ -6,17 +6,17 @@
  * between the upserts and the response reload, and every log event keeps its
  * legacy name.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import {
   SETTING_DEFAULTS,
   validateSettingValue,
   isSecretKey,
   maskValue,
-} from "@/lib/settings-core";
-import { loadSettings, verifyEmail, verifySms, verifyWhatsApp, verifyGateway } from "@/lib/notify";
-import { publicOrgSettings } from "@/lib/api-org";
-import { cached, cacheTtl, invalidateSettings, settingsKey } from "@/lib/cache";
-import { logActivity, type Session } from "@/lib/session";
+} from "@/domains/settings-core";
+import { loadSettings, verifyEmail, verifySms, verifyWhatsApp, verifyGateway } from "@/infrastructure/notifications/notify";
+import { publicOrgSettings } from "@/domains/api-org";
+import { cached, cacheTtl, invalidateSettings, settingsKey } from "@/infrastructure/cache";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type { AppListRow, SettingRepository, SettingRow } from "../repositories/setting.repository.interface";
 
@@ -24,7 +24,7 @@ const log = logger.child("settings");
 
 /** Non-secret default values — merged into GET responses for keys that the
  * admin has not customised yet, so every consumer sees a complete map.
- * (Canonical list lives in @/lib/settings-core — do not duplicate here.) */
+ * (Canonical list lives in @/domains/settings-core — do not duplicate here.) */
 const DEFAULT_SETTINGS = SETTING_DEFAULTS;
 
 type Channel = "email" | "sms" | "whatsapp" | "gateway";
@@ -108,7 +108,7 @@ export class SettingService {
   /** POST /api/settings/test — run a REAL connectivity check for one integration
    *  channel (SMTP / SMS provider / WhatsApp / payment gateway) using the stored
    *  settings. ADMIN only. Responses never contain credentials — the verify*
-   *  messages are operator-safe strings from @/lib/notify. */
+   *  messages are operator-safe strings from @/infrastructure/notifications/notify. */
   async test(
     session: Session,
     body: Record<string, unknown>

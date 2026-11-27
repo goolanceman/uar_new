@@ -7,9 +7,9 @@
 
 import express from "express";
 import cors from "cors";
-import { handleError } from "@/lib/session";
-import { logger } from "@/lib/logger";
-import { requestLogger } from "@/lib/middleware/request-logger";
+import { handleError } from "@/infrastructure/auth/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { requestLogger } from "@/shared/middleware/request-logger";
 import { allowedOrigins } from "@/config/env";
 import { dashboardController } from "@/modules/dashboard";
 import { router as authRouter } from "@/routes/auth";
@@ -83,8 +83,8 @@ import { router as volunteerAttendancesRouter } from "@/routes/volunteer-attenda
 import { router as volunteerTasksRouter } from "@/routes/volunteer-tasks";
 import { router as assistantRouter } from "@/routes/assistant";
 import { router as eventsRouter } from "@/routes/events";
-import { startPusherServer } from "@/lib/realtime/pusher";
-import { syncPostCommentCounts } from "@/lib/community/counters";
+import { startPusherServer } from "@/infrastructure/external-services/pusher-server";
+import { syncPostCommentCounts } from "@/domains/community/counters";
 import { router as charityRouter } from "@/routes/charity";
 import { router as communityAdminRouter } from "@/routes/community-admin";
 import { router as communityUsersRouter } from "@/routes/community-users";

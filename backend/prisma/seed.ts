@@ -4,12 +4,12 @@
  */
 import { PrismaClient } from "@prisma/client";
 import crypto from "crypto";
-import { SETTING_DEFAULTS } from "../src/lib/settings-core";
-import { DEMO_ACCOUNTS } from "../src/lib/demo-accounts";
+import { SETTING_DEFAULTS } from "../src/domains/settings-core";
+import { DEMO_ACCOUNTS } from "../src/shared/constants/demo-accounts";
 
 const db = new PrismaClient();
 
-/** One demo-account lookup for the seed (single source: src/lib/demo-accounts.ts). */
+/** One demo-account lookup for the seed (single source: src/shared/constants/demo-accounts.ts). */
 function demoByKey(key: string) {
   const d = DEMO_ACCOUNTS.find((x) => x.key === key);
   if (!d) throw new Error(`demo-accounts.ts is missing the "${key}" account`);
@@ -61,7 +61,7 @@ async function main() {
   console.log("🌱 Seeding United Angel Reach (canonical)…");
 
   // ── Users ──────────────────────────────────────────────────────────────
-  // Demo logins come from ONE list: src/lib/demo-accounts.ts (also served by
+  // Demo logins come from ONE list: src/shared/constants/demo-accounts.ts (also served by
   // GET /api/auth/demo-accounts while testing mode is ON — no drift possible).
   const users: Record<string, string> = {};
   const userDefs = ["admin", "donor", "volunteer", "applicant", "beneficiary"].map((key) => {

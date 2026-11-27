@@ -1,9 +1,9 @@
 /**
  * Music repository contract — delegates to the shared music domain helpers in
- * @/lib/community/music (read-only shared code that owns the Prisma access
+ * @/domains/community/music (read-only shared code that owns the Prisma access
  * and catalog caching); the module adds no Prisma of its own.
  */
-import type { listMusic, listMusicCategories, listSavedMusic } from "@/lib/community/music";
+import type { listMusic, listMusicCategories, listSavedMusic } from "@/domains/community/music";
 
 export interface MusicRepository {
   /** Browse/search (legacy fetchMusicWithSearch + fetchMusicByCategory). */

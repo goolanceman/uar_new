@@ -8,7 +8,7 @@
  * generatedBy: "system" — this is a mechanical merge, NOT AI output.
  */
 import { ApiError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   HealthTimelineRepository,
 } from "../repositories/health-timeline.repository.interface";

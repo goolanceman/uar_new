@@ -7,11 +7,11 @@
  * route, and the 400 messages are the bare legacy strings. DONE/MISSED/
  * CANCELLED are terminal — no reopen, no relabel (assertTransition 409).
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
 import { ApiError, NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   FollowUpListWhere,
   FollowUpRepository,

@@ -1,16 +1,16 @@
 /**
  * Allocation service — the stock desk workflow: FEFO reservation for an
  * event and the issue/cancel decision. Stock maths and movements live in the
- * shared domain layer @/lib/food (fefoReserve/issueAllocation/cancelAllocation/
+ * shared domain layer @/modules/food/services/food.domain (fefoReserve/issueAllocation/cancelAllocation/
  * refreshBatchStatuses) — never re-implemented here. The multi-line
  * reservation aborts as a whole on shortfall (legacy transaction boundary,
  * reproduced with withTransaction — the tx client flows into the inventory
  * repository and the lib helpers).
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { cancelAllocation, fefoReserve, issueAllocation, refreshBatchStatuses } from "@/lib/food";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { cancelAllocation, fefoReserve, issueAllocation, refreshBatchStatuses } from "@/modules/food/services/food.domain";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodEventRepository } from "../repositories/food-event.repository.interface";

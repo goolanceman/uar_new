@@ -1,7 +1,7 @@
 /**
  * Chat repository contract — persistence gateway for conversations/messages.
  * ALL Prisma access and realtime event publishing for chat lives in the
- * shared domain module @/lib/community/chat (read-only shared code, imported
+ * shared domain module @/domains/community/chat (read-only shared code, imported
  * by the implementation); this contract exposes exactly the operations the
  * chat endpoints use so the service stays decoupled from HTTP.
  */
@@ -15,7 +15,7 @@ import type {
   muteConversation,
   sendChatMessage,
   unmuteConversation,
-} from "@/lib/community/chat";
+} from "@/domains/community/chat";
 
 /** Options for sending a message — identical to the shared sendChatMessage
  *  opts. The store callback is injected by the controller: persisting an

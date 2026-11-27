@@ -6,7 +6,7 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
-import { validateSession } from "@/lib/session";
+import { validateSession } from "@/infrastructure/auth/session";
 import type {
   AchievementIdParams,
   AchievementsQuery,

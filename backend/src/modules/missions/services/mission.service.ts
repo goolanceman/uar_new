@@ -9,11 +9,11 @@
  * route-level Zod schema. The legacy writes were NOT transactional (sequential
  * awaited updates); that side-effect order is preserved exactly.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { loadSettings, sendSms } from "@/lib/notify";
-import { MISSION_FLOW, MISSION_PROGRESS } from "@/lib/missions";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { loadSettings, sendSms } from "@/infrastructure/notifications/notify";
+import { MISSION_FLOW, MISSION_PROGRESS } from "@/modules/missions/services/missions.domain";
 import type {
   AmbulanceRow,
   CorridorEventCreateData,
@@ -54,7 +54,7 @@ const randInt = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
 // Canonical status flow (CANCELLED is a side-state allowed from any open state)
-// and auto progress — single source of truth in @/lib/missions, shared with the
+// and auto progress — single source of truth in @/modules/missions/services/missions.domain, shared with the
 // admin ambulance view's stepper.
 const FLOW: readonly string[] = MISSION_FLOW;
 const PROGRESS: Record<string, number> = MISSION_PROGRESS;

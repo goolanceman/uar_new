@@ -8,11 +8,11 @@
  * those checks and their exact messages live here instead of in a route-level
  * Zod schema.
  */
-import { logger } from "@/lib/logger";
-import { CERT_TYPE_TITLES, isCertificateType, parseMeta, certificateHtml } from "@/lib/certificates-pdf";
-import { orgProfile } from "@/lib/api-org";
+import { logger } from "@/infrastructure/logging/logger";
+import { CERT_TYPE_TITLES, isCertificateType, parseMeta, certificateHtml } from "@/modules/certificates/services/certificates-pdf.domain";
+import { orgProfile } from "@/domains/api-org";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   CertificateListScope,
   CertificateRepository,

@@ -5,10 +5,10 @@
  * (camp/org lookups BEFORE the role check; ownership gate BEFORE the status
  * checks) and every log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { PARTNER_RESPONSE_STATUSES, PARTNER_TRANSITIONS } from "@/lib/camp-partners";
-import { assertTransition } from "@/lib/workflow";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { PARTNER_RESPONSE_STATUSES, PARTNER_TRANSITIONS } from "@/modules/camp-partners/services/camp-partners.domain";
+import { assertTransition } from "@/shared/workflow";
 import { ApiError, ConflictError, NotFoundError } from "@/shared/errors";
 import type {
   CampPartnerRepository,

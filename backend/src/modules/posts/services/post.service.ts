@@ -5,10 +5,10 @@
  * the body. Every log event keeps its legacy name; body coercions reproduce
  * the legacy String()/numField()/mediaIdsField() expressions verbatim.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
-import { ApiError, type Session } from "@/lib/session";
-import type { CreatePostInput, UpdatePostInput } from "@/lib/community/posts";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
+import { ApiError, type Session } from "@/infrastructure/auth/session";
+import type { CreatePostInput, UpdatePostInput } from "@/domains/community/posts";
 import type {
   PostRepository,
   PostRequest,

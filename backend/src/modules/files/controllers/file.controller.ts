@@ -9,9 +9,9 @@
 import { promises as fs, createReadStream } from "node:fs";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
-import { validateSession } from "@/lib/session";
-import { readForm } from "@/lib/multipart";
-import { resolveStoredPath } from "@/lib/files";
+import { validateSession } from "@/infrastructure/auth/session";
+import { readForm } from "@/infrastructure/uploads/multipart";
+import { resolveStoredPath } from "@/domains/files";
 import { NotFoundError } from "@/shared/errors";
 import type { ListFilesQuery, FileBody, FileIdParams } from "../schemas/file.schema";
 import type { FileService } from "../services/file.service";

@@ -8,10 +8,10 @@
  * are persisted only after the earlier field checks pass), plus the
  * "Nothing to update" 400 that comes AFTER file handling in the PATCH flow.
  */
-import { logger } from "@/lib/logger";
-import { communityUser } from "@/lib/community/serializers";
-import { saveUpload } from "@/lib/files";
-import { hashPassword, logActivity, verifyPassword, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { communityUser } from "@/domains/community/serializers";
+import { saveUpload } from "@/domains/files";
+import { hashPassword, logActivity, verifyPassword, type Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import type {
   ProfileRepository,

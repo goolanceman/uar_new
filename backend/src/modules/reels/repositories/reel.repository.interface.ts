@@ -3,8 +3,8 @@
  * layer depends on this interface, never on lib/Prisma directly.
  *
  * No NEW Prisma access exists in this module: the shared community domain
- * layer (@/lib/community/reels) already owns every reel read/write, along
- * with media attachability (@/lib/media/media-asset). The repository adapts
+ * layer (@/domains/community/reels) already owns every reel read/write, along
+ * with media attachability (@/infrastructure/media/media-asset). The repository adapts
  * those existing functions behind this contract — lib stays untouched.
  */
 import type {
@@ -26,7 +26,7 @@ import type {
   deleteReelComment,
   CreateReelInput,
   UpdateReelInput,
-} from "@/lib/community/reels";
+} from "@/domains/community/reels";
 
 type CreateReelResult = Awaited<ReturnType<typeof createReel>>;
 type GetReelResult = Awaited<ReturnType<typeof getReel>>;

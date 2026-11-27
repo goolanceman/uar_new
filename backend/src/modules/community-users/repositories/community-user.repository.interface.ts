@@ -1,7 +1,7 @@
 /**
  * Community user repository contract — persistence for the moderator-block
  * flow. Everything else in this module (profiles, follow graph, blocks,
- * reports) flows through the shared @/lib/community/users domain helpers.
+ * reports) flows through the shared @/domains/community/users domain helpers.
  */
 import type { User } from "@prisma/client";
 

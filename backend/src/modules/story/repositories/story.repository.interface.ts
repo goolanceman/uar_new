@@ -2,12 +2,12 @@
  * Story repository contract — persistence boundary for the stories module.
  *
  * The Prisma access itself lives in the shared domain lib
- * (@/lib/community/stories); this contract adapts it so the service keeps
+ * (@/domains/community/stories); this contract adapts it so the service keeps
  * depending on an interface. Row types are the lib's serialized wire shapes.
  */
-import type { UpdateStoryInput } from "@/lib/community/stories";
+import type { UpdateStoryInput } from "@/domains/community/stories";
 
-export type StoryRequest = Parameters<typeof import("@/lib/community/posts").saveCommunityUpload>[0];
+export type StoryRequest = Parameters<typeof import("@/domains/community/posts").saveCommunityUpload>[0];
 
 /** Serialized story wire shape (see serializeStory in the lib). */
 export interface StoryWire {

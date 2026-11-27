@@ -1,7 +1,7 @@
 /**
  * Dashboard service — assembles the public root snapshot. No HTTP concerns.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import type { DashboardRepository, DashboardStats } from "../repositories/dashboard.repository.interface";
 
 const log = logger.child("dashboard");

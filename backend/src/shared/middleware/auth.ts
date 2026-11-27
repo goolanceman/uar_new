@@ -6,8 +6,8 @@
  * error middleware.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { requireAuth, requireRole, handleError, type Session } from "@/lib/session";
-import { requireElevated } from "@/lib/community/admin";
+import { requireAuth, requireRole, handleError, type Session } from "@/infrastructure/auth/session";
+import { requireElevated } from "@/domains/community/admin";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace

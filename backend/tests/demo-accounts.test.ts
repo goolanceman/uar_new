@@ -11,7 +11,7 @@
  * GET /api/settings/public always carries `testingMode: boolean`.
  *
  * Runs against the TEST database (vitest.config.ts). The demo users may not
- * exist there — they are upserted from src/lib/demo-accounts.ts (the same
+ * exist there — they are upserted from src/shared/constants/demo-accounts.ts (the same
  * list prisma/seed.ts consumes) and ONLY rows this file created are deleted
  * afterwards, so it is safe to run alongside the other suites.
  */
@@ -48,9 +48,9 @@ async function cleanup() {
 }
 
 beforeAll(async () => {
-  db = (await import("@/lib/db")).db;
-  hashPassword = (await import("@/lib/session")).hashPassword;
-  const { DEMO_ACCOUNTS } = await import("@/lib/demo-accounts");
+  db = (await import("@/infrastructure/database/prisma")).db;
+  hashPassword = (await import("@/infrastructure/auth/session")).hashPassword;
+  const { DEMO_ACCOUNTS } = await import("@/shared/constants/demo-accounts");
 
   await cleanup();
   app = await buildApp();
@@ -124,7 +124,7 @@ describe("testing mode + demo accounts", () => {
   });
 
   it("admin flips testing mode through the ordinary PATCH /api/settings", async () => {
-    const { DEMO_ACCOUNTS } = await import("@/lib/demo-accounts");
+    const { DEMO_ACCOUNTS } = await import("@/shared/constants/demo-accounts");
     const admin = DEMO_ACCOUNTS.find((d) => d.key === "admin")!;
     const login = await request(app)
       .post("/api/auth/login")
@@ -146,7 +146,7 @@ describe("testing mode + demo accounts", () => {
   });
 
   it("testing mode ON → every demo account+role is returned", async () => {
-    const { DEMO_ACCOUNTS } = await import("@/lib/demo-accounts");
+    const { DEMO_ACCOUNTS } = await import("@/shared/constants/demo-accounts");
     const res = await request(app).get("/api/auth/demo-accounts");
     expect(res.status).toBe(200);
     expect(res.body.testingMode).toBe(true);

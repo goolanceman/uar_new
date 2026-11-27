@@ -15,7 +15,7 @@
  * the exact legacy ordering.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { handleError, requireRole, validateSession } from "@/lib/session";
+import { handleError, requireRole, validateSession } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
 import type {

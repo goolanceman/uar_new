@@ -3,17 +3,17 @@
  * blocks, reports and the moderator-block flow. The actor is ALWAYS the
  * session user — ids never come from the body.
  *
- * Most flows delegate to the shared @/lib/community/users domain helpers;
+ * Most flows delegate to the shared @/domains/community/users domain helpers;
  * this service owns the legacy targetId() gate ("User id is required", bare
  * 400) and the exact log events. Logged targetIds are the RAW :id param
  * values, exactly as the legacy routes logged them.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError, NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
-import { paged, communityUser } from "@/lib/community/serializers";
-import { syncPostCommentCounts } from "@/lib/community/counters";
-import { isActorModerator } from "@/lib/community/posts";
+import type { Session } from "@/infrastructure/auth/session";
+import { paged, communityUser } from "@/domains/community/serializers";
+import { syncPostCommentCounts } from "@/domains/community/counters";
+import { isActorModerator } from "@/domains/community/posts";
 import {
   getUserProfile,
   searchUsers,
@@ -27,7 +27,7 @@ import {
   unblockUser,
   listBlocked,
   reportUser,
-} from "@/lib/community/users";
+} from "@/domains/community/users";
 import type { CommunityUserRepository } from "../repositories/community-user.repository.interface";
 
 const log = logger.child("community-users");

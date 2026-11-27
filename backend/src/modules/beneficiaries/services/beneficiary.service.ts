@@ -8,10 +8,10 @@
  * 404-before-400 ordering), so those checks and their exact messages live
  * here instead of in route-level Zod schemas.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { nextBeneficiaryCode } from "@/lib/codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextBeneficiaryCode } from "@/domains/codes";
 import {
   CASE_STATUSES,
   CASE_STATUS_TRANSITIONS,
@@ -19,8 +19,8 @@ import {
   VERIFICATION_STATUS_TRANSITIONS,
   KYC_STATUSES,
   KYC_TRANSITIONS,
-} from "@/lib/beneficiaries";
-import { assertTransition } from "@/lib/workflow";
+} from "@/modules/beneficiaries/services/beneficiaries.domain";
+import { assertTransition } from "@/shared/workflow";
 import type {
   BeneficiaryCreateData,
   BeneficiaryListFilters,

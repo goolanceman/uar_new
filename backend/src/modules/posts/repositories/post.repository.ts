@@ -1,6 +1,6 @@
 /**
  * Community post repository implementation — delegates every operation to the
- * shared domain module @/lib/community/posts, which owns ALL post/comment/
+ * shared domain module @/domains/community/posts, which owns ALL post/comment/
  * like Prisma access, notification side effects and realtime feed events. The
  * wire shapes are therefore produced by exactly the legacy code path
  * (byte-identical responses and events).
@@ -25,8 +25,8 @@ import {
   toggleCommentLike as toggleCommentLikeFn,
   unlikePost as unlikePostFn,
   updatePost as updatePostFn,
-} from "@/lib/community/posts";
-import type { CreatePostInput, UpdatePostInput } from "@/lib/community/posts";
+} from "@/domains/community/posts";
+import type { CreatePostInput, UpdatePostInput } from "@/domains/community/posts";
 import type { PostRepository, PostRequest } from "./post.repository.interface";
 
 export class PrismaPostRepository implements PostRepository {

@@ -9,8 +9,8 @@
  * auth middleware.
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
-import { enforceFoodRateLimit } from "@/lib/food";
+import { handleError } from "@/infrastructure/auth/session";
+import { enforceFoodRateLimit } from "@/modules/food/services/food.domain";
 
 export const foodRateLimit =
   (

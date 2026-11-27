@@ -1,7 +1,7 @@
 /**
  * Post repository contract — persistence gateway for the community feed.
  * ALL Prisma access, cache handling and realtime event publishing for posts
- * lives in the shared domain module @/lib/community/posts (read-only shared
+ * lives in the shared domain module @/domains/community/posts (read-only shared
  * code, delegated to by the implementation); this contract exposes exactly
  * the operations the post endpoints use so the service stays decoupled.
  */
@@ -27,7 +27,7 @@ import type {
   updatePost,
   CreatePostInput,
   UpdatePostInput,
-} from "@/lib/community/posts";
+} from "@/domains/community/posts";
 
 /** The raw express Request — createPost reads multipart file parts from it
  *  (collectFiles), exactly the legacy call path. */

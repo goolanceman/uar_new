@@ -4,7 +4,7 @@
  * legacy loader exactly, and the snapshot is cached under the same
  * `statsKey(cacheKeyPart({ from, to }) || "all")` key with `cacheTtl.stats`.
  */
-import { cached, cacheKeyPart, cacheTtl, statsKey } from "@/lib/cache";
+import { cached, cacheKeyPart, cacheTtl, statsKey } from "@/infrastructure/cache";
 import type {
   CompletedDonationRow,
   DonationRangeWhere,

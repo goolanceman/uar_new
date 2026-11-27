@@ -3,9 +3,9 @@
  * contract and emits the legacy log events with the legacy logger child name.
  * The actor is ALWAYS the session user — ids never come from the body.
  */
-import { logger } from "@/lib/logger";
-import { ApiError, type Session } from "@/lib/session";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { ApiError, type Session } from "@/infrastructure/auth/session";
+import { paged } from "@/domains/community/serializers";
 import type { StoryRepository, StoryWire, StoryListPage, StoryRequest } from "../repositories/story.repository.interface";
 
 const log = logger.child("stories");

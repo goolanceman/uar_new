@@ -10,15 +10,15 @@
  * task for — volunteers can never touch unassigned events (that scoping is
  * enforced here, in legacy order: resolve → disambiguation → role scoping →
  * event/registration state gates → offline replay → action). Registration
- * transitions come from the shared domain layer @/lib/food; the claim-style
+ * transitions come from the shared domain layer @/modules/food/services/food.domain; the claim-style
  * updateMany transactions (two concurrent scans can never double write) are
  * preserved exactly via withTransaction.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { FOOD_ACK_METHODS, FOOD_OPERATIONAL_STATUSES, FOOD_REGISTRATION_TRANSITIONS } from "@/lib/food";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { FOOD_ACK_METHODS, FOOD_OPERATIONAL_STATUSES, FOOD_REGISTRATION_TRANSITIONS } from "@/modules/food/services/food.domain";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type {

@@ -4,13 +4,13 @@
  * the registration lifecycle update. Legacy order is preserved exactly:
  * event lookup (404) → role branching → input checks → capacity gate →
  * tx-aware code generation → duplicate/reinstate handling. Package
- * snapshots come from the shared parser in @/lib/food.
+ * snapshots come from the shared parser in @/modules/food/services/food.domain.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { FOOD_ACTIVE_REG_STATUSES, FOOD_REGISTRATION_TRANSITIONS, parseTemplateItems } from "@/lib/food";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { FOOD_ACTIVE_REG_STATUSES, FOOD_REGISTRATION_TRANSITIONS, parseTemplateItems } from "@/modules/food/services/food.domain";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodEventRepository } from "../repositories/food-event.repository.interface";

@@ -13,12 +13,12 @@
  * participating repository methods. Depends on the repository contract,
  * throws application errors, never touches HTTP.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { nextRxCode } from "@/lib/health-codes";
-import { BRAND_MARK_DATA_URI } from "@/lib/brand-mark";
-import { orgProfile, esc, printDocument } from "@/lib/api-org";
-import { formatDateLong, formatDateTime } from "@/lib/format";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextRxCode } from "@/domains/health-codes";
+import { BRAND_MARK_DATA_URI } from "@/shared/utils/brand-mark";
+import { orgProfile, esc, printDocument } from "@/domains/api-org";
+import { formatDateLong, formatDateTime } from "@/shared/utils/format";
 import { ApiError } from "@/shared/errors";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type {

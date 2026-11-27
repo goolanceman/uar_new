@@ -5,7 +5,7 @@
  * enough in 30/60/90 days?"). Pure computation over the repository read
  * model — the legacy route's exact math, ordering, and response shape.
  */
-import { monthlyEquivalent } from "@/lib/distribution-stock";
+import { monthlyEquivalent } from "@/domains/distribution-stock";
 import type { InventoryForecastRepository, ForecastNeedRow } from "../repositories/inventory-forecast.repository.interface";
 
 export interface ForecastEntry {

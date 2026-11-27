@@ -8,10 +8,10 @@
  * volunteer lookup (404-before-400 ordering), so those checks and their
  * exact messages live here instead of in a route-level Zod schema.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { setUserStatus } from "@/lib/user-status";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { setUserStatus } from "@/domains/user-status";
 import type {
   VolunteerDetail,
   VolunteerListFilter,

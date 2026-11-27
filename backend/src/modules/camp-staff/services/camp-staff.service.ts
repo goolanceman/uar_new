@@ -6,10 +6,10 @@
  * on POST; status validation BEFORE the existence lookup on PATCH) and every
  * log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { CAMP_STAFF_STATUSES, CAMP_STAFF_TRANSITIONS } from "@/lib/camp-staff";
-import { assertTransition } from "@/lib/workflow";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { CAMP_STAFF_STATUSES, CAMP_STAFF_TRANSITIONS } from "@/modules/camp-staff/services/camp-staff.domain";
+import { assertTransition } from "@/shared/workflow";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   CampStaffCreatedRow,

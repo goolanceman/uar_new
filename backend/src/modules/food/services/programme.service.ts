@@ -2,15 +2,15 @@
  * Programme service — the food programme catalog: public listing (safe
  * fields), admin listing, creation (always DRAFT), detail with event
  * rollups and lifecycle edits. Transition rules come from
- * @/lib/food (FOOD_PROGRAMME_STATUSES/TRANSITIONS); code generation from
- * @/lib/codes.
+ * @/modules/food/services/food.domain (FOOD_PROGRAMME_STATUSES/TRANSITIONS); code generation from
+ * @/domains/codes.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { FOOD_PROGRAMME_STATUSES, FOOD_PROGRAMME_TRANSITIONS } from "@/lib/food";
-import { nextFoodProgrammeCode } from "@/lib/codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { FOOD_PROGRAMME_STATUSES, FOOD_PROGRAMME_TRANSITIONS } from "@/modules/food/services/food.domain";
+import { nextFoodProgrammeCode } from "@/domains/codes";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodProgrammeRepository, ProgrammeUpdateData } from "../repositories/food-programme.repository.interface";
 

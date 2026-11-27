@@ -6,8 +6,8 @@
  * the ref and volunteer checks, duplicate skip before task creation) and
  * every log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   CreateVolunteerTaskData,

@@ -6,7 +6,7 @@
  * AFTER the row write (SCHOOL_CREATE / SCHOOL_UPDATE) with the acting
  * session's name.
  */
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type { SchoolCoverage } from "@prisma/client";
 import type { CreateSchoolCoverageBody } from "../schemas/school-coverage.schema";
 import type {

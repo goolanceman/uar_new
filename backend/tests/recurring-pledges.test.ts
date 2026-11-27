@@ -64,7 +64,7 @@ function mpatch(path: string, body: Record<string, unknown>, token?: string) {
 }
 
 async function setSetting(key: string, value: string) {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
 }
 
@@ -78,7 +78,7 @@ function aboutMonthsAhead(iso: string | null | undefined, months: number, from: 
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.donation.deleteMany({ where: { donorName: { startsWith: PREFIX } } });
   await db.pledge.deleteMany({ where: { donorName: { startsWith: PREFIX } } });
   await db.cause.deleteMany({ where: { code: { startsWith: PREFIX } } });
@@ -97,7 +97,7 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
 
   me = await db.user.create({
     data: { email: `${PREFIX}-me@test.local`, name: `${PREFIX} donor`, password: `${PREFIX}-pw` },
@@ -153,7 +153,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanup();
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   await db.$disconnect();
 });
 
@@ -384,7 +384,7 @@ describe("recurring installments — link + nextChargeAt advance", () => {
     installmentReceipt = installment.body.receiptNumber;
 
     // simulate the gateway order step (real one calls Razorpay)
-    const { db } = await import("@/lib/db");
+    const { db } = await import("@/infrastructure/database/prisma");
     orderId = `order_${PREFIX}_inst1`;
     await db.donation.update({
       where: { receiptNumber: installmentReceipt },

@@ -7,16 +7,16 @@
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { logger } from "@/lib/logger";
-import type { Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import type { Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
-import { checkRateLimit } from "@/lib/rate-limit";
-import { UPLOAD_DIR } from "@/lib/files";
-import { getStorage, validateStorageKey } from "@/lib/storage";
-import { verifyUploadToken, type UploadTokenClaims } from "@/lib/media/signing";
-import { mediaJson } from "@/lib/media/media-asset";
-import { getCachedMedia, setCachedMedia, type CachedMediaAsset } from "@/lib/cache";
-import { markMediaUploaded } from "@/lib/media/transcoder";
+import { checkRateLimit } from "@/infrastructure/cache/rate-limit";
+import { UPLOAD_DIR } from "@/domains/files";
+import { getStorage, validateStorageKey } from "@/infrastructure/storage";
+import { verifyUploadToken, type UploadTokenClaims } from "@/infrastructure/storage/signing";
+import { mediaJson } from "@/infrastructure/media/media-asset";
+import { getCachedMedia, setCachedMedia, type CachedMediaAsset } from "@/infrastructure/cache";
+import { markMediaUploaded } from "@/jobs/workers/transcoder.worker";
 import type { MediaRepository } from "../repositories/media.repository.interface";
 
 const log = logger.child("media");

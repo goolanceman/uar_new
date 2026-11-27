@@ -4,8 +4,8 @@
  * libs behind them own any Prisma access); the LLM SDK call stays in the
  * service.
  */
-import type { KnowledgeEntry } from "@/lib/assistant-knowledge";
-import type { OpsSection } from "@/lib/assistant-ops";
+import type { KnowledgeEntry } from "@/modules/assistant/services/assistant-knowledge.domain";
+import type { OpsSection } from "@/modules/assistant/services/assistant-ops.domain";
 
 export interface Helplines {
   emergency: string;

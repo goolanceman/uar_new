@@ -1,6 +1,6 @@
 /**
  * Centralized Prisma client — the ONLY place PrismaClient is instantiated.
- * Re-exported from the historical `@/lib/db` location so existing imports
+ * Re-exported from the historical `@/infrastructure/database/prisma` location so existing imports
  * keep working while new modules import from the infrastructure layer.
  */
 import { PrismaClient } from "@prisma/client";

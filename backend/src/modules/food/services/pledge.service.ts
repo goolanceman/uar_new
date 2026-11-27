@@ -4,15 +4,15 @@
  * collect → receive → reject/cancel) and the warehouse receipt that converts
  * a pledge into a traceable FoodBatch + master stock + InventoryTransaction
  * (the SAME single write path as a manual goods receipt — no duplicate
- * business logic). Transition rules come from @/lib/food-workflows (via
- * @/lib/food), code generation from @/lib/codes.
+ * business logic). Transition rules come from @/modules/food/services/food-workflows.domain (via
+ * @/modules/food/services/food.domain), code generation from @/domains/codes.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { FOOD_PLEDGE_TRANSITIONS } from "@/lib/food";
-import { generateUniqueCode } from "@/lib/codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { FOOD_PLEDGE_TRANSITIONS } from "@/modules/food/services/food.domain";
+import { generateUniqueCode } from "@/domains/codes";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodInventoryRepository } from "../repositories/food-inventory.repository.interface";

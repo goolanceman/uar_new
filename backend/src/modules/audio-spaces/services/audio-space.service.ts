@@ -4,8 +4,8 @@
  * adds the route-level logging + paging the legacy router performed, with
  * the same child logger name and event names.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
 import type {
   AudioMessageWire,
   AudioSpaceListPayload,

@@ -1,6 +1,6 @@
 /**
  * Community chat repository implementation — delegates every operation to the
- * shared domain module @/lib/community/chat, which owns ALL chat Prisma
+ * shared domain module @/domains/community/chat, which owns ALL chat Prisma
  * access, cache invalidation and realtime event publishing. The conversation
  * and message wire shapes are therefore produced by exactly the legacy code
  * path (byte-identical responses and events).
@@ -15,7 +15,7 @@ import {
   muteConversation as muteConversationFn,
   sendChatMessage as sendChatMessageFn,
   unmuteConversation as unmuteConversationFn,
-} from "@/lib/community/chat";
+} from "@/domains/community/chat";
 import type { ChatRepository, SendMessageOptions } from "./chat.repository.interface";
 
 export class CommunityChatRepository implements ChatRepository {

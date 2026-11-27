@@ -6,9 +6,9 @@
  * the legacy order exactly and every log event keeps its legacy name.
  */
 import type { MedicalCamp } from "@prisma/client";
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { nextCampCode } from "@/lib/health-codes";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextCampCode } from "@/domains/health-codes";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   CampCounts,

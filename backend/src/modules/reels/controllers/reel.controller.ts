@@ -6,8 +6,8 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { ApiError } from "@/shared/errors";
-import { saveUpload } from "@/lib/files";
-import { pageParams } from "@/lib/community/serializers";
+import { saveUpload } from "@/domains/files";
+import { pageParams } from "@/domains/community/serializers";
 import type { ReelService } from "../services/reel.service";
 
 /** Uploaded file for a multipart field (multer any() ran upstream), or null. */

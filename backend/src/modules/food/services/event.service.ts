@@ -4,13 +4,13 @@
  * progress, expiry alerts), lifecycle transitions with stock side-effects
  * (cancellation releases reservations; reconciliation returns undistributed
  * issued stock) and programme spend. Requirement maths and stock returns
- * come from the shared domain layer @/lib/food.
+ * come from the shared domain layer @/modules/food/services/food.domain.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertEventTransition, calcRequirements, foodWindowDays, FOOD_ACTIVE_REG_STATUSES, returnIssuedAllocation } from "@/lib/food";
-import { nextFoodEventCode } from "@/lib/codes";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertEventTransition, calcRequirements, foodWindowDays, FOOD_ACTIVE_REG_STATUSES, returnIssuedAllocation } from "@/modules/food/services/food.domain";
+import { nextFoodEventCode } from "@/domains/codes";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type { EventUpdateData, FoodEventRepository, PublicEventRow } from "../repositories/food-event.repository.interface";

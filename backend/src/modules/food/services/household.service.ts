@@ -3,14 +3,14 @@
  * members, member add/remove edits and guarded deletion. Legacy validation
  * order (name → size → pincode → head lookup) and the transaction boundary
  * around the member writes are preserved exactly; PIN validation comes from
- * the shared validator in @/lib/validators.
+ * the shared validator in @/shared/validators.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { validPin } from "@/lib/validators";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { validPin } from "@/shared/validators";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
-import { nextHouseholdCode } from "@/lib/codes";
+import { nextHouseholdCode } from "@/domains/codes";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodHouseholdRepository } from "../repositories/food-household.repository.interface";
 import type { FoodRequestRepository } from "../repositories/food-request.repository.interface";

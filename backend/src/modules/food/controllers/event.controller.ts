@@ -6,7 +6,7 @@
  * handleError directly (the legacy per-route catch).
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError, requireRole } from "@/lib/session";
+import { handleError, requireRole } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
 import type { FoodBody } from "../schemas/food.schema";
 import type { EventService } from "../services/event.service";

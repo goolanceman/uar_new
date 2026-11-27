@@ -1,7 +1,7 @@
 /**
  * Charity repository implementation — the four legacy in-route Prisma reads
  * live here; every other operation delegates to the shared domain modules
- * @/lib/charity/*, which own all remaining Prisma access, so the wire shapes
+ * @/domains/charity/*, which own all remaining Prisma access, so the wire shapes
  * are produced by exactly the legacy code path.
  */
 import { db } from "@/infrastructure/database/prisma";
@@ -9,19 +9,19 @@ import type { Achievement } from "@prisma/client";
 import {
   buildImpactMetrics as buildImpactMetricsFn,
   syncCardStats as syncCardStatsFn,
-} from "@/lib/charity/card";
+} from "@/domains/charity/card";
 import {
   achievementsSummary as achievementsSummaryFn,
   achievementProgress as achievementProgressFn,
   claimAchievement as claimAchievementFn,
   myAchievements as myAchievementsFn,
-} from "@/lib/charity/achievements";
+} from "@/domains/charity/achievements";
 import {
   pointsExpiring as pointsExpiringFn,
   pointsHistory as pointsHistoryFn,
   pointsOverview as pointsOverviewFn,
   redeemPoints as redeemPointsFn,
-} from "@/lib/charity/points";
+} from "@/domains/charity/points";
 import {
   completeGoal as completeGoalFn,
   createGoal as createGoalFn,
@@ -30,7 +30,7 @@ import {
   goalsSummary as goalsSummaryFn,
   listGoals as listGoalsFn,
   updateGoal as updateGoalFn,
-} from "@/lib/charity/goals";
+} from "@/domains/charity/goals";
 import {
   cancelRegistration as cancelRegistrationFn,
   checkIn as checkInFn,
@@ -38,7 +38,7 @@ import {
   listEvents as listEventsFn,
   myEvents as myEventsFn,
   registerForEvent as registerForEventFn,
-} from "@/lib/charity/events";
+} from "@/domains/charity/events";
 import type {
   AchievementFilter,
   CharityRepository,

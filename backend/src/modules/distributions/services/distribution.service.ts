@@ -11,9 +11,9 @@
  * with withTransaction, the tx client passed into the participating
  * repository methods and lib stock helpers.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import {
   addCycle,
   consumeItemsStock,
@@ -21,8 +21,8 @@ import {
   restoreItemsStock,
   restoreKitBatch,
   type DistItemInput,
-} from "@/lib/distribution-stock";
-import { buildUnifiedLedger } from "@/lib/distribution-ledger";
+} from "@/domains/distribution-stock";
+import { buildUnifiedLedger } from "@/modules/distributions/services/distribution-ledger.domain";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type {
   CampaignSummary,

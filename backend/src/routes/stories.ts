@@ -7,7 +7,7 @@
 import { Router } from "express";
 import { authenticate } from "@/shared/middleware/auth";
 import { validate } from "@/shared/middleware/validate";
-import { multipart } from "@/lib/multipart";
+import { multipart } from "@/infrastructure/uploads/multipart";
 import { createStorySchema, listStoriesQuerySchema, updateStorySchema } from "@/modules/story/schemas/story.schema";
 import { storyController } from "@/modules/story";
 

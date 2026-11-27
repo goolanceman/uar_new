@@ -7,12 +7,12 @@
  * messages), same bare error messages, same side-effect order (the animal
  * code is drawn before parseUrlList can reject the photos list).
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { nextAnimalCode } from "@/lib/codes";
-import { parseUrlList } from "@/lib/files";
-import { ANIMAL_STATUSES } from "@/lib/animals";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextAnimalCode } from "@/domains/codes";
+import { parseUrlList } from "@/domains/files";
+import { ANIMAL_STATUSES } from "@/domains/animals";
 import type { Animal } from "@prisma/client";
 import type {
   AnimalListFilter,

@@ -8,10 +8,10 @@
  * verbatim wire messages. Every mutation drops the campaign cache exactly
  * like the legacy routes did, after the activity log entry.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, ApiError, type Session } from "@/lib/session";
-import { nextCampaignCode } from "@/lib/codes";
-import { CAMPAIGN_STATUSES } from "@/lib/campaigns";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, ApiError, type Session } from "@/infrastructure/auth/session";
+import { nextCampaignCode } from "@/domains/codes";
+import { CAMPAIGN_STATUSES } from "@/modules/campaigns/services/campaigns.domain";
 import {
   cached,
   cacheKeyPart,
@@ -19,7 +19,7 @@ import {
   campaignDetailKey,
   campaignListKey,
   invalidateCampaigns,
-} from "@/lib/cache";
+} from "@/infrastructure/cache";
 import type { Prisma } from "@prisma/client";
 import type {
   CampaignListFilter,

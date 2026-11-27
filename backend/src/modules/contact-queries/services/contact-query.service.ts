@@ -3,12 +3,12 @@
  * the admin inbox. Depends on the repository contract + shared notification
  * helpers, throws application errors, never touches HTTP.
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { loadSettings, notifyContactQuery } from "@/lib/notify";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { loadSettings, notifyContactQuery } from "@/infrastructure/notifications/notify";
 import { NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { ContactQueryRepository, ContactQueryRow } from "../repositories/contact-query.repository.interface";
 
 const log = logger.child("contact-queries");

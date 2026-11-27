@@ -7,8 +7,8 @@
  * funnel non-AppErrors into handleError's unhandled_route_error path.
  */
 import type { Request, RequestHandler, Response } from "express";
-import { logger } from "@/lib/logger";
-import { handleError } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { handleError } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
 import { validatedBody } from "@/shared/middleware/validate";
 import type { FoodBody } from "../schemas/food.schema";

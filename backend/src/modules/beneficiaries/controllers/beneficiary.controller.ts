@@ -10,7 +10,7 @@
  * (query-parse → gate → query).
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { requireAuth, requireRole } from "@/lib/session";
+import { requireAuth, requireRole } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams, validatedQuery } from "@/shared/middleware/validate";
 import type { BeneficiaryService } from "../services/beneficiary.service";
 import type {

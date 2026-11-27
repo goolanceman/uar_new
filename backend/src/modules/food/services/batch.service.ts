@@ -5,13 +5,13 @@
  * with InventoryTransaction); rejections/waste move stock out the same way.
  * Legacy validation order (item lookup → duplicate gate → enum checks) and
  * the transaction boundary are preserved exactly; `availableOf` stock maths
- * comes from the shared domain layer @/lib/food.
+ * comes from the shared domain layer @/modules/food/services/food.domain.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
-import { availableOf, FOOD_BATCH_QUALITY_TRANSITIONS } from "@/lib/food";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
+import { availableOf, FOOD_BATCH_QUALITY_TRANSITIONS } from "@/modules/food/services/food.domain";
 import { withTransaction } from "@/infrastructure/database/transactions/transaction.manager";
 import type { FoodBody } from "../schemas/food.schema";
 import type { BatchPatchData, FoodInventoryRepository } from "../repositories/food-inventory.repository.interface";

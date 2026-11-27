@@ -4,7 +4,7 @@
  * and the catalog caching for this module. Named Lib* because the Prisma
  * calls stay in the shared lib (read-only for this module).
  */
-import { listMusic, listMusicCategories, listSavedMusic } from "@/lib/community/music";
+import { listMusic, listMusicCategories, listSavedMusic } from "@/domains/community/music";
 import type { MusicRepository } from "./music.repository.interface";
 
 export class LibMusicRepository implements MusicRepository {

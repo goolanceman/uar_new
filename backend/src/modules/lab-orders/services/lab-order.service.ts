@@ -2,15 +2,15 @@
  * Lab order service — all business rules for the diagnostic order pipeline.
  * Depends on the repository contract, throws application errors, never
  * touches HTTP. Enforced linear state machine (transition table lives in
- * @/lib/lab-orders, shared with the lab-tech queue UI). Field checks keep
+ * @/modules/lab-orders/services/lab-orders.domain, shared with the lab-tech queue UI). Field checks keep
  * the legacy order exactly (existence → resultFileUrl validation/role gate →
  * status transition → critical flag → empty-patch check) and every log event
  * keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { nextLabCode } from "@/lib/health-codes";
-import { LAB_ORDER_NEXT } from "@/lib/lab-orders";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextLabCode } from "@/domains/health-codes";
+import { LAB_ORDER_NEXT } from "@/modules/lab-orders/services/lab-orders.domain";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   LabOrderExisting,

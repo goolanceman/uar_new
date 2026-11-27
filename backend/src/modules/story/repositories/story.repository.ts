@@ -1,6 +1,6 @@
 /**
  * Story repository implementation — adapts the shared stories domain lib
- * (@/lib/community/stories), which owns ALL Prisma access for this module
+ * (@/domains/community/stories), which owns ALL Prisma access for this module
  * (read-only shared code; no new Prisma access introduced here). The casts
  * only pin the lib's serialized wire shapes to this module's contracts.
  */
@@ -11,7 +11,7 @@ import {
   listStories,
   updateStory,
   viewStory,
-} from "@/lib/community/stories";
+} from "@/domains/community/stories";
 import type {
   CreateStoryData,
   StoryRepository,

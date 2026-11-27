@@ -4,9 +4,9 @@
  * Field checks keep their exact legacy messages and ordering (404-before-400
  * interleaving with DB lookups preserved).
  */
-import { logger } from "@/lib/logger";
-import { assertTransition } from "@/lib/workflow";
-import { logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { assertTransition } from "@/shared/workflow";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   AppointmentListScope,

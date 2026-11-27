@@ -1,6 +1,6 @@
 /**
  * Reel repository implementation — adapts the existing shared community
- * domain layer (@/lib/community/reels + @/lib/media/media-asset) behind the
+ * domain layer (@/domains/community/reels + @/infrastructure/media/media-asset) behind the
  * module contract. The lib owns all persistence for reels and is NOT
  * modified; no new Prisma access is introduced by this module.
  */
@@ -21,8 +21,8 @@ import {
   listReelComments,
   addReelComment,
   deleteReelComment,
-} from "@/lib/community/reels";
-import { assertAttachableMedia } from "@/lib/media/media-asset";
+} from "@/domains/community/reels";
+import { assertAttachableMedia } from "@/infrastructure/media/media-asset";
 import type { ReelRepository } from "./reel.repository.interface";
 
 export class ReelLibRepository implements ReelRepository {

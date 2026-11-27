@@ -11,7 +11,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { ApiError } from "@/shared/errors";
-import { UPLOAD_DIR } from "@/lib/files";
+import { UPLOAD_DIR } from "@/domains/files";
 import type { MediaService } from "../services/media.service";
 
 // Content types for the public playback files (kept here — local serving only).

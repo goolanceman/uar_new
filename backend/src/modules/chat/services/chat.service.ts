@@ -5,10 +5,10 @@
  * ordering (before the shared sendChatMessage's own validation), and every
  * log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { paged } from "@/lib/community/serializers";
+import { logger } from "@/infrastructure/logging/logger";
+import { paged } from "@/domains/community/serializers";
 import { ApiError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type { ChatRepository, SendMessageOptions } from "../repositories/chat.repository.interface";
 import type { ListConversationsQuery, ListMessagesQuery } from "../schemas/chat.schema";
 

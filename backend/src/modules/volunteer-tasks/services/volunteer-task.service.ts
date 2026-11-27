@@ -8,11 +8,11 @@
  * so those checks and their exact messages live here instead of in a
  * route-level Zod schema.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { TASK_STATUSES, TASK_TRANSITIONS } from "@/lib/volunteer-tasks";
-import { assertTransition } from "@/lib/workflow";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { TASK_STATUSES, TASK_TRANSITIONS } from "@/modules/volunteer-tasks/services/volunteer-tasks.domain";
+import { assertTransition } from "@/shared/workflow";
 import type {
   CreateVolunteerTaskData,
   UpdateVolunteerTaskData,

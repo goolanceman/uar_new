@@ -8,9 +8,9 @@
  * those checks and their exact messages live here instead of in a route-level
  * Zod schema.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type {
   InventoryItemStock,
   InventoryTransactionRepository,

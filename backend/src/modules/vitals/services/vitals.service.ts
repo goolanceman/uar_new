@@ -6,10 +6,10 @@
  * as in the legacy handler (round after the range check, BMI = kg/m² 1
  * decimal when height + weight are given).
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
 import { NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   VitalObservationCreateData,
   VitalObservationRepository,

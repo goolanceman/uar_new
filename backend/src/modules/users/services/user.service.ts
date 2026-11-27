@@ -5,9 +5,9 @@
  * ordering (required → role → email → password → duplicates → last-admin
  * guards), including the 404-before-400 interleaving with DB lookups.
  */
-import { logger } from "@/lib/logger";
-import { hashPassword, logActivity, type Session } from "@/lib/session";
-import { USER_STATUSES } from "@/lib/user-status";
+import { logger } from "@/infrastructure/logging/logger";
+import { hashPassword, logActivity, type Session } from "@/infrastructure/auth/session";
+import { USER_STATUSES } from "@/domains/user-status";
 import { ApiError, NotFoundError, ConflictError } from "@/shared/errors";
 import type {
   CreateUserAccess,

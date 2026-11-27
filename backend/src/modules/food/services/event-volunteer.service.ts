@@ -4,9 +4,9 @@
  * desk uses to scope volunteers). Roles are stored in the free-text
  * description column, but the desk enforces the VOLUNTEER_ROLES set on write.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodEventRepository } from "../repositories/food-event.repository.interface";
 import type { FoodRegistrationRepository } from "../repositories/food-registration.repository.interface";

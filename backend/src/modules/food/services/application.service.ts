@@ -2,15 +2,15 @@
  * Application service — public food assistance applications (rate-limited,
  * duplicate-checked, consent required) plus the admin review workflow that
  * links or creates the persistent beneficiary identity and notifies the
- * applicant (@/lib/food-notify). Legacy validation order — name/phone/
+ * applicant (@/modules/food/services/food-notify.domain). Legacy validation order — name/phone/
  * details/consent, then urgency/source/preferredContact/pincode, then the
  * duplicate gate, then the beneficiary link — is preserved exactly.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { nextBeneficiaryCode, nextFoodApplicationRef } from "@/lib/codes";
-import { notifyRequestOutcome } from "@/lib/food-notify";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextBeneficiaryCode, nextFoodApplicationRef } from "@/domains/codes";
+import { notifyRequestOutcome } from "@/modules/food/services/food-notify.domain";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodRequestRepository } from "../repositories/food-request.repository.interface";
 

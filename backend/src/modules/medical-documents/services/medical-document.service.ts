@@ -7,10 +7,10 @@
  * lookups here (404-before-400 ordering) exactly like the legacy route, and
  * the 400 messages are the bare legacy strings.
  */
-import { logger } from "@/lib/logger";
-import { logActivity } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity } from "@/infrastructure/auth/session";
 import { ApiError, NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   MedicalDocumentListWhere,
   MedicalDocumentRepository,

@@ -4,7 +4,7 @@
  * fallback reproduces the legacy "matches nothing" empty page exactly
  * (page 1 / limit 20 — NOT the request's page/limit).
  */
-import { paged } from "@/lib/community/serializers";
+import { paged } from "@/domains/community/serializers";
 import type { MusicRepository } from "../repositories/music.repository.interface";
 
 export class MusicService {

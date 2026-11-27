@@ -6,8 +6,8 @@
  * the Pusher client contract), so it keeps the exact inline flow.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { logger } from "@/lib/logger";
-import { validateSession } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { validateSession } from "@/infrastructure/auth/session";
 import { validatedBody } from "@/shared/middleware/validate";
 import type { RealtimeService } from "../services/realtime.service";
 import type { AgoraTokenBody } from "../schemas/realtime.schema";

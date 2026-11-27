@@ -2,7 +2,7 @@ import "dotenv/config";
 // Boot-time environment check (skipped under NODE_ENV=test, which controls
 // its own env). Throws with a readable message on misconfiguration.
 import { verifyEnv } from "@/config/env";
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { createApp } from "@/app/app";
 import { startBackgroundJobs } from "@/app/bootstrap";
 

@@ -5,7 +5,7 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedQuery } from "@/shared/middleware/validate";
-import type { MulterFile } from "@/lib/multipart";
+import type { MulterFile } from "@/infrastructure/uploads/multipart";
 import type { ListStoriesQuery } from "../schemas/story.schema";
 import type { StoryRequest } from "../repositories/story.repository.interface";
 import type { StoryService } from "../services/story.service";

@@ -16,7 +16,7 @@
  * legacy evaluation order exactly.
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError, requireRole, validateSession } from "@/lib/session";
+import { handleError, requireRole, validateSession } from "@/infrastructure/auth/session";
 import { validatedQuery } from "@/shared/middleware/validate";
 import type { ReportService } from "../services/report.service";
 import type { ReportsQuery } from "../schemas/report.schema";

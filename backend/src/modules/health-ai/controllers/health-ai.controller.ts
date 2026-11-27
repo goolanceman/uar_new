@@ -6,7 +6,7 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit } from "@/infrastructure/cache/rate-limit";
 import type { AiInteractionIdParams, HealthAiBody } from "../schemas/health-ai.schema";
 import type { HealthAiService } from "../services/health-ai.service";
 

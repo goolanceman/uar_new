@@ -11,12 +11,12 @@
  * 404-before-400 on PATCH) and every 400 message is client-facing contract
  * (web forms + Flutter app inline these exact strings).
  */
-import { logger } from "@/lib/logger";
-import { hashPassword, logActivity, type Session } from "@/lib/session";
-import { loadSettings, emailShell, sendEmail } from "@/lib/notify";
-import { nextVolunteerCode } from "@/lib/codes";
-import { assertTransition } from "@/lib/workflow";
-import { setUserStatus } from "@/lib/user-status";
+import { logger } from "@/infrastructure/logging/logger";
+import { hashPassword, logActivity, type Session } from "@/infrastructure/auth/session";
+import { loadSettings, emailShell, sendEmail } from "@/infrastructure/notifications/notify";
+import { nextVolunteerCode } from "@/domains/codes";
+import { assertTransition } from "@/shared/workflow";
+import { setUserStatus } from "@/domains/user-status";
 import { ApiError } from "@/shared/errors";
 import type {
   VolunteerApplicationRepository,

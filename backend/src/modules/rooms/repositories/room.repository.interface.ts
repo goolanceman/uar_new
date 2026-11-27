@@ -1,13 +1,13 @@
 /**
  * Room repository contract — persistence operations for community rooms.
  * The module has NO direct Prisma access of its own: all persistence lives in
- * the pinned shared domain layer @/lib/community/rooms (which owns the
+ * the pinned shared domain layer @/domains/community/rooms (which owns the
  * CommunityRoom/CommunityRoomUser/Conversation tables). This repository wraps
  * those calls as the module's persistence boundary; the service layer depends
  * on this interface only.
  */
-import type { Session } from "@/lib/session";
-import * as rooms from "@/lib/community/rooms";
+import type { Session } from "@/infrastructure/auth/session";
+import * as rooms from "@/domains/community/rooms";
 
 type OwnRooms = Awaited<ReturnType<typeof rooms.listOwnRooms>>;
 type JoinedRooms = Awaited<ReturnType<typeof rooms.listJoinedRooms>>;

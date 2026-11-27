@@ -5,12 +5,12 @@
  * path (`@/routes/files`) is preserved: tests and the app entry import
  * `router` from here.
  *
- * Multipart uploads use the `multipart` middleware + readForm (see @/lib/multipart).
+ * Multipart uploads use the `multipart` middleware + readForm (see @/infrastructure/uploads/multipart).
  */
 import { Router } from "express";
 import { authenticate, authorize } from "@/shared/middleware/auth";
 import { validate } from "@/shared/middleware/validate";
-import { multipart } from "@/lib/multipart";
+import { multipart } from "@/infrastructure/uploads/multipart";
 import {
   fileBodySchema,
   fileIdParamSchema,

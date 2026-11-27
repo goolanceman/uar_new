@@ -7,10 +7,10 @@
  * over 400), so per-field coercion and its exact error messages live here
  * instead of in route-level Zod schemas.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { logActivity, type Session } from "@/lib/session";
-import { ANIMAL_PLEDGE_STATUSES } from "@/lib/animals";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { ANIMAL_PLEDGE_STATUSES } from "@/domains/animals";
 import type {
   AnimalPledgeRepository,
   AnimalPledgeRow,

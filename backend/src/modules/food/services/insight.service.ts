@@ -7,10 +7,10 @@
  * names are preserved. AI-provider failures are signalled with a typed
  * marker so the controller renders the legacy 503 without extra logs.
  */
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { type Session } from "@/lib/session";
-import { availableOf, foodWindowDays } from "@/lib/food";
+import { type Session } from "@/infrastructure/auth/session";
+import { availableOf, foodWindowDays } from "@/modules/food/services/food.domain";
 import type { FoodBody } from "../schemas/food.schema";
 import type { FoodInsightRepository } from "../repositories/food-insight.repository.interface";
 

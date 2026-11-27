@@ -3,9 +3,9 @@
  * throws application errors, never touches HTTP. Field checks keep the exact
  * legacy order and messages, and every log event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { AMBULANCE_STATUSES } from "@/lib/ambulances";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { AMBULANCE_STATUSES } from "@/modules/ambulances/services/ambulances.domain";
 import { ApiError, ConflictError, NotFoundError } from "@/shared/errors";
 import type { AmbulanceListFilter, AmbulanceRepository, AmbulanceRow } from "../repositories/ambulance.repository.interface";
 import type { ListAmbulancesQuery } from "../schemas/ambulance.schema";

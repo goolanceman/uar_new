@@ -6,7 +6,7 @@
  */
 import { db } from "@/infrastructure/database/prisma";
 import { mapPrismaError } from "@/shared/errors";
-import { deleteUserCascade } from "@/lib/community/users";
+import { deleteUserCascade } from "@/domains/community/users";
 import type { PasswordReset, User } from "@prisma/client";
 import type {
   AuthRepository,

@@ -12,15 +12,15 @@
  * status.
  */
 import crypto from "crypto";
-import { logger } from "@/lib/logger";
+import { logger } from "@/infrastructure/logging/logger";
 import { ApiError } from "@/shared/errors";
-import { gatewayConfig, loadSettings, type GatewayConfig } from "@/lib/notify";
-import { getCurrency } from "@/lib/settings-core";
-import { broadcastEvent } from "@/lib/events";
-import { settleDonationSideEffects } from "@/lib/charity/settlement";
-import { settleDonationCommitments } from "@/lib/recurring";
-import { invalidateCampaigns, invalidateStats } from "@/lib/cache";
-import { logActivity } from "@/lib/session";
+import { gatewayConfig, loadSettings, type GatewayConfig } from "@/infrastructure/notifications/notify";
+import { getCurrency } from "@/domains/settings-core";
+import { broadcastEvent } from "@/infrastructure/notifications/sse-hub";
+import { settleDonationSideEffects } from "@/domains/charity/settlement";
+import { settleDonationCommitments } from "@/domains/recurring";
+import { invalidateCampaigns, invalidateStats } from "@/infrastructure/cache";
+import { logActivity } from "@/infrastructure/auth/session";
 import type { PaymentRepository } from "../repositories/payment.repository.interface";
 
 const log = logger.child("payments");

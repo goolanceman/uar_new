@@ -26,7 +26,7 @@ async function buildApp() {
 }
 
 async function cleanup() {
-  const { db } = await import("@/lib/db");
+  const { db } = await import("@/infrastructure/database/prisma");
   const users = await db.user.findMany({ where: { email: { startsWith: PREFIX } }, select: { id: true } });
   const ids = users.map((u) => u.id);
   if (ids.length) {
@@ -39,8 +39,8 @@ async function cleanup() {
 beforeAll(async () => {
   await cleanup();
   app = await buildApp();
-  const { db } = await import("@/lib/db");
-  const session = await import("@/lib/session");
+  const { db } = await import("@/infrastructure/database/prisma");
+  const session = await import("@/infrastructure/auth/session");
   const password = "60d46e9c6c368b28d10ac8c87c7a9ef2:bca4c8e948b49f09ddc43256c67c9b3dfe25a9869d1370c6e66a287c2fcbb8e8";
 
   const mk = (email: string, name: string, username: string, extra: Record<string, unknown> = {}) =>
@@ -123,7 +123,7 @@ describe("GET /api/community/admin/reels", () => {
   });
 
   it("prefers the cached status over the stored row", async () => {
-    const { setCachedMedia } = await import("@/lib/cache");
+    const { setCachedMedia } = await import("@/infrastructure/cache");
     await setCachedMedia({ id: mediaIds[0], status: "ready", ownerId: userId, attempts: 1, error: null });
 
     const res = await request(app)

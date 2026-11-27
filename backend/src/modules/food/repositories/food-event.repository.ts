@@ -6,7 +6,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "@/infrastructure/database/prisma";
 import { mapPrismaError } from "@/shared/errors";
-import { FOOD_PUBLIC_EVENT_STATUSES } from "@/lib/food";
+import { FOOD_PUBLIC_EVENT_STATUSES } from "@/modules/food/services/food.domain";
 import type { DbClient } from "@/infrastructure/database/transactions/transaction.manager";
 import type {
   AdminEventRow,

@@ -4,9 +4,9 @@
  * the legacy order (unit update → batch update → info → conditional debug →
  * activity log). Depends on the repository contract, never touches HTTP.
  */
-import { logger } from "@/lib/logger";
-import { kitBatchStatus } from "@/lib/kit";
-import { ApiError, logActivity, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { kitBatchStatus } from "@/modules/kit-scan/services/kit.domain";
+import { ApiError, logActivity, type Session } from "@/infrastructure/auth/session";
 import type { KitScanRepository, KitBatchRow, KitUnitRow } from "../repositories/kit-scan.repository.interface";
 
 const log = logger.child("kit-scan");

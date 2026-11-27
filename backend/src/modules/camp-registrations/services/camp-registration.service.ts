@@ -7,10 +7,10 @@
  * existence lookup → status transition → slot/notes on PATCH) and every log
  * event keeps its legacy name.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { nextCampRegCode } from "@/lib/health-codes";
-import { assertTransition } from "@/lib/workflow";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { nextCampRegCode } from "@/domains/health-codes";
+import { assertTransition } from "@/shared/workflow";
 import { ApiError, NotFoundError } from "@/shared/errors";
 import type {
   CampRegistrationDetailRow,

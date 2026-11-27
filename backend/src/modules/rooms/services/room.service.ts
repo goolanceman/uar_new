@@ -1,15 +1,15 @@
 /**
  * Room service — the thin coordination layer over the shared community rooms
- * domain (@/lib/community/rooms): applies the legacy silent body coercions,
+ * domain (@/domains/community/rooms): applies the legacy silent body coercions,
  * pages results, and emits the route-level domain events with their exact
  * legacy names (the lib layer logs its own events under "community:rooms").
  * Depends on the repository contract, throws application errors, never
  * touches HTTP.
  */
-import { logger } from "@/lib/logger";
-import type { Session } from "@/lib/session";
-import { paged } from "@/lib/community/serializers";
-import { csvValue, type EditRoomPatch } from "@/lib/community/rooms";
+import { logger } from "@/infrastructure/logging/logger";
+import type { Session } from "@/infrastructure/auth/session";
+import { paged } from "@/domains/community/serializers";
+import { csvValue, type EditRoomPatch } from "@/domains/community/rooms";
 import type { RoomRepository } from "../repositories/room.repository.interface";
 import type {
   DefaultPageQuery,

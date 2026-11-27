@@ -4,9 +4,9 @@
  * touches HTTP. The legacy side-effect order (log → logActivity) and every
  * legacy error message are preserved exactly.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, type Session } from "@/lib/session";
-import { assertTransition } from "@/lib/workflow";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, type Session } from "@/infrastructure/auth/session";
+import { assertTransition } from "@/shared/workflow";
 import { ApiError } from "@/shared/errors";
 import type {
   BeneficiaryRequestRepository,

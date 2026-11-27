@@ -4,18 +4,18 @@
  * public. Depends on the repository contract, throws application errors,
  * never touches HTTP.
  */
-import { orgProfile, esc, printDocument } from "@/lib/api-org";
-import { BRAND_MARK_DATA_URI } from "@/lib/brand-mark";
+import { orgProfile, esc, printDocument } from "@/domains/api-org";
+import { BRAND_MARK_DATA_URI } from "@/shared/utils/brand-mark";
 import {
   formatMoney,
   amountInWords,
   formatDateLong,
   financialYear,
   titleCase,
-} from "@/lib/format";
+} from "@/shared/utils/format";
 import { NotFoundError } from "@/shared/errors";
-import type { Session } from "@/lib/session";
-import type { OrgProfile } from "@/lib/api-org";
+import type { Session } from "@/infrastructure/auth/session";
+import type { OrgProfile } from "@/domains/api-org";
 import type {
   ReceiptDateRange,
   ReceiptDetailRow,

@@ -5,7 +5,7 @@
  * harnesses mount routers without an app-level error middleware).
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
+import { handleError } from "@/infrastructure/auth/session";
 import { validatedBody, validatedParams } from "@/shared/middleware/validate";
 import type { FoodBody } from "../schemas/food.schema";
 import type { AllocationService } from "../services/allocation.service";

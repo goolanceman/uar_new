@@ -1,6 +1,6 @@
 /**
  * Community admin repository implementation — delegates every operation to
- * the shared domain module @/lib/community/admin, which owns ALL moderation
+ * the shared domain module @/domains/community/admin, which owns ALL moderation
  * Prisma access, push fan-out and cache invalidation. The wire shapes are
  * therefore produced by exactly the legacy code path.
  */
@@ -33,8 +33,8 @@ import {
   updateDocumentType as updateDocumentTypeFn,
   updateReportReason as updateReportReasonFn,
   updateUsernameRestriction as updateUsernameRestrictionFn,
-} from "@/lib/community/admin";
-import type { Session } from "@/lib/session";
+} from "@/domains/community/admin";
+import type { Session } from "@/infrastructure/auth/session";
 import type {
   CommunityAdminRepository,
   ListVerificationsOptions,

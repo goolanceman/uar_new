@@ -9,8 +9,8 @@
  * even there.
  */
 import type { NextFunction, Request, RequestHandler, Response } from "express";
-import { clearSession, handleError, setSession, validateSession, type Session } from "@/lib/session";
-import { clientIp } from "@/lib/rate-limit";
+import { clearSession, handleError, setSession, validateSession, type Session } from "@/infrastructure/auth/session";
+import { clientIp } from "@/infrastructure/cache/rate-limit";
 import { validatedBody, validatedQuery } from "@/shared/middleware/validate";
 import type { UsernameAvailableQuery } from "../schemas/auth.schema";
 import type { AuthService } from "../services/auth.service";

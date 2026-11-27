@@ -4,7 +4,7 @@
  * directly (the legacy per-route catch).
  */
 import type { Request, RequestHandler, Response } from "express";
-import { handleError } from "@/lib/session";
+import { handleError } from "@/infrastructure/auth/session";
 import type { PublicStatsService } from "../services/public-stats.service";
 
 export class PublicStatsController {

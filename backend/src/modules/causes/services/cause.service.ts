@@ -7,8 +7,8 @@
  * 404 lookup; pledge creation validates before the cause lookup) with the
  * verbatim wire messages.
  */
-import { logger } from "@/lib/logger";
-import { logActivity, ApiError, type Session } from "@/lib/session";
+import { logger } from "@/infrastructure/logging/logger";
+import { logActivity, ApiError, type Session } from "@/infrastructure/auth/session";
 import {
   cached,
   cacheKeyPart,
@@ -16,10 +16,10 @@ import {
   causeDetailKey,
   causesListKey,
   invalidateCauses,
-} from "@/lib/cache";
-import { recomputeCause, CAUSE_STATUSES, CAUSE_TRANSITIONS } from "@/lib/causes";
-import { pledgeSchedule, pledgeInstallments } from "@/lib/recurring";
-import { assertTransition } from "@/lib/workflow";
+} from "@/infrastructure/cache";
+import { recomputeCause, CAUSE_STATUSES, CAUSE_TRANSITIONS } from "@/domains/causes";
+import { pledgeSchedule, pledgeInstallments } from "@/domains/recurring";
+import { assertTransition } from "@/shared/workflow";
 import type {
   CauseListFilter,
   CauseRepository,
