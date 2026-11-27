@@ -344,7 +344,9 @@ export async function listFeed(meId: string, opts: { type?: string; skip: number
       db.communityPost.findMany({
         where,
         include: POST_INCLUDE,
-        orderBy: { createdAt: "desc" },
+        // Compound order: createdAt alone reorders same-timestamp posts between
+        // requests/pages — id makes the feed (and its pagination) stable.
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: opts.skip,
         take: opts.take,
       }),

@@ -17,12 +17,24 @@ const PLAYBACK_URL_TTL_SEC = 60 * 60;
 /**
  * A URL the player can GET. Local storage serves the file itself, so the
  * plain URL is enough. S3 keeps the bucket private and signs a GET instead,
- * which still supports HTTP Range so the player can seek.
+ * which still supports HTTP Range so the player can seek — EXCEPT for HLS
+ * playlists: their variant/segment references are relative, so a presigned
+ * query string would be lost on the nested fetches (403). HLS keys therefore
+ * stream through the API's public playback endpoint (/api/media/files/*),
+ * which materializes objects from any driver on demand.
  */
 async function playable(key: string | null | undefined): Promise<string | null> {
   if (!key) return null;
   const driver = await getStorage();
-  return (await activeDriverName()) === "s3" ? driver.presignGet(key, PLAYBACK_URL_TTL_SEC) : driver.publicUrl(key);
+  if ((await activeDriverName()) === "s3") {
+    if (/\.(m3u8|ts)$/i.test(key)) {
+      // Same relative shape the local driver serves — resolved against this API.
+      const base = process.env.PUBLIC_BASE_URL ? process.env.PUBLIC_BASE_URL.replace(/\/+$/, "") : "";
+      return `${base}/api/media/files/${key}`;
+    }
+    return driver.presignGet(key, PLAYBACK_URL_TTL_SEC);
+  }
+  return driver.publicUrl(key);
 }
 
 /** Full asset shape for GET /api/media/:id + the complete response. */

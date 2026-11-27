@@ -127,8 +127,11 @@ export class MediaController {
   };
 
   /**
-   * GET /api/media/files/* — public playback serving (local driver only).
-   * Outputs of READY assets with HTTP Range support so players can seek.
+   * GET /api/media/files/* — public playback serving.
+   * Outputs of READY assets with HTTP Range support so players can seek. The
+   * storage object may be local (media-store) or materialized on demand from
+   * the s3 driver (media-cache) — resolvePlayback returns a servable path for
+   * either.
    */
   serve: RequestHandler = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

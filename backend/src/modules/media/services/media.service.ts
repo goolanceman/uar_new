@@ -7,6 +7,7 @@
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { logger } from "@/infrastructure/logging/logger";
 import type { Session } from "@/infrastructure/auth/session";
 import { ApiError } from "@/shared/errors";
@@ -203,12 +204,15 @@ export class MediaService {
 
   /**
    * GET /api/media/files/* — resolve a playback key to a servable local file.
-   * Only outputs of READY assets are exposed (never source.*); the driver
-   * must be local. Returns the absolute path + size for the range streaming
-   * the controller performs.
+   * Only outputs of READY assets are exposed (never source.*). The local
+   * driver streams straight from media-store; the s3 driver materializes the
+   * object into a local cache first (immutable outputs — cached forever).
+   * Returns the absolute path + size for the range streaming the controller
+   * performs.
    */
   async resolvePlayback(key: string): Promise<{ filePath: string; size: number }> {
-    if ((process.env.STORAGE_DRIVER || "local").trim().toLowerCase() !== "local") {
+    const driverName = (process.env.STORAGE_DRIVER || "local").trim().toLowerCase();
+    if (driverName !== "local" && driverName !== "s3") {
       throw new ApiError("Not found", 404);
     }
 
@@ -230,6 +234,10 @@ export class MediaService {
     // Never serve the raw source publicly — playback uses the transcoded outputs.
     if (segments[segments.length - 1].startsWith("source.")) throw new ApiError("Not found", 404);
 
+    if (driverName === "s3") {
+      return this.materializePlayback(key);
+    }
+
     const storeRoot = path.join(UPLOAD_DIR, "media-store");
     const filePath = path.resolve(storeRoot, key);
     if (!filePath.startsWith(storeRoot + path.sep)) throw new ApiError("Invalid storage key", 400);
@@ -243,5 +251,39 @@ export class MediaService {
     if (!stat.isFile()) throw new ApiError("Not found", 404);
 
     return { filePath, size: stat.size };
+  }
+
+  /**
+   * s3 driver — download an immutable playback object into
+   * UPLOAD_DIR/media-cache/<key> (unless already cached) and serve it from
+   * there. HLS playback fans out into one request per segment, so the cache
+   * keeps repeat views off the storage backend; the atomic rename keeps
+   * concurrent first requests from racing.
+   */
+  private async materializePlayback(key: string): Promise<{ filePath: string; size: number }> {
+    const cacheRoot = path.join(UPLOAD_DIR, "media-cache");
+    const target = path.resolve(cacheRoot, key);
+    if (!target.startsWith(cacheRoot + path.sep)) throw new ApiError("Invalid storage key", 400);
+
+    try {
+      const stat = await fs.stat(target);
+      if (stat.isFile() && stat.size > 0) return { filePath: target, size: stat.size };
+    } catch {
+      // not cached yet — download below
+    }
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const tmpPath = path.join(cacheRoot, `tmp-${randomUUID()}.part`);
+    try {
+      await (await getStorage()).downloadToFile(key, tmpPath);
+      await fs.rename(tmpPath, target);
+    } catch (e) {
+      await fs.unlink(tmpPath).catch(() => {});
+      log.warn("playback_materialize_failed", { key, error: String(e) });
+      throw new ApiError("Not found", 404);
+    }
+
+    const stat = await fs.stat(target);
+    return { filePath: target, size: stat.size };
   }
 }

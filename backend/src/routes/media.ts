@@ -33,6 +33,9 @@ router.post("/:id/complete", authenticate, mediaController.complete);
 // GET /api/media/:id — owner-only polling endpoint (upload + transcode progress).
 router.get("/:id", authenticate, mediaController.poll);
 
-// GET /api/media/files/* — public playback serving (local driver only). Only
-// outputs of READY assets are exposed (never source.*), with Range support.
+// GET /api/media/files/* — public playback serving. Only outputs of READY
+// assets are exposed (never source.*), with Range support. The local driver
+// streams from media-store; the s3 driver materializes objects on demand, so
+// HLS playlists keep resolving their relative segment references against this
+// API (presigned URLs would drop the signature on nested fetches).
 router.get("/files/*", mediaController.serve);

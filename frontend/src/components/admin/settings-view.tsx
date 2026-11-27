@@ -29,6 +29,7 @@ import {
   ScrollText,
   Send,
   ShieldCheck,
+  Smartphone,
   ToggleLeft,
   TriangleAlert,
   Webhook,
@@ -240,6 +241,13 @@ const GUIDE_TABS: { title: string; bullets: string[] }[] = [
   {
     title: "Recurring Matching",
     bullets: ["Auto-match engine that pairs monthly donors with recurring beneficiary needs."],
+  },
+  {
+    title: "Mobile app",
+    bullets: [
+      "Every setting the Flutter app reads from GET /api/settings/app: content limits, feed ordering, audio spaces, maintenance mode, force-update links, AdMob and SightEngine credentials.",
+      "Saving a card pushes the change to the app on its next settings load — no app release needed.",
+    ],
   },
 ];
 
@@ -808,6 +816,9 @@ export default function SettingsView() {
           <TabsTrigger value="assistant">AI Assistant</TabsTrigger>
           <TabsTrigger value="matching">Recurring Matching</TabsTrigger>
           <TabsTrigger value="food">Food Security</TabsTrigger>
+          <TabsTrigger value="mobile" className="gap-1.5">
+            <Smartphone className="size-4" aria-hidden="true" /> Mobile app
+          </TabsTrigger>
         </TabsList>
 
         {/* ============================ ORGANISATION ============================ */}
@@ -2244,6 +2255,338 @@ export default function SettingsView() {
               </p>
             </div>
           </SectionCard>
+        </TabsContent>
+        {/* ============================ MOBILE APP ============================ */}
+        <TabsContent value="mobile" className="mt-4">
+          <div className="space-y-4">
+            <SectionCard
+              title="Mobile app configuration"
+              description="Settings the Flutter app reads from GET /api/settings/app — saving a card pushes the change to the app on its next settings load."
+              icon={<Smartphone className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("mobile", "mobile settings")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-mobile-app-name" label="App name">
+                  <Input
+                    id="s-mobile-app-name"
+                    value={values["mobile.app_name"] ?? ""}
+                    onChange={(e) => set("mobile.app_name", e.target.value)}
+                    placeholder="United Angel Reach"
+                  />
+                </Field>
+                <Field id="s-mobile-support-email" label="Support email">
+                  <Input
+                    id="s-mobile-support-email"
+                    type="email"
+                    value={values["mobile.support_email"] ?? ""}
+                    onChange={(e) => set("mobile.support_email", e.target.value)}
+                    placeholder="support@unitedangelreach.org"
+                  />
+                </Field>
+                <Field id="s-mobile-storage-type" label="Storage type" hint="0 = local disk, 1 = cloud (S3 / RustFS).">
+                  <Select value={values["mobile.storage_type"] || "1"} onValueChange={(v) => set("mobile.storage_type", v)}>
+                    <SelectTrigger id="s-mobile-storage-type" aria-label="Storage type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1 — Cloud storage</SelectItem>
+                      <SelectItem value="0">0 — Local disk</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-fetch-post-type" label="Feed ordering" hint="Latest is chronological and stable across refreshes; random reshuffles on every pull-to-refresh.">
+                  <Select value={values["mobile.fetch_post_type"] || "1"} onValueChange={(v) => set("mobile.fetch_post_type", v)}>
+                    <SelectTrigger id="s-mobile-fetch-post-type" aria-label="Feed ordering">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1 — Latest (chronological)</SelectItem>
+                      <SelectItem value="0">0 — Random shuffle</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-reel-duration" label="Max reel duration (seconds)">
+                  <Input
+                    id="s-mobile-reel-duration"
+                    type="number"
+                    min={1}
+                    value={values["mobile.duration_limit_in_reel"] ?? ""}
+                    onChange={(e) => set("mobile.duration_limit_in_reel", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-story-minutes" label="Max story recording (minutes)">
+                  <Input
+                    id="s-mobile-story-minutes"
+                    type="number"
+                    min={1}
+                    value={values["mobile.minute_limit_in_creating_story"] ?? ""}
+                    onChange={(e) => set("mobile.minute_limit_in_creating_story", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-audio-minutes" label="Max audio post (minutes)">
+                  <Input
+                    id="s-mobile-audio-minutes"
+                    type="number"
+                    min={1}
+                    value={values["mobile.minute_limit_in_audio_post"] ?? ""}
+                    onChange={(e) => set("mobile.minute_limit_in_audio_post", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-story-video-minutes" label="Max gallery video for story (minutes)">
+                  <Input
+                    id="s-mobile-story-video-minutes"
+                    type="number"
+                    min={1}
+                    value={values["mobile.minute_limit_in_choosing_video_for_story"] ?? ""}
+                    onChange={(e) => set("mobile.minute_limit_in_choosing_video_for_story", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-post-video-minutes" label="Max gallery video for post (minutes)">
+                  <Input
+                    id="s-mobile-post-video-minutes"
+                    type="number"
+                    min={1}
+                    value={values["mobile.minute_limit_in_choosing_video_for_post"] ?? ""}
+                    onChange={(e) => set("mobile.minute_limit_in_choosing_video_for_post", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-max-images" label="Max images per post">
+                  <Input
+                    id="s-mobile-max-images"
+                    type="number"
+                    min={1}
+                    value={values["mobile.max_images_can_be_uploaded_in_one_post"] ?? ""}
+                    onChange={(e) => set("mobile.max_images_can_be_uploaded_in_one_post", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-room-users" label="Max users per room">
+                  <Input
+                    id="s-mobile-room-users"
+                    type="number"
+                    min={2}
+                    value={values["mobile.set_room_users_limit"] ?? ""}
+                    onChange={(e) => set("mobile.set_room_users_limit", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-audio-hosts" label="Audio space — max hosts">
+                  <Input
+                    id="s-mobile-audio-hosts"
+                    type="number"
+                    min={1}
+                    value={values["mobile.audio_space_hosts_limit"] ?? ""}
+                    onChange={(e) => set("mobile.audio_space_hosts_limit", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-audio-listeners" label="Audio space — max listeners">
+                  <Input
+                    id="s-mobile-audio-listeners"
+                    type="number"
+                    min={1}
+                    value={values["mobile.audio_space_listeners_limit"] ?? ""}
+                    onChange={(e) => set("mobile.audio_space_listeners_limit", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-audio-duration" label="Audio space — max duration (minutes)">
+                  <Input
+                    id="s-mobile-audio-duration"
+                    type="number"
+                    min={1}
+                    value={values["mobile.audio_space_duration_in_minutes"] ?? ""}
+                    onChange={(e) => set("mobile.audio_space_duration_in_minutes", e.target.value)}
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Maintenance & app updates"
+              description="Kill-switch banner, force-update gate and store links served to the app."
+              icon={<Smartphone className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("mobile", "mobile settings")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-mobile-maintenance" label="Maintenance mode">
+                  <Select value={values["mobile.is_maintenance_mode"] || "0"} onValueChange={(v) => set("mobile.is_maintenance_mode", v)}>
+                    <SelectTrigger id="s-mobile-maintenance" aria-label="Maintenance mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — Off</SelectItem>
+                      <SelectItem value="1">1 — Show maintenance screen</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-maintenance-message" label="Maintenance message">
+                  <Textarea
+                    id="s-mobile-maintenance-message"
+                    rows={2}
+                    value={values["mobile.maintenance_message"] ?? ""}
+                    onChange={(e) => set("mobile.maintenance_message", e.target.value)}
+                    placeholder="We're upgrading the app — back shortly."
+                  />
+                </Field>
+                <Field id="s-mobile-force-update" label="Force app update">
+                  <Select value={values["mobile.is_force_app_update"] || "0"} onValueChange={(v) => set("mobile.is_force_app_update", v)}>
+                    <SelectTrigger id="s-mobile-force-update" aria-label="Force app update">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — Off</SelectItem>
+                      <SelectItem value="1">1 — Block outdated versions</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-android-version" label="Latest Android version code">
+                  <Input
+                    id="s-mobile-android-version"
+                    value={values["mobile.android_app_version"] ?? ""}
+                    onChange={(e) => set("mobile.android_app_version", e.target.value)}
+                    placeholder="1.2.0"
+                  />
+                </Field>
+                <Field id="s-mobile-ios-version" label="Latest iOS version code">
+                  <Input
+                    id="s-mobile-ios-version"
+                    value={values["mobile.ios_app_version"] ?? ""}
+                    onChange={(e) => set("mobile.ios_app_version", e.target.value)}
+                    placeholder="1.2.0"
+                  />
+                </Field>
+                <Field id="s-mobile-play-link" label="Play Store download link">
+                  <Input
+                    id="s-mobile-play-link"
+                    value={values["mobile.play_store_download_link"] ?? ""}
+                    onChange={(e) => set("mobile.play_store_download_link", e.target.value)}
+                    placeholder="https://play.google.com/store/apps/details?id=…"
+                  />
+                </Field>
+                <Field id="s-mobile-appstore-link" label="App Store download link">
+                  <Input
+                    id="s-mobile-appstore-link"
+                    value={values["mobile.app_store_download_link"] ?? ""}
+                    onChange={(e) => set("mobile.app_store_download_link", e.target.value)}
+                    placeholder="https://apps.apple.com/app/…"
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Ads & in-app purchases"
+              description="AdMob unit IDs and the monetisation switches the app honours."
+              icon={<Smartphone className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("mobile", "mobile settings")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-mobile-admob" label="AdMob">
+                  <Select value={values["mobile.is_admob_on"] || "0"} onValueChange={(v) => set("mobile.is_admob_on", v)}>
+                    <SelectTrigger id="s-mobile-admob" aria-label="AdMob">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — Disabled</SelectItem>
+                      <SelectItem value="1">1 — Enabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-iap" label="In-app purchases">
+                  <Select value={values["mobile.is_in_app_purchase_enabled"] || "0"} onValueChange={(v) => set("mobile.is_in_app_purchase_enabled", v)}>
+                    <SelectTrigger id="s-mobile-iap" aria-label="In-app purchases">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — Disabled</SelectItem>
+                      <SelectItem value="1">1 — Enabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-ad-banner-android" label="AdMob banner unit — Android">
+                  <Input
+                    id="s-mobile-ad-banner-android"
+                    className="font-mono"
+                    value={values["mobile.ad_banner_android"] ?? ""}
+                    onChange={(e) => set("mobile.ad_banner_android", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-ad-banner-ios" label="AdMob banner unit — iOS">
+                  <Input
+                    id="s-mobile-ad-banner-ios"
+                    className="font-mono"
+                    value={values["mobile.ad_banner_iOS"] ?? ""}
+                    onChange={(e) => set("mobile.ad_banner_iOS", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-ad-inter-android" label="AdMob interstitial — Android">
+                  <Input
+                    id="s-mobile-ad-inter-android"
+                    className="font-mono"
+                    value={values["mobile.ad_interstitial_android"] ?? ""}
+                    onChange={(e) => set("mobile.ad_interstitial_android", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-ad-inter-ios" label="AdMob interstitial — iOS">
+                  <Input
+                    id="s-mobile-ad-inter-ios"
+                    className="font-mono"
+                    value={values["mobile.ad_interstitial_iOS"] ?? ""}
+                    onChange={(e) => set("mobile.ad_interstitial_iOS", e.target.value)}
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="SightEngine moderation"
+              description="External content-moderation credentials. The secret is stored server-side and never served to app clients."
+              icon={<ShieldCheck className="size-4" aria-hidden="true" />}
+              actions={renderSectionSave("mobile", "mobile settings")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field id="s-mobile-sightengine" label="SightEngine checks">
+                  <Select value={values["mobile.is_sight_engine_enabled"] || "0"} onValueChange={(v) => set("mobile.is_sight_engine_enabled", v)}>
+                    <SelectTrigger id="s-mobile-sightengine" aria-label="SightEngine checks">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — Disabled</SelectItem>
+                      <SelectItem value="1">1 — Enabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field id="s-mobile-se-user" label="SightEngine API user">
+                  <Input
+                    id="s-mobile-se-user"
+                    className="font-mono"
+                    value={values["mobile.sight_engine_api_user"] ?? ""}
+                    onChange={(e) => set("mobile.sight_engine_api_user", e.target.value)}
+                  />
+                </Field>
+                <SecretField
+                  id="s-mobile-se-secret"
+                  label="SightEngine API secret"
+                  configured={configured("mobile.sight_engine_api_secret")}
+                  value={secretEdits["mobile.sight_engine_api_secret"] ?? ""}
+                  onChange={(v) => setSecretEdits((prev) => ({ ...prev, "mobile.sight_engine_api_secret": v }))}
+                />
+                <Field id="s-mobile-se-image-workflow" label="Image workflow ID">
+                  <Input
+                    id="s-mobile-se-image-workflow"
+                    className="font-mono"
+                    value={values["mobile.sight_engine_image_workflow_id"] ?? ""}
+                    onChange={(e) => set("mobile.sight_engine_image_workflow_id", e.target.value)}
+                  />
+                </Field>
+                <Field id="s-mobile-se-video-workflow" label="Video workflow ID">
+                  <Input
+                    id="s-mobile-se-video-workflow"
+                    className="font-mono"
+                    value={values["mobile.sight_engine_video_workflow_id"] ?? ""}
+                    onChange={(e) => set("mobile.sight_engine_video_workflow_id", e.target.value)}
+                  />
+                </Field>
+              </div>
+            </SectionCard>
+          </div>
         </TabsContent>
       </Tabs>
 

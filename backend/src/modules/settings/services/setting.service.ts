@@ -35,6 +35,27 @@ const CHANNELS: readonly string[] = ["email", "sms", "whatsapp", "gateway"];
  *  served to every unauthenticated client. */
 const APP_SECRET_KEY_RE = /secret|password|token|privatekey/i;
 
+/** Sane client defaults merged under the mobile.app KV blob — the Flutter app
+ *  falls every limit back to 0 when a key is absent, which bricks creation
+ *  flows outright (reels reject any video over "0 seconds", posts allow zero
+ *  images, …). Admins override any of these via the mobile.app blob. */
+const MOBILE_APP_DEFAULTS: Record<string, unknown> = {
+  duration_limit_in_reel: 60, // seconds
+  minute_limit_in_creating_story: 1,
+  minute_limit_in_audio_post: 2,
+  minute_limit_in_choosing_video_for_story: 1,
+  minute_limit_in_choosing_video_for_post: 1,
+  max_images_can_be_uploaded_in_one_post: 5,
+  // 1 = chronological (latest) feed — 0 (random) reshuffles on every refresh.
+  fetch_post_type: 1,
+  set_room_users_limit: 8,
+  audio_space_hosts_limit: 5,
+  audio_space_listeners_limit: 50,
+  audio_space_duration_in_minutes: 60,
+  // External moderation stays off until credentials are configured in the blob.
+  is_sight_engine_enabled: 0,
+};
+
 export class SettingService {
   constructor(private readonly settingRepository: SettingRepository) {}
 
@@ -166,20 +187,49 @@ export class SettingService {
     return payload;
   }
 
-  /** Mobile app configuration. Returns null when the KV blob is missing or
-   *  corrupt — that 404 is not cached, so a later save is visible immediately. */
+  /** Mobile app configuration. When the KV blob is missing, defaults are
+   *  served (so clients always get usable limits); a present-but-corrupt blob
+   *  still returns null — that 404 is not cached, so a later save is visible
+   *  immediately. */
   private async loadAppSettings(): Promise<Record<string, unknown> | null> {
-    const row = await this.settingRepository.findSettingByKey("mobile.app");
-    if (!row) return null;
+    const [row, allRows] = await Promise.all([
+      this.settingRepository.findSettingByKey("mobile.app"),
+      this.settingRepository.listSettings(),
+    ]);
 
     let settings: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(row.value);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-      settings = parsed;
-    } catch {
-      return null;
+    if (!row) {
+      settings = {};
+    } else {
+      try {
+        const parsed = JSON.parse(row.value);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+        settings = parsed;
+      } catch {
+        return null;
+      }
     }
+
+    // Flat mobile.* admin rows (the Mobile tab on /admin/settings) win over the
+    // legacy blob. Values coerce to the app's expected types: numeric defaults
+    // (limits, 0/1 flags) stay numbers — the Flutter model parses int?
+    // directly and a "60" string would crash its fromJson.
+    for (const r of allRows) {
+      if (!r.key.startsWith("mobile.")) continue;
+      const key = r.key.slice("mobile.".length);
+      // Only canonical mobile keys flow through — this skips the legacy
+      // "mobile.app" blob row itself (whose raw JSON must never re-enter the
+      // payload — it can carry secrets) and "mobile.documentTypes".
+      const base = MOBILE_APP_DEFAULTS[key];
+      if (base === undefined) continue;
+      if (typeof base === "number") {
+        const n = Number(r.value);
+        settings[key] = Number.isFinite(n) ? n : base;
+      } else {
+        settings[key] = r.value;
+      }
+    }
+
     for (const key of Object.keys(settings)) {
       if (APP_SECRET_KEY_RE.test(key)) delete settings[key];
     }
@@ -207,10 +257,11 @@ export class SettingService {
     });
 
     return {
+      ...MOBILE_APP_DEFAULTS,
       ...settings,
-      id: row.id,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
+      id: row?.id ?? null,
+      createdAt: row?.createdAt ?? null,
+      updatedAt: row?.updatedAt ?? null,
       interests: interests.map((i) => ({ ...commonRow(i), totalRoomOfInterest: 0 })),
       documentTypes,
       documentType: documentTypes, // legacy alias kept for older clients

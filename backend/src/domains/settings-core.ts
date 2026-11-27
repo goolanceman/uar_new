@@ -103,6 +103,41 @@ export const SETTING_DEFAULTS: SettingsMap = {
   // Testing mode — when ON, GET /api/auth/demo-answers exposes the demo
   // credentials on the web + mobile login screens. Row absent → env TESTING_MODE.
   "app.testingMode": "false",
+  // Mobile app configuration (Flutter app — GET /api/settings/app). The app
+  // model parses flags/limits as int and text as String, so numeric values must
+  // coerce to numbers when served. Flat rows win over the legacy mobile.app blob.
+  "mobile.app_name": "",
+  "mobile.support_email": "",
+  "mobile.storage_type": "1",
+  "mobile.duration_limit_in_reel": "60",
+  "mobile.minute_limit_in_creating_story": "1",
+  "mobile.minute_limit_in_audio_post": "2",
+  "mobile.minute_limit_in_choosing_video_for_story": "1",
+  "mobile.minute_limit_in_choosing_video_for_post": "1",
+  "mobile.max_images_can_be_uploaded_in_one_post": "5",
+  "mobile.fetch_post_type": "1",
+  "mobile.set_room_users_limit": "8",
+  "mobile.audio_space_hosts_limit": "5",
+  "mobile.audio_space_listeners_limit": "50",
+  "mobile.audio_space_duration_in_minutes": "60",
+  "mobile.is_maintenance_mode": "0",
+  "mobile.maintenance_message": "",
+  "mobile.is_force_app_update": "0",
+  "mobile.android_app_version": "",
+  "mobile.ios_app_version": "",
+  "mobile.play_store_download_link": "",
+  "mobile.app_store_download_link": "",
+  "mobile.is_admob_on": "0",
+  "mobile.ad_banner_android": "",
+  "mobile.ad_banner_iOS": "",
+  "mobile.ad_interstitial_android": "",
+  "mobile.ad_interstitial_iOS": "",
+  "mobile.is_in_app_purchase_enabled": "0",
+  "mobile.is_sight_engine_enabled": "0",
+  "mobile.sight_engine_api_user": "",
+  "mobile.sight_engine_api_secret": "",
+  "mobile.sight_engine_image_workflow_id": "",
+  "mobile.sight_engine_video_workflow_id": "",
   // Receipts
   "receipts.signatoryName": "",
   "receipts.signatoryRole": "Trustee",
@@ -196,9 +231,27 @@ const NUMBER_RANGES: Record<string, [number, number]> = {
   "food.pledges.rateLimitPerHour": [1, 1000],
   "food.expiryAlertDays": [1, 365],
   "food.aiRiskWindowDays": [1, 365],
+  // Mobile app limits — flags are 0/1 ints (the app model parses int).
+  "mobile.storage_type": [0, 1],
+  "mobile.duration_limit_in_reel": [1, 600],
+  "mobile.minute_limit_in_creating_story": [1, 60],
+  "mobile.minute_limit_in_audio_post": [1, 120],
+  "mobile.minute_limit_in_choosing_video_for_story": [1, 60],
+  "mobile.minute_limit_in_choosing_video_for_post": [1, 60],
+  "mobile.max_images_can_be_uploaded_in_one_post": [1, 20],
+  "mobile.fetch_post_type": [0, 1],
+  "mobile.set_room_users_limit": [2, 100],
+  "mobile.audio_space_hosts_limit": [1, 20],
+  "mobile.audio_space_listeners_limit": [1, 10000],
+  "mobile.audio_space_duration_in_minutes": [1, 480],
+  "mobile.is_maintenance_mode": [0, 1],
+  "mobile.is_force_app_update": [0, 1],
+  "mobile.is_admob_on": [0, 1],
+  "mobile.is_in_app_purchase_enabled": [0, 1],
+  "mobile.is_sight_engine_enabled": [0, 1],
 };
 
-const URL_KEYS = new Set(["brand.logoUrl", "brand.faviconUrl", "org.website", "storage.cdnBase", "webhooks.url", "kits.qrBaseUrl"]);
+const URL_KEYS = new Set(["brand.logoUrl", "brand.faviconUrl", "org.website", "storage.cdnBase", "webhooks.url", "kits.qrBaseUrl", "mobile.play_store_download_link", "mobile.app_store_download_link"]);
 
 export const SUPPORTED_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
   { code: "en", label: "English" },
@@ -231,6 +284,7 @@ export function validateSettingValue(key: string, value: string): string | null 
     return `${key} must start with http://, https:// or / (for local assets).`;
 
   if (key === "org.email" && !/^\S+@\S+\.\S+$/.test(v)) return "Enter a valid email address.";
+  if (key === "mobile.support_email" && !/^\S+@\S+\.\S+$/.test(v)) return "Support email must be a valid email.";
   if (key === "notify.email.from" && !/^\S+@\S+\.\S+$/.test(v)) return "From address must be a valid email.";
   if (key === "notify.email.replyTo" && !/^\S+@\S+\.\S+$/.test(v)) return "Reply-To must be a valid email.";
   if (key === "finance.upiId" && !/^[\w.\-]{2,}@[a-zA-Z]{2,}[\w.\-]*$/.test(v))
@@ -265,6 +319,7 @@ export const SECTION_PREFIXES: Record<string, string[]> = {
   assistant: ["assist."],
   matching: ["matching."],
   food: ["food."],
+  mobile: ["mobile."],
   flags: ["features.", "finance.gatewayEnabled", "notify.email.enabled", "notify.sms.enabled", "notify.whatsapp.enabled", "assist.enabled", "matching.enabled", "logs.enabled", "app.maintenance", "app.testingMode"],
 };
 
