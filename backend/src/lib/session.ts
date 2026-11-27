@@ -2,6 +2,9 @@ import type { Request, Response } from "express";
 import crypto from "crypto";
 import type { CookieOptions } from "express";
 import { logger } from "@/lib/logger";
+// The shared error hierarchy interops with the legacy ApiError: handleError
+// recognizes both so services may throw either without changing responses.
+import { AppError as SharedAppError } from "@/shared/errors/app-error";
 
 const COOKIE_NAME = "uar_session";
 
@@ -291,10 +294,11 @@ export function json(res: Response, data: unknown, status = 200): Response {
 }
 
 export function handleError(e: unknown, res: Response): Response {
-  if (e instanceof ApiError) {
-    if (e.status >= 500)
-      logger.error("api_error", { status: e.status, error: e.message });
-    return res.status(e.status).json({ error: e.message });
+  if (e instanceof ApiError || e instanceof SharedAppError) {
+    const status = e.status;
+    if (status >= 500)
+      logger.error("api_error", { status, error: e.message });
+    return res.status(status).json({ error: e.message });
   }
   logger.error("unhandled_route_error", {
     error: e instanceof Error ? e : String(e),

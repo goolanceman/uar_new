@@ -1,10 +1,11 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import { db } from "@/lib/db";
 import { handleError } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { requestLogger } from "@/lib/middleware/request-logger";
+import { verifyEnv, allowedOrigins } from "@/config/env";
+import { dashboardController } from "@/modules/dashboard";
 
 // ─── Routers (1:1 conversions of src/app/api/**/route.ts) ───────────────────
 import { router as authRouter } from "./routes/auth";
@@ -82,21 +83,22 @@ import { router as eventsRouter } from "./routes/events";
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
 
+// Boot-time environment check (skipped under NODE_ENV=test, which controls
+// its own env). Throws with a readable message on misconfiguration.
+verifyEnv();
+
 // Wide-event request logging FIRST so every request (even ones that error
 // during body parsing) emits exactly one structured log line on completion.
 app.use(requestLogger);
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const allowedOriginsList = allowedOrigins();
 
 app.use(
   cors({
     origin(origin, cb) {
       // Allow non-browser tools (no Origin header) and any configured origin.
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      if (!origin || allowedOriginsList.includes(origin)) return cb(null, true);
       return cb(null, false);
     },
     credentials: true,
@@ -118,51 +120,10 @@ app.use(
 // body styles. Harmless for the admin frontend, which always sends JSON.
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// ─── Health + root dashboard stats (converted from src/app/api/route.ts) ────
+// ─── Health + root dashboard stats (dashboard module) ────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "uar-backend" }));
 
-app.get("/api", async (_req, res) => {
-  try {
-    const totalDonations = await db.donation.aggregate({
-      _sum: { amount: true },
-      where: { paymentStatus: "COMPLETED" },
-    });
-
-    const beneficiariesCount = await db.beneficiary.count({
-      where: { isActive: true },
-    });
-
-    const activeCampaigns = await db.campaign.count({
-      where: { status: "ACTIVE" },
-    });
-
-    const volunteersCount = await db.volunteer.count({
-      where: { status: "ACTIVE" },
-    });
-
-    const inventoryItems = await db.inventoryItem.aggregate({
-      _sum: { quantity: true },
-    });
-
-    return res.json({
-      success: true,
-      data: {
-        totalDonations: totalDonations._sum.amount || 0,
-        beneficiaries: beneficiariesCount,
-        activeCampaigns,
-        volunteers: volunteersCount,
-        inventoryItems: inventoryItems._sum.quantity || 0,
-      },
-    });
-  } catch (error) {
-    logger.error("dashboard_stats_failed", {
-      error: error instanceof Error ? error : String(error),
-    });
-    return res
-      .status(500)
-      .json({ success: false, error: "Failed to fetch dashboard stats" });
-  }
-});
+app.get("/api", dashboardController.snapshot);
 
 // ─── Mount all routers ───────────────────────────────────────────────────────
 import { startPusherServer } from "@/lib/realtime/pusher";

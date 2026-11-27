@@ -5,28 +5,18 @@
  * when the flag is off the endpoint answers 503 and no client connects.
  * The client checks the public settings payload first (which also exposes
  * the flag), so the stream is only opened when the feature is on.
+ *
+ * Thin endpoint definitions; all logic lives in src/modules/events
+ * (routes → controllers → services → repositories). The historical export
+ * path (`@/routes/events`) is preserved: tests and the app entry import
+ * `router` from here.
  */
 import { Router } from "express";
-import { subscribeEvents } from "@/lib/events";
-import { logger } from "@/lib/logger";
-import { loadSettings } from "@/lib/notify";
-import { isFlagOn } from "@/lib/settings-core";
-
-const log = logger.child("events");
+import { validate } from "@/shared/middleware/validate";
+import { eventStreamQuerySchema } from "@/modules/events/schemas/event.schema";
+import { eventController } from "@/modules/events";
 
 export const router = Router();
 
 // GET /api/events/stream — public, unauthenticated (broadcasts are read-only)
-router.get("/stream", async (_req, res) => {
-  try {
-    const map = await loadSettings();
-    if (!isFlagOn(map["features.liveDonationFeed"])) {
-      log.warn("event_stream_disabled");
-      return res.status(503).json({ error: "Live donation feed is disabled" });
-    }
-    subscribeEvents(res);
-  } catch (e) {
-    log.error("stream_failed_to_open", { error: e instanceof Error ? e : String(e) });
-    return res.status(500).json({ error: "Could not open event stream" });
-  }
-});
+router.get("/stream", validate({ query: eventStreamQuerySchema }), eventController.stream);
