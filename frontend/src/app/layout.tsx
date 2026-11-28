@@ -82,6 +82,7 @@ export async function generateMetadata(): Promise<Metadata> {
       index: true,
       follow: true,
     },
+    manifest: "/manifest.webmanifest",
     keywords: [
       "charity Bengaluru",
       "United Angel Reach",
@@ -135,6 +136,7 @@ export default function RootLayout({
               name: "United Angel Reach Trust",
               url: SITE_URL,
               logo: `${SITE_URL}/brand/logo.svg`,
+              email: "care@unitedangelreach.org",
               description: SITE_DESCRIPTION,
               address: {
                 "@type": "PostalAddress",
